@@ -36,7 +36,7 @@ def chat(payload: ChatRequest):
 
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model=os.environ.get("AI_MODEL", "gemini-3.8-flash"),
             contents=payload.message,
         )
     except Exception as exc:

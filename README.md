@@ -1,6 +1,6 @@
 # Chat IA — Gemini + FastAPI + Frontend estático
 
-Proyecto de chat con IA: backend en **FastAPI** conectado a **Google Gemini** (`gemini-2.5-flash`) y frontend web estático (HTML/CSS/JS).
+Proyecto de chat con IA: backend en **FastAPI** conectado a **Google Gemini** (`gemini-3.8-flash`) y frontend web estático (HTML/CSS/JS).
 
 ## Estructura
 

@@ -1,4 +1,4 @@
-const BACKEND_URL = "URL_DE_RENDER_O_RAILWAY";
+const BACKEND_URL = "https://gemini-chat-backend-vyrz.onrender.com";
 
 const chatEl = document.getElementById("chat");
 const formEl = document.getElementById("form");
