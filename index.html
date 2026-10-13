@@ -826,14 +826,51 @@
       width: 100%;
     }
     .auth-login.provider-google { background: #fff; color: #1f1f1f; }
-    .auth-login.provider-microsoft { background: #2f2f2f; color: #fff; }
-    .auth-login.provider-google:hover,
-    .auth-login.provider-microsoft:hover { filter: brightness(1.06); }
+    .auth-login.provider-google:hover { filter: brightness(1.06); }
     .auth-providers-side { display: flex; flex-direction: column; gap: 8px; width: 100%; }
     .login-btn.provider-google { background: #fff; color: #1f1f1f; }
-    .login-btn.provider-microsoft { background: #2f2f2f; color: #fff; }
-    .login-btn.provider-google:hover,
-    .login-btn.provider-microsoft:hover { filter: brightness(1.06); }
+    .login-btn.provider-google:hover { filter: brightness(1.06); }
+    .auth-divider {
+      display: flex; align-items: center; gap: 10px;
+      width: 100%; max-width: 320px;
+      color: var(--faint); font-size: 12px;
+    }
+    .auth-divider::before, .auth-divider::after {
+      content: ""; flex: 1; height: 1px; background: var(--border);
+    }
+    .auth-form {
+      display: flex; flex-direction: column; gap: 9px;
+      width: 100%; max-width: 320px;
+    }
+    .auth-form input {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 14px;
+      padding: 12px 13px;
+      outline: none;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .auth-form input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    .auth-form input.hidden { display: none; }
+    .auth-form .primary-btn { margin-top: 2px; }
+    .auth-error { color: var(--danger); font-size: 12.5px; max-width: 320px; }
+    .auth-error:empty { display: none; }
+    .auth-switch {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 13px; color: var(--muted);
+    }
+    .auth-switch button {
+      background: none; border: none; padding: 0;
+      color: var(--accent); font: inherit; font-weight: 600; cursor: pointer;
+    }
+    .auth-switch button:hover { text-decoration: underline; }
     .auth-note { font-size: 12px; color: var(--faint); }
     .auth-features {
       list-style: none;
@@ -1033,6 +1070,18 @@
       <h1>Bienvenido a <span class="grad">Core IA</span></h1>
       <p>Inicia sesión para empezar a chatear. Tus conversaciones y documentos se guardan de forma segura.</p>
       <div class="auth-providers" id="auth-providers"></div>
+      <div class="auth-divider"><span>o con tu correo</span></div>
+      <form class="auth-form" id="auth-form" novalidate>
+        <input id="auth-name" type="text" placeholder="Tu nombre (al crear cuenta)" autocomplete="name" class="hidden" />
+        <input id="auth-email" type="email" placeholder="tu@correo.com" autocomplete="email" required />
+        <input id="auth-password" type="password" placeholder="Contraseña (mín. 8 caracteres)" autocomplete="current-password" required />
+        <button class="primary-btn" id="auth-submit" type="submit">Entrar</button>
+      </form>
+      <div class="auth-error" id="auth-error"></div>
+      <div class="auth-switch">
+        <span id="auth-switch-text">¿No tienes cuenta?</span>
+        <button type="button" id="auth-switch-btn">Crear cuenta</button>
+      </div>
       <div class="auth-note">Debes iniciar sesión para usar Core IA.</div>
       <ul class="auth-features">
         <li>Historial de conversaciones en la nube</li>

@@ -1,6 +1,6 @@
 /**
  * Core IA - Frontend
- * Sesión (Discord/Google/Microsoft OAuth2), historial en servidor, ajustes,
+ * Sesión (Discord/Google OAuth2 + correo), historial en servidor, ajustes,
  * planes, panel de administración y chat.
  */
 
@@ -15,6 +15,14 @@ const welcomeEl = document.getElementById("welcome");
 const splashEl = document.getElementById("splash");
 const authGateEl = document.getElementById("auth-gate");
 const authProvidersEl = document.getElementById("auth-providers");
+const authFormEl = document.getElementById("auth-form");
+const authNameEl = document.getElementById("auth-name");
+const authEmailEl = document.getElementById("auth-email");
+const authPasswordEl = document.getElementById("auth-password");
+const authSubmitEl = document.getElementById("auth-submit");
+const authErrorEl = document.getElementById("auth-error");
+const authSwitchBtn = document.getElementById("auth-switch-btn");
+const authSwitchText = document.getElementById("auth-switch-text");
 const scrollEl = document.getElementById("chat-scroll");
 const historyEl = document.getElementById("history");
 const profileEl = document.getElementById("profile");
@@ -128,10 +136,6 @@ const PROVIDER_META = {
     label: "Google",
     icon: '<svg width="20" height="20" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.9 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.3 6.1 29.4 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.3-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16 19 13 24 13c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.3 6.1 29.4 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.3 0-9.7-3.1-11.3-7.5l-6.5 5C9.6 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.1-4.1 5.5l6.2 5.2C41.1 35.9 44 30.5 44 24c0-1.3-.1-2.3-.4-3.5z"/></svg>',
   },
-  microsoft: {
-    label: "Microsoft",
-    icon: '<svg width="20" height="20" viewBox="0 0 23 23"><path fill="#f35325" d="M1 1h10v10H1z"/><path fill="#81bc06" d="M12 1h10v10H12z"/><path fill="#05a6f0" d="M1 12h10v10H1z"/><path fill="#ffba08" d="M12 12h10v10H12z"/></svg>',
-  },
 };
 
 function loginUrl(provider) {
@@ -163,6 +167,63 @@ function renderLoginButtons(container, variant) {
     });
     container.appendChild(btn);
   });
+}
+
+let authMode = "login";
+
+function setAuthMode(mode) {
+  authMode = mode;
+  const isRegister = mode === "register";
+  authNameEl.classList.toggle("hidden", !isRegister);
+  authPasswordEl.setAttribute("autocomplete", isRegister ? "new-password" : "current-password");
+  authSubmitEl.textContent = isRegister ? "Crear cuenta" : "Entrar";
+  authSwitchText.textContent = isRegister ? "¿Ya tienes cuenta?" : "¿No tienes cuenta?";
+  authSwitchBtn.textContent = isRegister ? "Iniciar sesión" : "Crear cuenta";
+  authErrorEl.textContent = "";
+}
+
+async function submitEmailAuth(event) {
+  event.preventDefault();
+  authErrorEl.textContent = "";
+  const email = authEmailEl.value.trim();
+  const password = authPasswordEl.value;
+  const name = authNameEl.value.trim();
+  if (!email || !password) {
+    authErrorEl.textContent = "Escribe tu correo y contraseña.";
+    return;
+  }
+  if (authMode === "register" && password.length < 8) {
+    authErrorEl.textContent = "La contraseña debe tener al menos 8 caracteres.";
+    return;
+  }
+
+  const path = authMode === "register" ? "/api/auth/register" : "/api/auth/login";
+  const body = authMode === "register" ? { email, password, name: name || null } : { email, password };
+
+  authSubmitEl.disabled = true;
+  const previous = authSubmitEl.textContent;
+  authSubmitEl.textContent = "Un momento...";
+  try {
+    const res = await fetch(`${BACKEND_URL}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.detail || "No se pudo completar la operación.");
+    }
+    token = data.token;
+    localStorage.setItem(TOKEN_KEY, token);
+    authPasswordEl.value = "";
+    hideAuthGate();
+    await loadSession();
+  } catch (err) {
+    authErrorEl.textContent = err.message;
+  } finally {
+    authSubmitEl.disabled = false;
+    authSubmitEl.textContent = previous;
+  }
 }
 
 function clearSession() {
@@ -1320,6 +1381,11 @@ adminModal.addEventListener("click", (event) => {
   if (event.target === adminModal) closeAdmin();
 });
 
+authFormEl.addEventListener("submit", submitEmailAuth);
+authSwitchBtn.addEventListener("click", () => {
+  setAuthMode(authMode === "login" ? "register" : "login");
+});
+
 /* ------------------------------------------------------------------ */
 /* Arranque                                                            */
 /* ------------------------------------------------------------------ */
@@ -1336,6 +1402,7 @@ adminModal.addEventListener("click", (event) => {
   updateSendState();
   updatePlanBadge();
   autoResize();
+  setAuthMode("login");
   await loadProviders();
   if (authProvidersEl) renderLoginButtons(authProvidersEl, "auth-login");
   try {

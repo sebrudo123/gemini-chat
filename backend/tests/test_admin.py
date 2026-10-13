@@ -92,7 +92,6 @@ def test_providers_endpoint_returns_configured(client):
 
 def test_unconfigured_provider_returns_503(client):
     assert client.get("/api/auth/google/login", follow_redirects=False).status_code == 503
-    assert client.get("/api/auth/microsoft/login", follow_redirects=False).status_code == 503
 
 
 def test_google_provider_user_can_chat(client, monkeypatch):
@@ -100,3 +99,47 @@ def test_google_provider_user_can_chat(client, monkeypatch):
     headers = auth("google-user-1", provider="google")
     response = client.post("/api/chat", json={"message": "hola"}, headers=headers)
     assert response.status_code == 200
+
+
+def test_email_register_and_login(client):
+    email = "correo-test@example.com"
+
+    register = client.post(
+        "/api/auth/register",
+        json={"email": email, "password": "supersecret", "name": "Correo"},
+    )
+    assert register.status_code == 200
+    token = register.json()["token"]
+    assert token
+
+    me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert me.status_code == 200
+    assert me.json()["user"]["email"] == email
+    assert me.json()["user"]["is_admin"] is False
+
+    duplicate = client.post("/api/auth/register", json={"email": email, "password": "another123"})
+    assert duplicate.status_code == 409
+
+    login = client.post("/api/auth/login", json={"email": email, "password": "supersecret"})
+    assert login.status_code == 200
+    assert login.json()["token"]
+
+    wrong = client.post("/api/auth/login", json={"email": email, "password": "incorrecta"})
+    assert wrong.status_code == 401
+
+    unknown = client.post(
+        "/api/auth/login", json={"email": "nadie@example.com", "password": "cualquiera1"}
+    )
+    assert unknown.status_code == 401
+
+
+def test_email_register_validation(client):
+    invalid_email = client.post(
+        "/api/auth/register", json={"email": "no-es-correo", "password": "supersecret"}
+    )
+    assert invalid_email.status_code == 400
+    short_password = client.post(
+        "/api/auth/register", json={"email": "ok@example.com", "password": "corta"}
+    )
+    assert short_password.status_code == 422
+

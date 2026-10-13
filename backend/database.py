@@ -53,8 +53,8 @@ def migrate_schema() -> None:
     """Añade columnas nuevas a tablas existentes (compatibilidad multi-proveedor).
 
     `create_all` no altera tablas ya creadas, así que añadimos manualmente las
-    columnas de identidad (Google/Microsoft) y permitimos `discord_id` nulo en
-    bases de datos que ya existían antes de soportar varios proveedores.
+    columnas de identidad (Google) y de contraseña, y permitimos `discord_id`
+    nulo en bases de datos que ya existían antes de soportar varios métodos.
     """
     inspector = inspect(engine)
     if "users" not in inspector.get_table_names():
@@ -66,8 +66,8 @@ def migrate_schema() -> None:
     statements: list[str] = []
     if "google_id" not in columns:
         statements.append("ALTER TABLE users ADD COLUMN google_id VARCHAR(64)")
-    if "microsoft_id" not in columns:
-        statements.append("ALTER TABLE users ADD COLUMN microsoft_id VARCHAR(64)")
+    if "password_hash" not in columns:
+        statements.append("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)")
     if dialect == "postgresql" and not columns.get("discord_id", {}).get("nullable", True):
         statements.append("ALTER TABLE users ALTER COLUMN discord_id DROP NOT NULL")
 
@@ -76,10 +76,6 @@ def migrate_schema() -> None:
     if "ix_users_google_id" not in existing_indexes:
         index_statements.append(
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_google_id ON users (google_id)"
-        )
-    if "ix_users_microsoft_id" not in existing_indexes:
-        index_statements.append(
-            "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_microsoft_id ON users (microsoft_id)"
         )
 
     if not statements and not index_statements:

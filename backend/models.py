@@ -18,7 +18,7 @@ from database import Base
 
 
 class User(Base):
-    """Usuario autenticado mediante Discord, Google o Microsoft."""
+    """Usuario autenticado mediante Discord, Google o correo/contraseña."""
 
     __tablename__ = "users"
 
@@ -29,9 +29,7 @@ class User(Base):
     google_id: Mapped[str | None] = mapped_column(
         String(64), unique=True, index=True, default=None
     )
-    microsoft_id: Mapped[str | None] = mapped_column(
-        String(64), unique=True, index=True, default=None
-    )
+    password_hash: Mapped[str | None] = mapped_column(String(255), default=None)
     username: Mapped[str | None] = mapped_column(String(64), default=None)
     display_name: Mapped[str | None] = mapped_column(String(64), default=None)
     email: Mapped[str | None] = mapped_column(String(255), default=None)

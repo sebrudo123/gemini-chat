@@ -39,16 +39,8 @@ services:
         sync: false
       - key: GOOGLE_REDIRECT_URI
         value: https://gemini-chat-backend-vyrz.onrender.com/api/auth/google/callback
-      - key: MICROSOFT_CLIENT_ID
-        sync: false
-      - key: MICROSOFT_CLIENT_SECRET
-        sync: false
-      - key: MICROSOFT_REDIRECT_URI
-        value: https://gemini-chat-backend-vyrz.onrender.com/api/auth/microsoft/callback
-      - key: MICROSOFT_TENANT
-        value: common
       - key: AUTH_PROVIDERS
-        value: discord,google,microsoft
+        value: discord,google
       - key: FOUNDER_DISCORD_IDS
         value: "719050307593830440"
       - key: FRONTEND_URL

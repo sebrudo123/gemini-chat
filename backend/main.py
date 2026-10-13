@@ -12,6 +12,9 @@ Consulta el README para las variables de entorno.
 """
 
 import base64
+import hashlib
+import hmac
+import re
 import secrets
 import time
 from collections.abc import AsyncIterator
@@ -80,16 +83,11 @@ GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USER_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 
-MICROSOFT_AUTHORIZE_URL = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize"
-MICROSOFT_TOKEN_URL = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
-MICROSOFT_USER_URL = "https://graph.microsoft.com/v1.0/me"
-
 SESSION_SALT = "core-ia.session.v1"
 
 PROVIDER_COLUMNS = {
     "discord": "discord_id",
     "google": "google_id",
-    "microsoft": "microsoft_id",
 }
 
 TRANSIENT_MARKERS = (
@@ -196,6 +194,27 @@ def create_session_token(profile: dict[str, Any]) -> str:
     return serializer.dumps({"user": profile})
 
 
+def hash_password(password: str) -> str:
+    """Deriva un hash PBKDF2-SHA256 con salt aleatorio."""
+    salt = secrets.token_bytes(16)
+    derived = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 200_000)
+    return f"pbkdf2_sha256$200000${salt.hex()}${derived.hex()}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    """Comprueba una contraseña contra su hash almacenado."""
+    try:
+        algorithm, iterations, salt_hex, hash_hex = stored.split("$")
+        if algorithm != "pbkdf2_sha256":
+            return False
+        derived = hashlib.pbkdf2_hmac(
+            "sha256", password.encode(), bytes.fromhex(salt_hex), int(iterations)
+        )
+    except (ValueError, TypeError):
+        return False
+    return hmac.compare_digest(derived.hex(), hash_hex)
+
+
 def get_current_user(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     """Valida el token Bearer y devuelve el perfil del usuario."""
     if not authorization or not authorization.lower().startswith("bearer "):
@@ -268,7 +287,7 @@ def delete_user_data(db: Session, user: User) -> None:
 def upsert_user(db: Session, profile: dict[str, Any]) -> User:
     """Crea o actualiza el usuario a partir del perfil de un proveedor OAuth.
 
-    El perfil incluye `provider` (discord/google/microsoft) e `id` (el
+    El perfil incluye `provider` (discord/google/email) e `id` (el
     identificador del usuario en ese proveedor). Si el proveedor no viene
     indicado se asume Discord (compatibilidad con tokens antiguos).
     """
@@ -280,7 +299,7 @@ def upsert_user(db: Session, profile: dict[str, Any]) -> User:
     if column and provider_id:
         user = db.query(User).filter(getattr(User, column) == provider_id).first()
 
-    # Vincula cuentas del mismo correo (Google/Microsoft verifican el email).
+    # Vincula cuentas del mismo correo (Google verifica el email).
     if user is None and profile.get("email"):
         user = db.query(User).filter(User.email == profile.get("email")).first()
 
@@ -494,7 +513,7 @@ def health() -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
-# Autenticación OAuth2 (Discord, Google, Microsoft)
+# Autenticación OAuth2 (Discord, Google) y por correo
 # --------------------------------------------------------------------------- #
 
 def _oauth_state(return_to: str | None) -> str:
@@ -518,8 +537,6 @@ def _provider_env(provider: str) -> tuple[str, str, str]:
         return settings.discord_client_id, settings.discord_client_secret, settings.discord_redirect_uri
     if provider == "google":
         return settings.google_client_id, settings.google_client_secret, settings.google_redirect_uri
-    if provider == "microsoft":
-        return settings.microsoft_client_id, settings.microsoft_client_secret, settings.microsoft_redirect_uri
     raise HTTPException(status_code=404, detail="Proveedor de login no soportado.")
 
 
@@ -680,62 +697,82 @@ async def google_callback(
     return _finish_login(db, profile, state_data)
 
 
-@app.get("/api/auth/microsoft/login")
-def microsoft_login(return_to: str | None = None) -> RedirectResponse:
-    """Redirige al usuario a la pantalla de autorización de Microsoft."""
-    client_id = require_config(settings.microsoft_client_id, "MICROSOFT_CLIENT_ID")
-    redirect_uri = require_config(settings.microsoft_redirect_uri, "MICROSOFT_REDIRECT_URI")
-    tenant = settings.microsoft_tenant or "common"
-    params = {
-        "client_id": client_id,
-        "redirect_uri": redirect_uri,
-        "response_type": "code",
-        "response_mode": "query",
-        "scope": "openid email profile User.Read",
-        "state": _oauth_state(return_to),
-        "prompt": "consent",
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+class RegisterRequest(BaseModel):
+    email: str = Field(..., max_length=255)
+    password: str = Field(..., min_length=8, max_length=128)
+    name: str | None = Field(default=None, max_length=64)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(..., max_length=255)
+    password: str = Field(..., min_length=1, max_length=128)
+
+
+class AuthTokenResponse(BaseModel):
+    token: str
+    user: dict[str, Any]
+
+
+def _email_profile(user: User) -> dict[str, Any]:
+    """Perfil de sesión para un usuario que entra con correo/contraseña."""
+    return {
+        "provider": "email",
+        "id": user.id,
+        "username": user.username,
+        "display_name": user.display_name,
+        "email": user.email,
+        "avatar_url": user.avatar_url,
     }
-    return RedirectResponse(f"{MICROSOFT_AUTHORIZE_URL.format(tenant=tenant)}?{urlencode(params)}")
 
 
-@app.get("/api/auth/microsoft/callback")
-async def microsoft_callback(
-    code: str | None = None,
-    state: str | None = None,
-    error: str | None = None,
+@app.post("/api/auth/register", response_model=AuthTokenResponse)
+@limiter.limit(settings.rate_limit)
+def email_register(
+    request: Request,
+    payload: RegisterRequest,
     db: Session = Depends(get_db),
-) -> RedirectResponse:
-    """Callback OAuth de Microsoft (Microsoft Entra ID)."""
-    if error or not code:
-        return RedirectResponse(f"{resolve_return_url(state)}?auth=error")
-    state_data = _read_state(state)
-    client_id = require_config(settings.microsoft_client_id, "MICROSOFT_CLIENT_ID")
-    client_secret = require_config(settings.microsoft_client_secret, "MICROSOFT_CLIENT_SECRET")
-    redirect_uri = require_config(settings.microsoft_redirect_uri, "MICROSOFT_REDIRECT_URI")
-    tenant = settings.microsoft_tenant or "common"
+) -> AuthTokenResponse:
+    """Registra un usuario con correo y contraseña."""
+    email = payload.email.strip().lower()
+    if not EMAIL_RE.match(email):
+        raise HTTPException(status_code=400, detail="Correo electrónico no válido.")
 
-    access_token = await _exchange_code(
-        MICROSOFT_TOKEN_URL.format(tenant=tenant),
-        {
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": redirect_uri,
-            "scope": "openid email profile User.Read",
-        },
-    )
-    raw = await _fetch_profile(MICROSOFT_USER_URL, access_token)
-    email = raw.get("mail") or raw.get("userPrincipalName")
-    profile = {
-        "provider": "microsoft",
-        "id": raw.get("id"),
-        "username": email,
-        "display_name": raw.get("displayName"),
-        "email": email,
-        "avatar_url": None,
-    }
-    return _finish_login(db, profile, state_data)
+    user = db.query(User).filter(User.email == email).first()
+    if user is not None and user.password_hash:
+        raise HTTPException(status_code=409, detail="Ya existe una cuenta con ese correo.")
+    if user is None:
+        user = User()
+        db.add(user)
+
+    user.email = email
+    user.username = user.username or email
+    user.display_name = payload.name or user.display_name or email.split("@")[0]
+    user.password_hash = hash_password(payload.password)
+    db.commit()
+    db.refresh(user)
+
+    profile = _email_profile(user)
+    return AuthTokenResponse(token=create_session_token(profile), user=profile)
+
+
+@app.post("/api/auth/login", response_model=AuthTokenResponse)
+@limiter.limit(settings.rate_limit)
+def email_login(
+    request: Request,
+    payload: LoginRequest,
+    db: Session = Depends(get_db),
+) -> AuthTokenResponse:
+    """Inicia sesión con correo y contraseña."""
+    email = payload.email.strip().lower()
+    user = db.query(User).filter(User.email == email).first()
+    if user is None or not user.password_hash or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos.")
+
+    profile = _email_profile(user)
+    return AuthTokenResponse(token=create_session_token(profile), user=profile)
 
 
 @app.get("/api/auth/me", response_model=UserResponse)

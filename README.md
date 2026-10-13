@@ -40,25 +40,22 @@ CoreIA/
      `https://TU-BACKEND.onrender.com/api/auth/discord/callback`
 3. Guarda los cambios.
 
-## 1b. Login con Google y Microsoft (opcional)
+## 1b. Login con Google (opcional)
 
-Además de Discord, Core IA admite Google y Microsoft. Solo aparecen en la
-interfaz los proveedores que tengan sus credenciales configuradas.
+Además de Discord y del login por correo/contraseña, Core IA admite Google.
+Solo aparecen en la interfaz los proveedores OAuth que tengan sus credenciales
+configuradas.
 
 **Google** (https://console.cloud.google.com/apis/credentials):
 
 1. Crea credenciales → **ID de cliente de OAuth** (aplicación web).
-2. Añade el origen autorizado de tu frontend y como URI de redirección:
+2. En **Orígenes autorizados de JavaScript** añade tu frontend
+   (`https://TU-FRONTEND`) y en **URIs de redirección autorizadas**:
    `https://TU-BACKEND.onrender.com/api/auth/google/callback`
 3. Rellena `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` y `GOOGLE_REDIRECT_URI`.
 
-**Microsoft** (https://portal.azure.com → Microsoft Entra ID → App registrations):
-
-1. **New registration** → añade como Redirect URI (Web):
-   `https://TU-BACKEND.onrender.com/api/auth/microsoft/callback`
-2. Crea un **client secret** y copia el Application (client) ID.
-3. Rellena `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`,
-   `MICROSOFT_REDIRECT_URI` y, si usas un tenant concreto, `MICROSOFT_TENANT`.
+El **login por correo y contraseña** funciona sin configuración adicional
+(registro en `POST /api/auth/register`, acceso en `POST /api/auth/login`).
 
 ## 2. Variables de entorno
 
@@ -80,11 +77,7 @@ DISCORD_REDIRECT_URI=https://TU-BACKEND.onrender.com/api/auth/discord/callback
 GOOGLE_CLIENT_ID=             # opcional
 GOOGLE_CLIENT_SECRET=         # opcional
 GOOGLE_REDIRECT_URI=https://TU-BACKEND.onrender.com/api/auth/google/callback
-MICROSOFT_CLIENT_ID=          # opcional
-MICROSOFT_CLIENT_SECRET=      # opcional
-MICROSOFT_REDIRECT_URI=https://TU-BACKEND.onrender.com/api/auth/microsoft/callback
-MICROSOFT_TENANT=common
-AUTH_PROVIDERS=discord,google,microsoft
+AUTH_PROVIDERS=discord,google
 FOUNDER_DISCORD_IDS=719050307593830440   # IDs con acceso al panel de administración
 FRONTEND_URL=https://TU-FRONTEND
 ALLOWED_ORIGINS=https://TU-FRONTEND,http://localhost:5500
@@ -199,11 +192,14 @@ pruebas en cada push y pull request.
 
 ## Autenticación multi-proveedor
 
-- **Proveedores**: Discord, Google y Microsoft OAuth2. `GET /api/auth/providers`
-  devuelve los que estén configurados; el frontend dibuja dinámicamente un botón
-  por proveedor (con su icono y color).
+- **Proveedores**: Discord y Google (OAuth2) más correo/contraseña. `GET /api/auth/providers`
+  devuelve los OAuth configurados; el frontend dibuja dinámicamente un botón por
+  proveedor (con su icono y color) y siempre muestra el formulario de correo.
+- **Correo/contraseña**: `POST /api/auth/register` y `POST /api/auth/login` devuelven
+  `{ token, user }`. Las contraseñas se guardan como `pbkdf2_sha256` (200 000
+  iteraciones, salt aleatorio). El login por correo está siempre disponible.
 - **Identidad**: cada usuario se identifica por `discord_id`, `google_id` o
-  `microsoft_id`. Las cuentas con el mismo correo verificado se enlazan.
+  `password_hash`/email. Las cuentas con el mismo correo verificado se enlazan.
 - **Migración**: al arrancar, `init_db()` añade las columnas nuevas de identidad y
   permite `discord_id` nulo en bases de datos ya existentes.
 

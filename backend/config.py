@@ -41,18 +41,11 @@ class Settings:
         self.google_client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "")
         self.google_redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI", "")
 
-        # --- Microsoft OAuth2 ---
-        self.microsoft_client_id = os.environ.get("MICROSOFT_CLIENT_ID", "")
-        self.microsoft_client_secret = os.environ.get("MICROSOFT_CLIENT_SECRET", "")
-        self.microsoft_redirect_uri = os.environ.get("MICROSOFT_REDIRECT_URI", "")
-        self.microsoft_tenant = os.environ.get("MICROSOFT_TENANT", "common")
-
-        # --- Proveedores de login habilitados ---
+        # --- Proveedores de login OAuth habilitados ---
+        # El login por correo/contraseña está siempre disponible.
         self.auth_providers = [
             provider.strip().lower()
-            for provider in os.environ.get(
-                "AUTH_PROVIDERS", "discord,google,microsoft"
-            ).split(",")
+            for provider in os.environ.get("AUTH_PROVIDERS", "discord,google").split(",")
             if provider.strip()
         ]
 
