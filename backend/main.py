@@ -22,7 +22,7 @@ Variables opcionales:
 import os
 import secrets
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import httpx
 from dotenv import load_dotenv
@@ -92,6 +92,29 @@ def require_config(value: str, name: str) -> str:
             detail=f"El servidor no tiene configurada la variable {name}.",
         )
     return value
+
+
+def allowed_return_url(return_to: str | None) -> str:
+    """Valida que la URL de retorno pertenezca a un origen permitido."""
+    if not return_to:
+        return f"{FRONTEND_URL}/"
+    parsed = urlparse(return_to)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    if origin not in ALLOWED_ORIGINS:
+        return f"{FRONTEND_URL}/"
+    path = parsed.path or "/"
+    if not path.endswith("/"):
+        path = path.rsplit("/", 1)[0] + "/"
+    return f"{origin}{path}"
+
+
+def resolve_return_url(state: str | None) -> str:
+    """Obtiene la URL de retorno desde un `state` firmado (con valor por defecto)."""
+    try:
+        data = serializer.loads(state or "", max_age=STATE_MAX_AGE)
+        return allowed_return_url(data.get("return_to"))
+    except (BadSignature, SignatureExpired):
+        return f"{FRONTEND_URL}/"
 
 
 def build_avatar_url(user: dict[str, Any]) -> str | None:
@@ -164,12 +187,17 @@ def health() -> dict[str, str]:
 # --------------------------------------------------------------------------- #
 
 @app.get("/api/auth/discord/login")
-def discord_login() -> RedirectResponse:
+def discord_login(return_to: str | None = None) -> RedirectResponse:
     """Redirige al usuario a la pantalla de autorización de Discord."""
     client_id = require_config(DISCORD_CLIENT_ID, "DISCORD_CLIENT_ID")
     redirect_uri = require_config(DISCORD_REDIRECT_URI, "DISCORD_REDIRECT_URI")
 
-    state = serializer.dumps({"nonce": secrets.token_urlsafe(16)})
+    state = serializer.dumps(
+        {
+            "nonce": secrets.token_urlsafe(16),
+            "return_to": allowed_return_url(return_to),
+        }
+    )
     params = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
@@ -189,10 +217,10 @@ async def discord_callback(
 ) -> RedirectResponse:
     """Intercambia el `code` por un token, obtiene el perfil y crea la sesión."""
     if error or not code:
-        return RedirectResponse(f"{FRONTEND_URL}/?auth=error")
+        return RedirectResponse(f"{resolve_return_url(state)}?auth=error")
 
     try:
-        serializer.loads(state or "", max_age=STATE_MAX_AGE)
+        state_data = serializer.loads(state or "", max_age=STATE_MAX_AGE)
     except (BadSignature, SignatureExpired) as exc:
         raise HTTPException(status_code=400, detail="Estado OAuth inválido o expirado.") from exc
 
@@ -236,7 +264,8 @@ async def discord_callback(
     }
 
     token = create_session_token(profile)
-    return RedirectResponse(f"{FRONTEND_URL}/#token={token}")
+    return_url = allowed_return_url(state_data.get("return_to"))
+    return RedirectResponse(f"{return_url}#token={token}")
 
 
 @app.get("/api/auth/me", response_model=UserResponse)

@@ -55,6 +55,11 @@ async function api(path, options = {}) {
 /* Sesión                                                              */
 /* ------------------------------------------------------------------ */
 
+function loginUrl() {
+  const returnTo = encodeURIComponent(window.location.origin + window.location.pathname);
+  return `${BACKEND_URL}/api/auth/discord/login?return_to=${returnTo}`;
+}
+
 function clearSession() {
   token = null;
   currentUser = null;
@@ -110,7 +115,7 @@ function renderProfile() {
       '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M20.3 4.4A19.8 19.8 0 0 0 15.4 3l-.3.5a18 18 0 0 1 4.4 1.4 15.9 15.9 0 0 0-4.1-1.3 16.6 16.6 0 0 0-6.8 0A15.9 15.9 0 0 0 4.5 4.9 18 18 0 0 1 8.9 3.5L8.6 3a19.8 19.8 0 0 0-4.9 1.4C.8 8.6 0 12.6.4 16.6a19.9 19.9 0 0 0 6 3l.8-1.3c-.9-.3-1.7-.7-2.5-1.2l.6-.5a14.3 14.3 0 0 0 12.2 0l.6.5c-.8.5-1.6.9-2.5 1.2l.8 1.3a19.9 19.9 0 0 0 6-3c.5-4.6-.7-8.6-2.9-12.2ZM8.5 14.6c-1.2 0-2.1-1.1-2.1-2.4S7.3 9.8 8.5 9.8s2.1 1.1 2.1 2.4-.9 2.4-2.1 2.4Zm7 0c-1.2 0-2.1-1.1-2.1-2.4s.9-2.4 2.1-2.4 2.1 1.1 2.1 2.4-.9 2.4-2.1 2.4Z"/></svg>' +
       "Iniciar sesión con Discord";
     btn.addEventListener("click", () => {
-      window.location.href = `${BACKEND_URL}/api/auth/discord/login`;
+      window.location.href = loginUrl();
     });
     profileEl.appendChild(btn);
     return;
@@ -392,7 +397,7 @@ document.querySelectorAll(".suggestion").forEach((btn) => {
       updateSendState();
       inputEl.focus();
     } else {
-      window.location.href = `${BACKEND_URL}/api/auth/discord/login`;
+      window.location.href = loginUrl();
     }
   });
 });

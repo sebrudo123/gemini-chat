@@ -24,4 +24,4 @@ services:
       - key: FRONTEND_URL
         value: https://sebrudo123.github.io/gemini-chat
       - key: ALLOWED_ORIGINS
-        value: https://sebrudo123.github.io,http://localhost:5500,http://127.0.0.1:5500
+        value: https://sebrudo123.github.io,https://gemini-chat-backend-six.vercel.app,http://localhost:5500,http://127.0.0.1:5500
