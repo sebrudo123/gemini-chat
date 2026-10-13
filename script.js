@@ -11,6 +11,7 @@ const TTS_KEY = "coreia_tts";
 
 const chatEl = document.getElementById("chat");
 const welcomeEl = document.getElementById("welcome");
+const splashEl = document.getElementById("splash");
 const scrollEl = document.getElementById("chat-scroll");
 const historyEl = document.getElementById("history");
 const profileEl = document.getElementById("profile");
@@ -60,6 +61,17 @@ let ttsEnabled = localStorage.getItem(TTS_KEY) === "1";
 let settings = { theme: "dark", preferred_model: null, use_rag: true };
 let usage = null;
 let catalog = null;
+
+const splashStart = performance.now();
+let splashHidden = false;
+
+function hideSplash() {
+  if (splashHidden || !splashEl) return;
+  splashHidden = true;
+  const elapsed = performance.now() - splashStart;
+  const wait = Math.max(0, 950 - elapsed);
+  setTimeout(() => splashEl.classList.add("hide"), wait);
+}
 
 /* ------------------------------------------------------------------ */
 /* API                                                                 */
@@ -1112,5 +1124,11 @@ plansModal.addEventListener("click", (event) => {
   updateSendState();
   updatePlanBadge();
   autoResize();
-  await loadSession();
+  try {
+    await loadSession();
+  } finally {
+    hideSplash();
+  }
 })();
+
+window.addEventListener("load", () => setTimeout(hideSplash, 15000));

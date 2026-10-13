@@ -6,6 +6,14 @@
   <meta name="description" content="Core IA - Asistente de inteligencia artificial" />
   <meta name="theme-color" content="#212121" />
   <title>Core IA</title>
+  <script>
+    try {
+      document.documentElement.setAttribute(
+        "data-theme",
+        localStorage.getItem("coreia_theme") || "dark"
+      );
+    } catch (e) {}
+  </script>
   <style>
     /* ================= Tokens (estilo ChatGPT/Gemini) ================= */
     :root {
@@ -759,6 +767,91 @@
     }
     .overlay.show { display: block; animation: fadeUp .2s ease; }
 
+    /* ================= Splash (pantalla de carga) ================= */
+    .splash {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: grid;
+      place-items: center;
+      background: var(--bg);
+      transition: opacity .55s ease, visibility .55s ease;
+    }
+    .splash.hide {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+    .splash-inner {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 22px;
+      animation: splashIn .6s ease both;
+    }
+    @keyframes splashIn {
+      from { opacity: 0; transform: translateY(10px) scale(.96); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .splash-orb {
+      position: relative;
+      width: 74px; height: 74px;
+      border-radius: 50%;
+      background: var(--grad);
+      display: grid; place-items: center;
+      color: #fff; font-size: 34px;
+      box-shadow: 0 12px 44px rgba(66, 133, 244, .45);
+      animation: splashPulse 1.9s ease-in-out infinite;
+    }
+    .splash-orb span { display: inline-block; animation: spin 3.4s linear infinite; }
+    .splash-orb::before,
+    .splash-orb::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      border: 2px solid var(--accent);
+      animation: ripple 2.4s ease-out infinite;
+    }
+    .splash-orb::after { animation-delay: 1.2s; }
+    @keyframes ripple {
+      0%   { transform: scale(1); opacity: .55; }
+      100% { transform: scale(2.05); opacity: 0; }
+    }
+    @keyframes splashPulse {
+      0%, 100% { transform: scale(1); }
+      50%      { transform: scale(1.06); }
+    }
+
+    .splash-name {
+      font-size: 23px;
+      font-weight: 700;
+      letter-spacing: .3px;
+      background: var(--grad);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+
+    .splash-bar {
+      width: 156px;
+      height: 4px;
+      border-radius: 999px;
+      background: var(--surface);
+      overflow: hidden;
+    }
+    .splash-bar-fill {
+      width: 42%;
+      height: 100%;
+      border-radius: 999px;
+      background: var(--grad);
+      background-size: 200% 100%;
+      animation: splashBar 1.15s ease-in-out infinite, hue 2s linear infinite;
+    }
+    @keyframes splashBar {
+      0%   { transform: translateX(-130%); }
+      100% { transform: translateX(330%); }
+    }
+
     /* ================= Responsive ================= */
     @media (max-width: 820px) {
       .sidebar {
@@ -781,6 +874,14 @@
   </style>
 </head>
 <body>
+  <div class="splash" id="splash">
+    <div class="splash-inner">
+      <div class="splash-orb"><span>✦</span></div>
+      <div class="splash-name">Core IA</div>
+      <div class="splash-bar"><div class="splash-bar-fill"></div></div>
+    </div>
+  </div>
+
   <div class="app">
     <div class="overlay" id="overlay"></div>
 
