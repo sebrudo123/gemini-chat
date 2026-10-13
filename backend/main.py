@@ -21,6 +21,7 @@ Variables opcionales:
 
 import os
 import secrets
+import time
 from typing import Any
 from urllib.parse import urlencode, urlparse
 
@@ -41,6 +42,24 @@ load_dotenv()
 
 AI_API_KEY = os.environ.get("AI_API_KEY", "")
 AI_MODEL = os.environ.get("AI_MODEL", "gemini-3.8-flash")
+AI_MODEL_FALLBACKS = [
+    model.strip()
+    for model in os.environ.get(
+        "AI_MODEL_FALLBACKS", "gemini-3.7-flash,gemini-3.5-flash,gemini-flash-latest"
+    ).split(",")
+    if model.strip()
+]
+AI_RETRIES = int(os.environ.get("AI_RETRIES", "2"))
+TRANSIENT_MARKERS = (
+    "503",
+    "UNAVAILABLE",
+    "429",
+    "RESOURCE_EXHAUSTED",
+    "500",
+    "INTERNAL",
+    "overloaded",
+    "high demand",
+)
 
 DISCORD_CLIENT_ID = os.environ.get("DISCORD_CLIENT_ID", "")
 DISCORD_CLIENT_SECRET = os.environ.get("DISCORD_CLIENT_SECRET", "")
@@ -284,6 +303,38 @@ def auth_logout(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, b
 # Chat con Gemini
 # --------------------------------------------------------------------------- #
 
+def is_transient_error(exc: Exception) -> bool:
+    """Determina si un error de Gemini es temporal (saturación, rate limit)."""
+    text = str(exc)
+    return any(marker in text for marker in TRANSIENT_MARKERS)
+
+
+def generate_reply(message: str) -> str:
+    """Genera una respuesta probando varios modelos y reintentos ante fallos temporales."""
+    models = [AI_MODEL] + [m for m in AI_MODEL_FALLBACKS if m != AI_MODEL]
+    last_error: Exception | None = None
+
+    for model in models:
+        for attempt in range(max(1, AI_RETRIES)):
+            try:
+                response = genai_client.models.generate_content(model=model, contents=message)
+                return (response.text or "").strip()
+            except Exception as exc:  # noqa: BLE001 - se decide según el tipo de error
+                last_error = exc
+                if not is_transient_error(exc):
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Error al contactar con Gemini ({model}): {exc}",
+                    ) from exc
+                if attempt < AI_RETRIES - 1:
+                    time.sleep(1.2 * (attempt + 1))
+
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Core IA está experimentando alta demanda. Inténtalo de nuevo en unos segundos.",
+    ) from last_error
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(
     payload: ChatRequest,
@@ -299,12 +350,4 @@ def chat(
             detail="El servidor no tiene configurada AI_API_KEY.",
         )
 
-    try:
-        response = genai_client.models.generate_content(
-            model=AI_MODEL,
-            contents=message,
-        )
-    except Exception as exc:  # noqa: BLE001 - se propaga el detalle a la API
-        raise HTTPException(status_code=502, detail=f"Error al contactar con Gemini: {exc}") from exc
-
-    return ChatResponse(reply=(response.text or "").strip())
+    return ChatResponse(reply=generate_reply(message))

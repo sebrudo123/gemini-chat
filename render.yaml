@@ -11,6 +11,10 @@ services:
         sync: false
       - key: AI_MODEL
         value: gemini-3.8-flash
+      - key: AI_MODEL_FALLBACKS
+        value: gemini-3.7-flash,gemini-3.5-flash,gemini-flash-latest
+      - key: AI_RETRIES
+        value: "2"
       - key: SESSION_SECRET
         sync: false
       - key: TOKEN_MAX_AGE
