@@ -26,6 +26,10 @@ class Settings:
             if model.strip()
         ]
         self.ai_retries = int(os.environ.get("AI_RETRIES", "2"))
+        self.image_model = os.environ.get("IMAGE_MODEL", "")
+        self.embedding_model = os.environ.get("EMBEDDING_MODEL", "gemini-embedding-001")
+        self.rag_enabled = os.environ.get("RAG_ENABLED", "true").lower() in ("1", "true", "yes")
+        self.rag_top_k = int(os.environ.get("RAG_TOP_K", "4"))
 
         # --- Discord OAuth2 ---
         self.discord_client_id = os.environ.get("DISCORD_CLIENT_ID", "")

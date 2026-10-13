@@ -15,6 +15,14 @@ services:
         value: gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.7-flash,gemini-flash-latest
       - key: AI_RETRIES
         value: "2"
+      - key: IMAGE_MODEL
+        sync: false
+      - key: EMBEDDING_MODEL
+        value: gemini-embedding-001
+      - key: RAG_ENABLED
+        value: "true"
+      - key: RAG_TOP_K
+        value: "4"
       - key: SESSION_SECRET
         sync: false
       - key: TOKEN_MAX_AGE

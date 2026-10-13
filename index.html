@@ -288,6 +288,79 @@
 
     .msg.error .bubble { color: #fca5a5; border: 1px solid #7f1d1d; background: rgba(127,29,29,.15); }
 
+    .msg .bubble img {
+      max-width: 100%;
+      border-radius: 12px;
+      display: block;
+      margin-top: 6px;
+      border: 1px solid var(--border);
+    }
+
+    /* ---------- Modal ---------- */
+    .modal {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.6);
+      z-index: 50;
+      padding: 16px;
+      overflow-y: auto;
+    }
+    .modal.show { display: grid; place-items: center; }
+
+    .modal-card {
+      width: 100%;
+      max-width: 560px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .modal-head { display: flex; align-items: center; justify-content: space-between; }
+    .modal-head h2 { font-size: 18px; font-weight: 700; }
+    .modal-sub { color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+
+    #kb-title, #kb-text {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 14px;
+      padding: 11px 12px;
+      outline: none;
+    }
+    #kb-title:focus, #kb-text:focus { border-color: #5a5a5a; }
+    #kb-text { resize: vertical; min-height: 140px; line-height: 1.5; }
+
+    .primary-btn {
+      border: none; border-radius: 10px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 14px; font-weight: 600;
+      padding: 11px 14px;
+      transition: filter .15s;
+    }
+    .primary-btn:hover { filter: brightness(1.1); }
+    .primary-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+    .kb-list { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+    .kb-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 13.5px;
+    }
+    .kb-item .kb-meta { flex: 1; min-width: 0; }
+    .kb-item .kb-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .kb-item .kb-sub { color: var(--muted); font-size: 12px; }
+    .kb-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 8px; }
+
     /* ---------- Input ---------- */
     .composer {
       position: absolute;
@@ -300,15 +373,33 @@
       margin: 0 auto;
       display: flex;
       align-items: flex-end;
-      gap: 10px;
+      gap: 8px;
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 18px;
-      padding: 8px 8px 8px 16px;
+      padding: 8px;
       box-shadow: 0 8px 30px rgba(0,0,0,.35);
       transition: border-color .15s;
     }
     .composer-inner:focus-within { border-color: #5a5a5a; }
+
+    .composer-tools { display: flex; gap: 2px; align-items: center; }
+
+    .tool-btn {
+      width: 36px; height: 36px;
+      border: none; border-radius: 11px;
+      background: transparent;
+      color: var(--muted);
+      display: grid; place-items: center;
+      flex-shrink: 0;
+      transition: background .15s, color .15s;
+    }
+    .tool-btn:hover { background: var(--hover); color: var(--text); }
+    .tool-btn.active { background: var(--accent-soft); color: var(--accent); }
+    .tool-btn.recording { color: #f87171; animation: pulse 1.4s infinite; }
+
+    .tts-toggle { margin-left: auto; }
+    .tts-toggle.active { color: var(--accent); background: var(--accent-soft); }
 
     #input {
       flex: 1;
@@ -396,6 +487,9 @@
           <span class="pulse"></span>
           Core IA
         </div>
+        <button class="icon-btn tts-toggle" id="tts-toggle" type="button" title="Leer respuestas en voz alta" aria-pressed="false">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a9 9 0 0 1 0 14"/></svg>
+        </button>
       </header>
 
       <div class="chat-scroll" id="chat-scroll">
@@ -414,7 +508,18 @@
 
       <form class="composer" id="composer">
         <div class="composer-inner">
+          <button class="tool-btn" id="mic-btn" type="button" title="Dictar por voz" aria-label="Dictar">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
+          </button>
           <textarea id="input" rows="1" placeholder="Escribe un mensaje a Core IA..." autocomplete="off"></textarea>
+          <div class="composer-tools">
+            <button class="tool-btn" id="image-btn" type="button" title="Generar imagen" aria-label="Generar imagen">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>
+            </button>
+            <button class="tool-btn" id="kb-btn" type="button" title="Base de conocimiento" aria-label="Base de conocimiento">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg>
+            </button>
+          </div>
           <button id="send" type="submit" aria-label="Enviar" disabled>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/></svg>
           </button>
@@ -422,6 +527,20 @@
         <div class="composer-hint">Core IA puede cometer errores. Verifica la información importante.</div>
       </form>
     </main>
+  </div>
+
+  <div class="modal" id="kb-modal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>Base de conocimiento</h2>
+        <button class="icon-btn" id="kb-close" type="button" aria-label="Cerrar">✕</button>
+      </div>
+      <p class="modal-sub">Añade texto para que Core IA lo use como contexto al responder (RAG).</p>
+      <input id="kb-title" type="text" placeholder="Título del documento" maxlength="160" />
+      <textarea id="kb-text" placeholder="Pega aquí el texto o la documentación..."></textarea>
+      <button class="primary-btn" id="kb-save" type="button">Guardar documento</button>
+      <div class="kb-list" id="kb-list"></div>
+    </div>
   </div>
 
   <script src="script.js"></script>

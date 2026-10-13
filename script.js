@@ -20,11 +20,26 @@ const sidebarEl = document.getElementById("sidebar");
 const overlayEl = document.getElementById("overlay");
 const menuBtn = document.getElementById("menu-btn");
 
+const micBtn = document.getElementById("mic-btn");
+const imageBtn = document.getElementById("image-btn");
+const kbBtn = document.getElementById("kb-btn");
+const ttsToggle = document.getElementById("tts-toggle");
+const kbModal = document.getElementById("kb-modal");
+const kbClose = document.getElementById("kb-close");
+const kbTitle = document.getElementById("kb-title");
+const kbText = document.getElementById("kb-text");
+const kbSave = document.getElementById("kb-save");
+const kbList = document.getElementById("kb-list");
+
+const TTS_KEY = "coreia_tts";
+
 let token = localStorage.getItem(TOKEN_KEY) || null;
 let currentUser = null;
 let chats = [];
 let currentChatId = null;
 let sending = false;
+let imageMode = false;
+let ttsEnabled = localStorage.getItem(TTS_KEY) === "1";
 
 /* ------------------------------------------------------------------ */
 /* API                                                                 */
@@ -197,7 +212,11 @@ function renderHistory() {
 
 function persistChats() {
   if (!currentUser) return;
-  localStorage.setItem(CHATS_KEY(currentUser.id), JSON.stringify(chats));
+  try {
+    localStorage.setItem(CHATS_KEY(currentUser.id), JSON.stringify(chats));
+  } catch (_) {
+    /* cuota superada (p. ej. imágenes): se mantiene en memoria */
+  }
 }
 
 function currentChat() {
@@ -221,13 +240,13 @@ function startNewChat() {
   closeSidebar();
 }
 
-function addMessage(role, text, persist = true) {
+function addMessage(role, text, persist = true, image = null) {
   let chat = currentChat();
   if (!chat) {
     startNewChat();
     chat = currentChat();
   }
-  chat.messages.push({ role, text });
+  chat.messages.push({ role, text, image: image || undefined });
   if (persist) persistChats();
   return chat;
 }
@@ -241,11 +260,11 @@ function renderChat() {
 
   if (!hasMessages) return;
 
-  chat.messages.forEach((m) => chatEl.appendChild(buildMessage(m.role, m.text)));
+  chat.messages.forEach((m) => chatEl.appendChild(buildMessage(m.role, m.text, m.image)));
   scrollToBottom();
 }
 
-function buildMessage(role, text) {
+function buildMessage(role, text, image) {
   const row = document.createElement("div");
   row.className = `msg ${role}`;
 
@@ -258,7 +277,13 @@ function buildMessage(role, text) {
 
   const bubble = document.createElement("div");
   bubble.className = "bubble";
-  bubble.textContent = text;
+  if (text) bubble.textContent = text;
+  if (image) {
+    const img = document.createElement("img");
+    img.src = image;
+    img.alt = text || "Imagen generada";
+    bubble.appendChild(img);
+  }
   row.appendChild(bubble);
 
   return row;
@@ -317,17 +342,29 @@ async function sendMessage(text) {
   appendTyping();
 
   try {
-    const data = await api("/api/chat", {
-      method: "POST",
-      body: JSON.stringify({ message: text, conversation_id: chat.conversationId || null }),
-    });
-    if (data.conversation_id) {
-      chat.conversationId = data.conversation_id;
-      persistChats();
+    if (imageMode) {
+      const data = await api("/api/image", {
+        method: "POST",
+        body: JSON.stringify({ prompt: text }),
+      });
+      removeTyping();
+      addMessage("bot", text, true, data.image);
+      renderChat();
+    } else {
+      const data = await api("/api/chat", {
+        method: "POST",
+        body: JSON.stringify({ message: text, conversation_id: chat.conversationId || null }),
+      });
+      if (data.conversation_id) {
+        chat.conversationId = data.conversation_id;
+        persistChats();
+      }
+      removeTyping();
+      const reply = data.reply || "Sin respuesta.";
+      addMessage("bot", reply);
+      renderChat();
+      if (ttsEnabled) speak(reply);
     }
-    removeTyping();
-    addMessage("bot", data.reply || "Sin respuesta.");
-    renderChat();
   } catch (err) {
     removeTyping();
     renderError(err.message);
@@ -418,6 +455,197 @@ menuBtn.addEventListener("click", openSidebar);
 overlayEl.addEventListener("click", closeSidebar);
 
 /* ------------------------------------------------------------------ */
+/* Voz (síntesis y dictado)                                            */
+/* ------------------------------------------------------------------ */
+
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+let recognitionActive = false;
+
+function toggleTts() {
+  ttsEnabled = !ttsEnabled;
+  localStorage.setItem(TTS_KEY, ttsEnabled ? "1" : "0");
+  applyTtsState();
+  if (!ttsEnabled && window.speechSynthesis) window.speechSynthesis.cancel();
+}
+
+function applyTtsState() {
+  ttsToggle.classList.toggle("active", ttsEnabled);
+  ttsToggle.setAttribute("aria-pressed", String(ttsEnabled));
+}
+
+function speak(text) {
+  if (!window.speechSynthesis || !text) return;
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = "es-ES";
+  window.speechSynthesis.speak(utterance);
+}
+
+function initSpeechRecognition() {
+  if (!SpeechRecognition) return false;
+  recognition = new SpeechRecognition();
+  recognition.lang = "es-ES";
+  recognition.interimResults = false;
+  recognition.continuous = false;
+  recognition.addEventListener("result", (event) => {
+    const transcript = event.results[0][0].transcript;
+    inputEl.value = (inputEl.value ? `${inputEl.value} ` : "") + transcript;
+    autoResize();
+    updateSendState();
+    inputEl.focus();
+  });
+  recognition.addEventListener("end", stopDictation);
+  recognition.addEventListener("error", stopDictation);
+  return true;
+}
+
+function stopDictation() {
+  recognitionActive = false;
+  micBtn.classList.remove("recording");
+}
+
+function toggleDictation() {
+  if (!recognition && !initSpeechRecognition()) {
+    renderError("Tu navegador no soporta dictado por voz.");
+    return;
+  }
+  if (recognitionActive) {
+    recognition.stop();
+    return;
+  }
+  try {
+    recognition.start();
+    recognitionActive = true;
+    micBtn.classList.add("recording");
+  } catch (_) {
+    stopDictation();
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Modo imagen                                                         */
+/* ------------------------------------------------------------------ */
+
+function toggleImageMode() {
+  imageMode = !imageMode;
+  imageBtn.classList.toggle("active", imageMode);
+  inputEl.placeholder = imageMode
+    ? "Describe la imagen que quieres generar..."
+    : "Escribe un mensaje a Core IA...";
+  inputEl.focus();
+}
+
+/* ------------------------------------------------------------------ */
+/* Base de conocimiento (RAG)                                          */
+/* ------------------------------------------------------------------ */
+
+function openKb() {
+  if (!currentUser) {
+    renderError("Inicia sesión para usar tu base de conocimiento.");
+    return;
+  }
+  kbModal.classList.add("show");
+  loadDocuments();
+}
+
+function closeKb() {
+  kbModal.classList.remove("show");
+}
+
+async function loadDocuments() {
+  kbList.innerHTML = "";
+  const loading = document.createElement("div");
+  loading.className = "kb-empty";
+  loading.textContent = "Cargando...";
+  kbList.appendChild(loading);
+  try {
+    const data = await api("/api/rag/documents");
+    renderDocuments(data.documents || []);
+  } catch (err) {
+    kbList.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "kb-empty";
+    empty.textContent = err.message;
+    kbList.appendChild(empty);
+  }
+}
+
+function renderDocuments(docs) {
+  kbList.innerHTML = "";
+  if (!docs.length) {
+    const empty = document.createElement("div");
+    empty.className = "kb-empty";
+    empty.textContent = "Todavía no hay documentos.";
+    kbList.appendChild(empty);
+    return;
+  }
+  docs.forEach((doc) => {
+    const item = document.createElement("div");
+    item.className = "kb-item";
+
+    const meta = document.createElement("div");
+    meta.className = "kb-meta";
+    const name = document.createElement("div");
+    name.className = "kb-name";
+    name.textContent = doc.title;
+    const sub = document.createElement("div");
+    sub.className = "kb-sub";
+    sub.textContent = `${doc.chunks} fragmentos`;
+    meta.append(name, sub);
+
+    const del = document.createElement("button");
+    del.className = "icon-btn";
+    del.title = "Eliminar";
+    del.textContent = "✕";
+    del.addEventListener("click", () => deleteDocument(doc.id));
+
+    item.append(meta, del);
+    kbList.appendChild(item);
+  });
+}
+
+async function saveDocument() {
+  const text = kbText.value.trim();
+  if (!text) return;
+  kbSave.disabled = true;
+  kbSave.textContent = "Guardando...";
+  try {
+    await api("/api/rag/documents", {
+      method: "POST",
+      body: JSON.stringify({ title: kbTitle.value.trim() || "Documento", text }),
+    });
+    kbTitle.value = "";
+    kbText.value = "";
+    loadDocuments();
+  } catch (err) {
+    renderError(err.message);
+  } finally {
+    kbSave.disabled = false;
+    kbSave.textContent = "Guardar documento";
+  }
+}
+
+async function deleteDocument(id) {
+  try {
+    await api(`/api/rag/documents/${id}`, { method: "DELETE" });
+    loadDocuments();
+  } catch (err) {
+    renderError(err.message);
+  }
+}
+
+ttsToggle.addEventListener("click", toggleTts);
+micBtn.addEventListener("click", toggleDictation);
+imageBtn.addEventListener("click", toggleImageMode);
+kbBtn.addEventListener("click", openKb);
+kbClose.addEventListener("click", closeKb);
+kbSave.addEventListener("click", saveDocument);
+kbModal.addEventListener("click", (event) => {
+  if (event.target === kbModal) closeKb();
+});
+
+/* ------------------------------------------------------------------ */
 /* Arranque                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -428,6 +656,7 @@ overlayEl.addEventListener("click", closeSidebar);
     window.history.replaceState(null, "", window.location.pathname);
     setTimeout(() => renderError("El inicio de sesión con Discord fue cancelado."), 300);
   }
+  applyTtsState();
   updateSendState();
   autoResize();
   await loadSession();
