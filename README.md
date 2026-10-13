@@ -10,7 +10,9 @@ CoreIA/
 │   ├── main.py             # API FastAPI (auth Discord + chat Gemini)
 │   ├── config.py           # Configuración central (settings)
 │   ├── database.py         # Motor y sesiones SQLAlchemy
-│   ├── models.py           # User, Conversation, Message
+│   ├── models.py           # User, Conversation, Message, Document, DocumentChunk
+│   ├── tools.py            # Herramientas (function calling): hora, cálculo
+│   ├── rag.py              # RAG: chunking, embeddings y búsqueda semántica
 │   ├── cache.py            # Caché opcional con Redis
 │   ├── requirements.txt    # Dependencias de producción
 │   ├── requirements-dev.txt# Dependencias de desarrollo/pruebas
@@ -46,6 +48,10 @@ AI_API_KEY=...            # https://aistudio.google.com/apikey
 AI_MODEL=gemini-3.8-flash
 AI_MODEL_FALLBACKS=gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.7-flash,gemini-flash-latest
 AI_RETRIES=2
+IMAGE_MODEL=              # vacío deshabilita la generación de imágenes (modelo de pago)
+EMBEDDING_MODEL=gemini-embedding-001
+RAG_ENABLED=true
+RAG_TOP_K=4
 SESSION_SECRET=...        # cadena aleatoria larga
 DISCORD_CLIENT_ID=...
 DISCORD_CLIENT_SECRET=...
@@ -120,6 +126,22 @@ pruebas en cada push y pull request.
 | GET    | `/api/auth/me`                | Perfil del usuario autenticado           |
 | POST   | `/api/auth/logout`            | Cierra la sesión                         |
 | POST   | `/api/chat`                   | Chat con Gemini (Bearer + rate limit)    |
+| POST   | `/api/image`                  | Genera una imagen (requiere `IMAGE_MODEL`)|
+| POST   | `/api/rag/documents`          | Crea un documento de conocimiento (RAG)  |
+| GET    | `/api/rag/documents`          | Lista los documentos del usuario         |
+| DELETE | `/api/rag/documents/{id}`     | Elimina un documento y sus fragmentos    |
+
+## Funciones de IA (sección 6)
+
+- **Herramientas (function calling)**: el modelo puede invocar `get_current_time`,
+  `calculate` y `get_word_count` por sí solo (SDK `google-genai`).
+- **Generación de imágenes**: `POST /api/image` usa `IMAGE_MODEL`. Si la variable
+  está vacía, el endpoint responde `503` sin romper el resto del servicio.
+- **RAG**: los documentos se dividen en fragmentos, se vectorizan con
+  `EMBEDDING_MODEL` y se recuperan por similitud coseno para ampliar el contexto
+  del chat. Tablas `documents` y `document_chunks`.
+- **Frontend**: dictado por voz (Web Speech API), lectura en voz alta,
+  modo imagen y gestor de base de conocimiento.
 
 ## Seguridad
 

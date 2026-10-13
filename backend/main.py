@@ -222,32 +222,31 @@ def generate_reply(message: str) -> str:
     """
     models = [settings.ai_model] + [m for m in settings.ai_model_fallbacks if m != settings.ai_model]
     last_error: Exception | None = None
+    attempts = max(1, settings.ai_retries)
 
     for model in models:
-        for attempt in range(max(1, settings.ai_retries)):
+        use_tools = True
+        for attempt in range(attempts):
             try:
+                config = (
+                    types.GenerateContentConfig(tools=AVAILABLE_TOOLS) if use_tools else None
+                )
                 response = genai_client.models.generate_content(
-                    model=model,
-                    contents=message,
-                    config=types.GenerateContentConfig(tools=AVAILABLE_TOOLS),
+                    model=model, contents=message, config=config
                 )
                 return (response.text or "").strip()
             except Exception as exc:  # noqa: BLE001 - se decide según el tipo de error
                 last_error = exc
+                if use_tools and not is_transient_error(exc):
+                    use_tools = False
+                    continue
                 if not is_transient_error(exc):
-                    break
-                if attempt < settings.ai_retries - 1:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Error al contactar con Gemini ({model}): {exc}",
+                    ) from exc
+                if attempt < attempts - 1:
                     time.sleep(1.2 * (attempt + 1))
-        try:
-            response = genai_client.models.generate_content(model=model, contents=message)
-            return (response.text or "").strip()
-        except Exception as exc:  # noqa: BLE001 - último recurso sin herramientas
-            last_error = exc
-            if not is_transient_error(exc):
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Error al contactar con Gemini ({model}): {exc}",
-                ) from exc
 
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
