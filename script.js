@@ -12,6 +12,8 @@ const TTS_KEY = "coreia_tts";
 const chatEl = document.getElementById("chat");
 const welcomeEl = document.getElementById("welcome");
 const splashEl = document.getElementById("splash");
+const authGateEl = document.getElementById("auth-gate");
+const authLoginEl = document.getElementById("auth-login");
 const scrollEl = document.getElementById("chat-scroll");
 const historyEl = document.getElementById("history");
 const profileEl = document.getElementById("profile");
@@ -69,8 +71,16 @@ function hideSplash() {
   if (splashHidden || !splashEl) return;
   splashHidden = true;
   const elapsed = performance.now() - splashStart;
-  const wait = Math.max(0, 950 - elapsed);
+  const wait = Math.max(0, 2300 - elapsed);
   setTimeout(() => splashEl.classList.add("hide"), wait);
+}
+
+function showAuthGate() {
+  if (authGateEl) authGateEl.classList.add("show");
+}
+
+function hideAuthGate() {
+  if (authGateEl) authGateEl.classList.remove("show");
 }
 
 /* ------------------------------------------------------------------ */
@@ -119,6 +129,7 @@ function clearSession() {
   renderHistory();
   renderChat();
   updatePlanBadge();
+  showAuthGate();
 }
 
 function captureTokenFromUrl() {
@@ -135,11 +146,13 @@ async function loadSession() {
   if (!token) {
     renderProfile();
     renderChat();
+    showAuthGate();
     return;
   }
   try {
     const data = await api("/api/auth/me");
     currentUser = data.user;
+    hideAuthGate();
     await Promise.all([loadSettings(), loadConversations(), loadUsage()]);
     if (conversations.length) {
       await openConversation(conversations[0].id);
@@ -1106,6 +1119,10 @@ plansBtn.addEventListener("click", openPlans);
 plansClose.addEventListener("click", closePlans);
 plansModal.addEventListener("click", (event) => {
   if (event.target === plansModal) closePlans();
+});
+
+authLoginEl.addEventListener("click", () => {
+  window.location.href = loginUrl();
 });
 
 /* ------------------------------------------------------------------ */

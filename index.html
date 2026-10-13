@@ -767,6 +767,75 @@
     }
     .overlay.show { display: block; animation: fadeUp .2s ease; }
 
+    /* ================= Auth gate (login obligatorio) ================= */
+    .auth-gate {
+      position: fixed;
+      inset: 0;
+      z-index: 90;
+      display: none;
+      place-items: center;
+      padding: 24px;
+      background: var(--bg);
+    }
+    .auth-gate.show { display: grid; }
+    .auth-card {
+      width: 100%;
+      max-width: 430px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      animation: fadeUp .5s ease both;
+    }
+    .auth-logo {
+      width: 76px; height: 76px;
+      border-radius: 50%;
+      background: var(--grad);
+      display: grid; place-items: center;
+      color: #fff; font-size: 34px;
+      box-shadow: 0 12px 44px rgba(66, 133, 244, .45);
+    }
+    .auth-logo span { display: inline-block; animation: spin 3.4s linear infinite; }
+    .auth-card h1 { font-size: 26px; font-weight: 600; line-height: 1.25; }
+    .auth-card h1 .grad {
+      background: var(--grad);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+    .auth-card p { color: var(--muted); font-size: 14.5px; line-height: 1.6; }
+    .auth-login {
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      width: 100%;
+      max-width: 320px;
+      padding: 13px;
+      border: none;
+      border-radius: 12px;
+      background: #5865f2;
+      color: #fff;
+      font-size: 15px;
+      font-weight: 600;
+      transition: filter .15s, transform .1s;
+    }
+    .auth-login:hover { filter: brightness(1.08); }
+    .auth-login:active { transform: scale(.985); }
+    .auth-note { font-size: 12px; color: var(--faint); }
+    .auth-features {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      margin-top: 8px;
+      text-align: left;
+    }
+    .auth-features li {
+      font-size: 13.5px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+    .auth-features li::before { content: "✦"; color: var(--accent); font-size: 12px; }
+
     /* ================= Splash (pantalla de carga) ================= */
     .splash {
       position: fixed;
@@ -879,6 +948,24 @@
       <div class="splash-orb"><span>✦</span></div>
       <div class="splash-name">Core IA</div>
       <div class="splash-bar"><div class="splash-bar-fill"></div></div>
+    </div>
+  </div>
+
+  <div class="auth-gate" id="auth-gate">
+    <div class="auth-card">
+      <div class="auth-logo"><span>✦</span></div>
+      <h1>Bienvenido a <span class="grad">Core IA</span></h1>
+      <p>Inicia sesión para empezar a chatear. Tus conversaciones y documentos se guardan de forma segura.</p>
+      <button class="auth-login" id="auth-login" type="button">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20.3 4.4A19.8 19.8 0 0 0 15.4 3l-.3.5a18 18 0 0 1 4.4 1.4 15.9 15.9 0 0 0-4.1-1.3 16.6 16.6 0 0 0-6.8 0A15.9 15.9 0 0 0 4.5 4.9 18 18 0 0 1 8.9 3.5L8.6 3a19.8 19.8 0 0 0-4.9 1.4C.8 8.6 0 12.6.4 16.6a19.9 19.9 0 0 0 6 3l.8-1.3c-.9-.3-1.7-.7-2.5-1.2l.6-.5a14.3 14.3 0 0 0 12.2 0l.6.5c-.8.5-1.6.9-2.5 1.2l.8 1.3a19.9 19.9 0 0 0 6-3c.5-4.6-.7-8.6-2.9-12.2ZM8.5 14.6c-1.2 0-2.1-1.1-2.1-2.4S7.3 9.8 8.5 9.8s2.1 1.1 2.1 2.4-.9 2.4-2.1 2.4Zm7 0c-1.2 0-2.1-1.1-2.1-2.4s.9-2.4 2.1-2.4 2.1 1.1 2.1 2.4-.9 2.4-2.1 2.4Z"/></svg>
+        Continuar con Discord
+      </button>
+      <div class="auth-note">Debes iniciar sesión para usar Core IA.</div>
+      <ul class="auth-features">
+        <li>Historial de conversaciones en la nube</li>
+        <li>Tu propia base de conocimiento (RAG)</li>
+        <li>Planes y cuotas personalizadas</li>
+      </ul>
     </div>
   </div>
 
