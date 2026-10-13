@@ -2,7 +2,16 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -95,3 +104,32 @@ class DocumentChunk(Base):
     embedding: Mapped[str] = mapped_column(Text)
 
     document: Mapped["Document"] = relationship(back_populates="chunks")
+
+
+class UserSettings(Base):
+    """Preferencias del usuario (tema, modelo preferido, uso de RAG)."""
+
+    __tablename__ = "user_settings"
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    theme: Mapped[str] = mapped_column(String(16), default="dark")
+    preferred_model: Mapped[str | None] = mapped_column(String(64), default=None)
+    use_rag: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Usage(Base):
+    """Consumo diario del usuario para aplicar cuotas por plan."""
+
+    __tablename__ = "usage"
+    __table_args__ = (UniqueConstraint("user_id", "day", name="uq_usage_user_day"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    day: Mapped[str] = mapped_column(String(10), index=True)
+    messages: Mapped[int] = mapped_column(Integer, default=0)
+    images: Mapped[int] = mapped_column(Integer, default=0)

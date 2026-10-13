@@ -47,7 +47,7 @@ def test_chat_requires_auth(client):
 
 
 def test_chat_persists_conversation(client, monkeypatch):
-    monkeypatch.setattr(main, "generate_reply", lambda message: "respuesta de prueba")
+    monkeypatch.setattr(main, "generate_reply", lambda message, preferred_model=None: "respuesta de prueba")
     response = client.post("/api/chat", json={"message": "hola"}, headers=auth_header())
     assert response.status_code == 200
     data = response.json()
@@ -56,6 +56,6 @@ def test_chat_persists_conversation(client, monkeypatch):
 
 
 def test_chat_rate_limit_headers(client, monkeypatch):
-    monkeypatch.setattr(main, "generate_reply", lambda message: "ok")
+    monkeypatch.setattr(main, "generate_reply", lambda message, preferred_model=None: "ok")
     response = client.post("/api/chat", json={"message": "hola"}, headers=auth_header())
     assert response.status_code == 200

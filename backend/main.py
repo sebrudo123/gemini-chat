@@ -16,6 +16,7 @@ import secrets
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlencode, urlparse
 
@@ -32,11 +33,20 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
+import plans
 import rag
 from cache import is_enabled as cache_is_enabled
 from config import settings
 from database import get_db, init_db
-from models import Conversation, Document, DocumentChunk, Message, User
+from models import (
+    Conversation,
+    Document,
+    DocumentChunk,
+    Message,
+    Usage,
+    User,
+    UserSettings,
+)
 from tools import AVAILABLE_TOOLS
 
 # --------------------------------------------------------------------------- #
@@ -207,20 +217,87 @@ def upsert_user(db: Session, profile: dict[str, Any]) -> User:
     return user
 
 
+def get_settings_row(db: Session, user: User) -> UserSettings:
+    """Devuelve las preferencias del usuario, creándolas si no existen."""
+    row = db.get(UserSettings, user.id)
+    if row is None:
+        row = UserSettings(user_id=user.id)
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+    return row
+
+
+def today_str() -> str:
+    """Fecha actual en UTC (YYYY-MM-DD) para agrupar el consumo diario."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def get_usage_row(db: Session, user: User) -> Usage:
+    """Devuelve (o crea) el registro de consumo del día para el usuario."""
+    day = today_str()
+    row = db.query(Usage).filter(Usage.user_id == user.id, Usage.day == day).first()
+    if row is None:
+        row = Usage(user_id=user.id, day=day, messages=0, images=0)
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+    return row
+
+
+def count_documents(db: Session, user: User) -> int:
+    """Número de documentos de conocimiento del usuario."""
+    return db.query(Document).filter(Document.user_id == user.id).count()
+
+
+def check_quota(db: Session, user: User, kind: str) -> Usage:
+    """Valida la cuota diaria del plan; lanza 429 si se ha superado.
+
+    Args:
+        kind: ``message`` o ``image``.
+    """
+    limits = plans.limits_for(user.plan)
+    limit_key = "messages_per_day" if kind == "message" else "images_per_day"
+    limit = limits.get(limit_key)
+    row = get_usage_row(db, user)
+    used = row.messages if kind == "message" else row.images
+    if limit is not None and used >= limit:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                f"Has alcanzado el límite diario de tu plan {user.plan} "
+                f"({limit}). Mejora tu plan para continuar."
+            ),
+        )
+    return row
+
+
+def bump_usage(db: Session, row: Usage, kind: str) -> None:
+    """Incrementa el contador de consumo tras una operación correcta."""
+    if kind == "message":
+        row.messages += 1
+    else:
+        row.images += 1
+    db.commit()
+
+
 def is_transient_error(exc: Exception) -> bool:
     """Determina si un error de Gemini es temporal (saturación, rate limit)."""
     text = str(exc)
     return any(marker in text for marker in TRANSIENT_MARKERS)
 
 
-def generate_reply(message: str) -> str:
+def generate_reply(message: str, preferred_model: str | None = None) -> str:
     """Genera una respuesta probando varios modelos, con herramientas y reintentos.
 
     Primero intenta el *automatic function calling* (fecha/hora, cálculos).
     Si el modelo rechaza las herramientas, reintenta sin ellas para no
     degradar la experiencia.
     """
-    models = [settings.ai_model] + [m for m in settings.ai_model_fallbacks if m != settings.ai_model]
+    primary = preferred_model or settings.ai_model
+    models = [primary] + [
+        m for m in ([settings.ai_model] + settings.ai_model_fallbacks) if m != primary
+    ]
     last_error: Exception | None = None
     attempts = max(1, settings.ai_retries)
 
@@ -282,7 +359,7 @@ def retrieve_context(db: Session, user: User, message: str) -> str:
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=8000)
     conversation_id: int | None = None
-    use_rag: bool = True
+    use_rag: bool | None = None
 
 
 class ChatResponse(BaseModel):
@@ -313,6 +390,16 @@ class DocumentResponse(BaseModel):
     id: int
     title: str
     chunks: int
+
+
+class SettingsRequest(BaseModel):
+    theme: str | None = Field(default=None, pattern="^(dark|light)$")
+    preferred_model: str | None = Field(default=None, max_length=64)
+    use_rag: bool | None = None
+
+
+class ConversationRenameRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=120)
 
 
 # --------------------------------------------------------------------------- #
@@ -444,6 +531,8 @@ def chat(
         )
 
     user = upsert_user(db, profile)
+    user_settings = get_settings_row(db, user)
+    check_quota(db, user, "message")
 
     conversation = None
     if payload.conversation_id is not None:
@@ -462,9 +551,11 @@ def chat(
         db.refresh(conversation)
 
     db.add(Message(conversation_id=conversation.id, role="user", content=message))
+    conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
 
-    context = retrieve_context(db, user, message) if payload.use_rag else ""
+    use_rag = user_settings.use_rag if payload.use_rag is None else payload.use_rag
+    context = retrieve_context(db, user, message) if use_rag else ""
     prompt = message
     if context:
         prompt = (
@@ -473,10 +564,14 @@ def chat(
             f"Contexto:\n{context}\n\nPregunta: {message}"
         )
 
-    reply = generate_reply(prompt)
+    reply = generate_reply(prompt, preferred_model=user_settings.preferred_model)
 
     db.add(Message(conversation_id=conversation.id, role="assistant", content=reply))
+    conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
+
+    usage = get_usage_row(db, user)
+    bump_usage(db, usage, "message")
 
     sources = context.count("\n\n") + 1 if context else 0
     return ChatResponse(reply=reply, conversation_id=conversation.id, sources=sources)
@@ -492,6 +587,7 @@ def generate_image(
     request: Request,
     payload: ImageRequest,
     profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> ImageResponse:
     """Genera una imagen a partir de un prompt (requiere IMAGE_MODEL configurado)."""
     if genai_client is None:
@@ -509,6 +605,9 @@ def generate_image(
     prompt = payload.prompt.strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="El prompt no puede estar vacío.")
+
+    user = upsert_user(db, profile)
+    check_quota(db, user, "image")
 
     try:
         response = genai_client.models.generate_content(
@@ -536,6 +635,8 @@ def generate_image(
                 encoded = base64.b64encode(data).decode("ascii")
             else:
                 encoded = str(data)
+            usage = get_usage_row(db, user)
+            bump_usage(db, usage, "image")
             return ImageResponse(image=f"data:{mime_type};base64,{encoded}", mime_type=mime_type)
 
     raise HTTPException(status_code=502, detail="El modelo no devolvió ninguna imagen.")
@@ -570,6 +671,16 @@ def create_document(
         raise HTTPException(status_code=400, detail="El documento está vacío.")
 
     user = upsert_user(db, profile)
+    doc_limit = plans.limits_for(user.plan).get("documents")
+    if doc_limit is not None and count_documents(db, user) >= doc_limit:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                f"Tu plan {user.plan} permite {doc_limit} documentos. "
+                "Elimina alguno o mejora tu plan."
+            ),
+        )
+
     try:
         vectors = rag.embed_texts(chunks)
     except Exception as exc:  # noqa: BLE001
@@ -629,5 +740,209 @@ def delete_document(
     if document is None:
         raise HTTPException(status_code=404, detail="Documento no encontrado.")
     db.delete(document)
+    db.commit()
+    return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+# Conversaciones (historial en servidor)
+# --------------------------------------------------------------------------- #
+
+def _serialize_conversation(conversation: Conversation, detailed: bool = False) -> dict[str, Any]:
+    """Convierte una conversación en un diccionario JSON-serializable."""
+    data: dict[str, Any] = {
+        "id": conversation.id,
+        "title": conversation.title,
+        "updated_at": conversation.updated_at.isoformat() if conversation.updated_at else None,
+        "messages": len(conversation.messages),
+    }
+    if detailed:
+        data["items"] = [
+            {
+                "id": message.id,
+                "role": message.role,
+                "content": message.content,
+                "created_at": message.created_at.isoformat() if message.created_at else None,
+            }
+            for message in conversation.messages
+        ]
+    return data
+
+
+@app.get("/api/conversations")
+def list_conversations(
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Lista las conversaciones del usuario (más recientes primero)."""
+    user = upsert_user(db, profile)
+    conversations = (
+        db.query(Conversation)
+        .filter(Conversation.user_id == user.id)
+        .order_by(Conversation.updated_at.desc())
+        .all()
+    )
+    return {"conversations": [_serialize_conversation(c) for c in conversations]}
+
+
+@app.get("/api/conversations/{conversation_id}")
+def get_conversation(
+    conversation_id: int,
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Devuelve una conversación con todos sus mensajes."""
+    user = upsert_user(db, profile)
+    conversation = (
+        db.query(Conversation)
+        .filter(Conversation.id == conversation_id, Conversation.user_id == user.id)
+        .first()
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversación no encontrada.")
+    return {"conversation": _serialize_conversation(conversation, detailed=True)}
+
+
+@app.patch("/api/conversations/{conversation_id}")
+def rename_conversation(
+    conversation_id: int,
+    payload: ConversationRenameRequest,
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Renombra una conversación del usuario."""
+    user = upsert_user(db, profile)
+    conversation = (
+        db.query(Conversation)
+        .filter(Conversation.id == conversation_id, Conversation.user_id == user.id)
+        .first()
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversación no encontrada.")
+    conversation.title = payload.title.strip()
+    conversation.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(conversation)
+    return {"conversation": _serialize_conversation(conversation)}
+
+
+@app.delete("/api/conversations/{conversation_id}")
+def delete_conversation(
+    conversation_id: int,
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    """Elimina una conversación y sus mensajes."""
+    user = upsert_user(db, profile)
+    conversation = (
+        db.query(Conversation)
+        .filter(Conversation.id == conversation_id, Conversation.user_id == user.id)
+        .first()
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversación no encontrada.")
+    db.delete(conversation)
+    db.commit()
+    return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+# Ajustes, planes y cuotas
+# --------------------------------------------------------------------------- #
+
+def _serialize_settings(row: UserSettings) -> dict[str, Any]:
+    return {
+        "theme": row.theme,
+        "preferred_model": row.preferred_model,
+        "use_rag": row.use_rag,
+    }
+
+
+@app.get("/api/settings")
+def get_settings(
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Devuelve las preferencias del usuario."""
+    user = upsert_user(db, profile)
+    return {"settings": _serialize_settings(get_settings_row(db, user))}
+
+
+@app.patch("/api/settings")
+def update_settings(
+    payload: SettingsRequest,
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Actualiza las preferencias del usuario."""
+    user = upsert_user(db, profile)
+    row = get_settings_row(db, user)
+    if payload.theme is not None:
+        row.theme = payload.theme
+    if payload.preferred_model is not None:
+        row.preferred_model = payload.preferred_model.strip() or None
+    if payload.use_rag is not None:
+        row.use_rag = payload.use_rag
+    db.commit()
+    db.refresh(row)
+    return {"settings": _serialize_settings(row)}
+
+
+@app.get("/api/plans")
+def get_plans() -> dict[str, Any]:
+    """Catálogo de planes disponibles."""
+    return {"plans": plans.PLANS}
+
+
+@app.get("/api/usage")
+def get_usage(
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Resumen de plan y consumo del usuario."""
+    user = upsert_user(db, profile)
+    limits = plans.limits_for(user.plan)
+    row = get_usage_row(db, user)
+    return {
+        "plan": user.plan,
+        "limits": limits,
+        "usage": {
+            "messages": row.messages,
+            "images": row.images,
+            "documents": count_documents(db, user),
+        },
+        "day": today_str(),
+    }
+
+
+@app.delete("/api/account")
+def delete_account(
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    """Elimina la cuenta del usuario y todos sus datos."""
+    user = upsert_user(db, profile)
+
+    conv_ids = [row[0] for row in db.query(Conversation.id).filter(Conversation.user_id == user.id)]
+    if conv_ids:
+        db.query(Message).filter(Message.conversation_id.in_(conv_ids)).delete(
+            synchronize_session=False
+        )
+    db.query(Conversation).filter(Conversation.user_id == user.id).delete(
+        synchronize_session=False
+    )
+
+    doc_ids = [row[0] for row in db.query(Document.id).filter(Document.user_id == user.id)]
+    if doc_ids:
+        db.query(DocumentChunk).filter(DocumentChunk.document_id.in_(doc_ids)).delete(
+            synchronize_session=False
+        )
+    db.query(Document).filter(Document.user_id == user.id).delete(synchronize_session=False)
+
+    db.query(Usage).filter(Usage.user_id == user.id).delete(synchronize_session=False)
+    db.query(UserSettings).filter(UserSettings.user_id == user.id).delete(
+        synchronize_session=False
+    )
+    db.delete(user)
     db.commit()
     return {"ok": True}

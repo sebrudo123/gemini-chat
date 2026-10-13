@@ -1,12 +1,13 @@
 /**
  * Core IA - Frontend
- * Gestión de sesión (Discord OAuth2), historial de chats y envío de mensajes.
+ * Sesión (Discord OAuth2), historial en servidor, ajustes, planes y chat.
  */
 
 const BACKEND_URL = "https://gemini-chat-backend-vyrz.onrender.com";
 
 const TOKEN_KEY = "coreia_token";
-const CHATS_KEY = (userId) => `coreia_chats_${userId}`;
+const THEME_KEY = "coreia_theme";
+const TTS_KEY = "coreia_tts";
 
 const chatEl = document.getElementById("chat");
 const welcomeEl = document.getElementById("welcome");
@@ -24,6 +25,10 @@ const micBtn = document.getElementById("mic-btn");
 const imageBtn = document.getElementById("image-btn");
 const kbBtn = document.getElementById("kb-btn");
 const ttsToggle = document.getElementById("tts-toggle");
+const settingsBtn = document.getElementById("settings-btn");
+const plansBtn = document.getElementById("plans-btn");
+const planBadge = document.getElementById("plan-badge");
+
 const kbModal = document.getElementById("kb-modal");
 const kbClose = document.getElementById("kb-close");
 const kbTitle = document.getElementById("kb-title");
@@ -31,15 +36,30 @@ const kbText = document.getElementById("kb-text");
 const kbSave = document.getElementById("kb-save");
 const kbList = document.getElementById("kb-list");
 
-const TTS_KEY = "coreia_tts";
+const settingsModal = document.getElementById("settings-modal");
+const settingsClose = document.getElementById("settings-close");
+const settingsTheme = document.getElementById("settings-theme");
+const settingsModel = document.getElementById("settings-model");
+const settingsRag = document.getElementById("settings-rag");
+const settingsSave = document.getElementById("settings-save");
+const deleteAccountBtn = document.getElementById("delete-account");
+
+const plansModal = document.getElementById("plans-modal");
+const plansClose = document.getElementById("plans-close");
+const usageList = document.getElementById("usage-list");
+const plansList = document.getElementById("plans-list");
 
 let token = localStorage.getItem(TOKEN_KEY) || null;
 let currentUser = null;
-let chats = [];
+let conversations = [];
+let messages = [];
 let currentChatId = null;
 let sending = false;
 let imageMode = false;
 let ttsEnabled = localStorage.getItem(TTS_KEY) === "1";
+let settings = { theme: "dark", preferred_model: null, use_rag: true };
+let usage = null;
+let catalog = null;
 
 /* ------------------------------------------------------------------ */
 /* API                                                                 */
@@ -78,12 +98,15 @@ function loginUrl() {
 function clearSession() {
   token = null;
   currentUser = null;
-  chats = [];
+  conversations = [];
+  messages = [];
   currentChatId = null;
+  usage = null;
   localStorage.removeItem(TOKEN_KEY);
   renderProfile();
   renderHistory();
   renderChat();
+  updatePlanBadge();
 }
 
 function captureTokenFromUrl() {
@@ -105,11 +128,13 @@ async function loadSession() {
   try {
     const data = await api("/api/auth/me");
     currentUser = data.user;
-    chats = JSON.parse(localStorage.getItem(CHATS_KEY(currentUser.id)) || "[]");
-    if (chats.length) currentChatId = chats[0].id;
+    await Promise.all([loadSettings(), loadConversations(), loadUsage()]);
+    if (conversations.length) {
+      await openConversation(conversations[0].id);
+    } else {
+      renderChat();
+    }
     renderProfile();
-    renderHistory();
-    renderChat();
   } catch (err) {
     clearSession();
     renderChat();
@@ -185,7 +210,16 @@ function renderHistory() {
     return;
   }
 
-  chats.forEach((chat) => {
+  if (!conversations.length) {
+    const empty = document.createElement("div");
+    empty.className = "history-item";
+    empty.style.cursor = "default";
+    empty.textContent = "Sin conversaciones todavía";
+    historyEl.appendChild(empty);
+    return;
+  }
+
+  conversations.forEach((chat) => {
     const item = document.createElement("div");
     item.className = "history-item" + (chat.id === currentChatId ? " active" : "");
 
@@ -193,13 +227,27 @@ function renderHistory() {
     dot.className = "dot";
 
     const label = document.createElement("span");
+    label.className = "history-label";
     label.textContent = chat.title || "Nuevo chat";
 
-    item.append(dot, label);
+    const actions = document.createElement("button");
+    actions.className = "history-action";
+    actions.title = "Opciones";
+    actions.textContent = "⋯";
+    actions.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const choice = window.prompt(
+        "Escribe 'r' para renombrar o 'x' para eliminar esta conversación:",
+        "r"
+      );
+      if (choice === null) return;
+      if (choice.trim().toLowerCase() === "x") deleteConversation(chat.id);
+      else if (choice.trim().toLowerCase() === "r") renameConversation(chat.id);
+    });
+
+    item.append(dot, label, actions);
     item.addEventListener("click", () => {
-      currentChatId = chat.id;
-      renderHistory();
-      renderChat();
+      openConversation(chat.id);
       closeSidebar();
     });
     historyEl.appendChild(item);
@@ -207,60 +255,84 @@ function renderHistory() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Chats                                                               */
+/* Conversaciones (servidor)                                           */
 /* ------------------------------------------------------------------ */
 
-function persistChats() {
-  if (!currentUser) return;
+async function loadConversations() {
   try {
-    localStorage.setItem(CHATS_KEY(currentUser.id), JSON.stringify(chats));
-  } catch (_) {
-    /* cuota superada (p. ej. imágenes): se mantiene en memoria */
+    const data = await api("/api/conversations");
+    conversations = data.conversations || [];
+  } catch (err) {
+    conversations = [];
+  }
+  renderHistory();
+}
+
+async function openConversation(id) {
+  try {
+    const data = await api(`/api/conversations/${id}`);
+    const conversation = data.conversation;
+    currentChatId = conversation.id;
+    messages = (conversation.items || []).map((m) => ({
+      role: m.role === "assistant" ? "bot" : "user",
+      text: m.content,
+    }));
+    renderHistory();
+    renderChat();
+  } catch (err) {
+    renderError(err.message);
   }
 }
 
-function currentChat() {
-  return chats.find((c) => c.id === currentChatId) || null;
+async function renameConversation(id) {
+  const current = conversations.find((c) => c.id === id);
+  const title = window.prompt("Nuevo título:", current ? current.title : "");
+  if (!title) return;
+  try {
+    await api(`/api/conversations/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
+    });
+    await loadConversations();
+  } catch (err) {
+    renderError(err.message);
+  }
+}
+
+async function deleteConversation(id) {
+  if (!window.confirm("¿Eliminar esta conversación definitivamente?")) return;
+  try {
+    await api(`/api/conversations/${id}`, { method: "DELETE" });
+    if (currentChatId === id) startNewChat();
+    await loadConversations();
+  } catch (err) {
+    renderError(err.message);
+  }
 }
 
 function startNewChat() {
   if (!currentUser) return;
-  const chat = {
-    id: `c_${Date.now()}`,
-    title: "Nuevo chat",
-    messages: [],
-    createdAt: Date.now(),
-  };
-  chats.unshift(chat);
-  currentChatId = chat.id;
-  persistChats();
+  currentChatId = null;
+  messages = [];
   renderHistory();
   renderChat();
   inputEl.focus();
   closeSidebar();
 }
 
-function addMessage(role, text, persist = true, image = null) {
-  let chat = currentChat();
-  if (!chat) {
-    startNewChat();
-    chat = currentChat();
-  }
-  chat.messages.push({ role, text, image: image || undefined });
-  if (persist) persistChats();
-  return chat;
+function addMessage(role, text, image = null) {
+  messages.push({ role, text, image: image || undefined });
 }
 
 function renderChat() {
   chatEl.innerHTML = "";
-  const chat = currentChat();
-  const hasMessages = chat && chat.messages.length > 0;
+  const hasMessages = messages.length > 0;
 
   welcomeEl.style.display = hasMessages ? "none" : "flex";
 
   if (!hasMessages) return;
 
-  chat.messages.forEach((m) => chatEl.appendChild(buildMessage(m.role, m.text, m.image)));
+  messages.forEach((m) => chatEl.appendChild(buildMessage(m.role, m.text, m.image)));
   scrollToBottom();
 }
 
@@ -333,11 +405,7 @@ async function sendMessage(text) {
   sending = true;
   updateSendState();
 
-  const chat = addMessage("user", text);
-  if (chat.messages.length === 1) {
-    chat.title = text.length > 42 ? `${text.slice(0, 42)}...` : text;
-    renderHistory();
-  }
+  addMessage("user", text);
   renderChat();
   appendTyping();
 
@@ -348,22 +416,22 @@ async function sendMessage(text) {
         body: JSON.stringify({ prompt: text }),
       });
       removeTyping();
-      addMessage("bot", text, true, data.image);
+      addMessage("bot", text, data.image);
       renderChat();
+      loadUsage();
     } else {
       const data = await api("/api/chat", {
         method: "POST",
-        body: JSON.stringify({ message: text, conversation_id: chat.conversationId || null }),
+        body: JSON.stringify({ message: text, conversation_id: currentChatId }),
       });
-      if (data.conversation_id) {
-        chat.conversationId = data.conversation_id;
-        persistChats();
-      }
       removeTyping();
+      if (data.conversation_id) currentChatId = data.conversation_id;
       const reply = data.reply || "Sin respuesta.";
       addMessage("bot", reply);
       renderChat();
       if (ttsEnabled) speak(reply);
+      await loadConversations();
+      loadUsage();
     }
   } catch (err) {
     removeTyping();
@@ -618,6 +686,7 @@ async function saveDocument() {
     kbTitle.value = "";
     kbText.value = "";
     loadDocuments();
+    loadUsage();
   } catch (err) {
     renderError(err.message);
   } finally {
@@ -630,10 +699,195 @@ async function deleteDocument(id) {
   try {
     await api(`/api/rag/documents/${id}`, { method: "DELETE" });
     loadDocuments();
+    loadUsage();
   } catch (err) {
     renderError(err.message);
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Ajustes de usuario                                                  */
+/* ------------------------------------------------------------------ */
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme === "light" ? "light" : "dark");
+  localStorage.setItem(THEME_KEY, theme);
+}
+
+async function loadSettings() {
+  try {
+    const data = await api("/api/settings");
+    settings = data.settings;
+    applyTheme(settings.theme);
+  } catch (_) { /* mantener valores por defecto */ }
+}
+
+function openSettings() {
+  if (!currentUser) {
+    renderError("Inicia sesión para configurar tu cuenta.");
+    return;
+  }
+  settingsTheme.value = settings.theme || "dark";
+  settingsModel.value = settings.preferred_model || "";
+  settingsRag.checked = settings.use_rag !== false;
+  settingsModal.classList.add("show");
+}
+
+function closeSettings() {
+  settingsModal.classList.remove("show");
+}
+
+async function saveSettings() {
+  settingsSave.disabled = true;
+  settingsSave.textContent = "Guardando...";
+  try {
+    const data = await api("/api/settings", {
+      method: "PATCH",
+      body: JSON.stringify({
+        theme: settingsTheme.value,
+        preferred_model: settingsModel.value,
+        use_rag: settingsRag.checked,
+      }),
+    });
+    settings = data.settings;
+    applyTheme(settings.theme);
+    closeSettings();
+  } catch (err) {
+    renderError(err.message);
+  } finally {
+    settingsSave.disabled = false;
+    settingsSave.textContent = "Guardar cambios";
+  }
+}
+
+async function deleteAccount() {
+  if (!window.confirm("Esto borrará tu cuenta y todos tus datos. ¿Continuar?")) return;
+  try {
+    await api("/api/account", { method: "DELETE" });
+    closeSettings();
+    clearSession();
+  } catch (err) {
+    renderError(err.message);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Planes y uso                                                        */
+/* ------------------------------------------------------------------ */
+
+function updatePlanBadge() {
+  if (!planBadge) return;
+  const plan = usage ? usage.plan : null;
+  planBadge.textContent = plan ? `Plan ${plan}` : "Plan";
+}
+
+async function loadUsage() {
+  if (!currentUser) return;
+  try {
+    usage = await api("/api/usage");
+    updatePlanBadge();
+  } catch (_) { /* silencioso */ }
+}
+
+async function openPlans() {
+  if (!currentUser) {
+    renderError("Inicia sesión para ver tu plan.");
+    return;
+  }
+  plansModal.classList.add("show");
+  usageList.innerHTML = "";
+  plansList.innerHTML = "";
+  await loadUsage();
+  try {
+    if (!catalog) {
+      const data = await api("/api/plans");
+      catalog = data.plans;
+    }
+  } catch (_) { /* sin catálogo */ }
+  renderUsage();
+  renderPlans();
+}
+
+function closePlans() {
+  plansModal.classList.remove("show");
+}
+
+function usageRow(label, used, limit) {
+  const row = document.createElement("div");
+  row.className = "usage-row";
+
+  const head = document.createElement("div");
+  head.className = "usage-head";
+  const name = document.createElement("span");
+  name.textContent = label;
+  const value = document.createElement("span");
+  value.textContent = limit === null ? `${used} / ∞` : `${used} / ${limit}`;
+  head.append(name, value);
+
+  const bar = document.createElement("div");
+  bar.className = "usage-bar";
+  const fill = document.createElement("div");
+  fill.className = "usage-fill";
+  const pct = limit === null ? 8 : Math.min(100, Math.round((used / limit) * 100));
+  fill.style.width = `${pct}%`;
+  if (limit !== null && used >= limit) fill.classList.add("full");
+  bar.appendChild(fill);
+
+  row.append(head, bar);
+  return row;
+}
+
+function renderUsage() {
+  usageList.innerHTML = "";
+  if (!usage) return;
+  const limits = usage.limits || {};
+  usageList.appendChild(usageRow("Mensajes hoy", usage.usage.messages, limits.messages_per_day));
+  usageList.appendChild(usageRow("Imágenes hoy", usage.usage.images, limits.images_per_day));
+  usageList.appendChild(usageRow("Documentos", usage.usage.documents, limits.documents));
+}
+
+function renderPlans() {
+  plansList.innerHTML = "";
+  if (!catalog) return;
+  Object.entries(catalog).forEach(([key, plan]) => {
+    const card = document.createElement("div");
+    card.className = "plan-card" + (usage && usage.plan === key ? " current" : "");
+
+    const head = document.createElement("div");
+    head.className = "plan-head";
+    const name = document.createElement("strong");
+    name.textContent = plan.name;
+    const price = document.createElement("span");
+    price.textContent = plan.price;
+    head.append(name, price);
+
+    const limits = plan.limits || {};
+    const list = document.createElement("ul");
+    list.className = "plan-features";
+    [
+      ["Mensajes/día", limits.messages_per_day],
+      ["Imágenes/día", limits.images_per_day],
+      ["Documentos", limits.documents],
+    ].forEach(([label, value]) => {
+      const li = document.createElement("li");
+      li.textContent = `${label}: ${value === null ? "ilimitado" : value}`;
+      list.appendChild(li);
+    });
+
+    card.append(head, list);
+    if (usage && usage.plan === key) {
+      const tag = document.createElement("div");
+      tag.className = "plan-current";
+      tag.textContent = "Plan actual";
+      card.appendChild(tag);
+    }
+    plansList.appendChild(card);
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Eventos                                                             */
+/* ------------------------------------------------------------------ */
 
 ttsToggle.addEventListener("click", toggleTts);
 micBtn.addEventListener("click", toggleDictation);
@@ -645,11 +899,26 @@ kbModal.addEventListener("click", (event) => {
   if (event.target === kbModal) closeKb();
 });
 
+settingsBtn.addEventListener("click", openSettings);
+settingsClose.addEventListener("click", closeSettings);
+settingsSave.addEventListener("click", saveSettings);
+deleteAccountBtn.addEventListener("click", deleteAccount);
+settingsModal.addEventListener("click", (event) => {
+  if (event.target === settingsModal) closeSettings();
+});
+
+plansBtn.addEventListener("click", openPlans);
+plansClose.addEventListener("click", closePlans);
+plansModal.addEventListener("click", (event) => {
+  if (event.target === plansModal) closePlans();
+});
+
 /* ------------------------------------------------------------------ */
 /* Arranque                                                            */
 /* ------------------------------------------------------------------ */
 
 (async function init() {
+  applyTheme(localStorage.getItem(THEME_KEY) || "dark");
   captureTokenFromUrl();
   const params = new URLSearchParams(window.location.search);
   if (params.get("auth") === "error") {
@@ -658,6 +927,7 @@ kbModal.addEventListener("click", (event) => {
   }
   applyTtsState();
   updateSendState();
+  updatePlanBadge();
   autoResize();
   await loadSession();
 })();

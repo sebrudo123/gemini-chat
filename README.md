@@ -10,9 +10,10 @@ CoreIA/
 │   ├── main.py             # API FastAPI (auth Discord + chat Gemini)
 │   ├── config.py           # Configuración central (settings)
 │   ├── database.py         # Motor y sesiones SQLAlchemy
-│   ├── models.py           # User, Conversation, Message, Document, DocumentChunk
+│   ├── models.py           # User, Conversation, Message, Document, DocumentChunk, UserSettings, Usage
 │   ├── tools.py            # Herramientas (function calling): hora, cálculo
 │   ├── rag.py              # RAG: chunking, embeddings y búsqueda semántica
+│   ├── plans.py            # Planes y cuotas (free/pro/enterprise)
 │   ├── cache.py            # Caché opcional con Redis
 │   ├── requirements.txt    # Dependencias de producción
 │   ├── requirements-dev.txt# Dependencias de desarrollo/pruebas
@@ -109,7 +110,8 @@ pruebas en cada push y pull request.
 
 - **Persistencia**: PostgreSQL con SQLAlchemy 2.x (`DATABASE_URL`). Si no se
   define, cae a SQLite (solo desarrollo). Tablas: `users`, `conversations`,
-  `messages`; se crean automáticamente al arrancar.
+  `messages`, `documents`, `document_chunks`, `user_settings`, `usage`; se crean
+  automáticamente al arrancar.
 - **Caché / rate limiting**: `slowapi` limita `RATE_LIMIT` por usuario/IP. Si se
   define `REDIS_URL`, el límite es distribuido y `cache.py` habilita caché.
 - **Observabilidad**: si defines `SENTRY_DSN`, se inicializa Sentry.
@@ -130,6 +132,15 @@ pruebas en cada push y pull request.
 | POST   | `/api/rag/documents`          | Crea un documento de conocimiento (RAG)  |
 | GET    | `/api/rag/documents`          | Lista los documentos del usuario         |
 | DELETE | `/api/rag/documents/{id}`     | Elimina un documento y sus fragmentos    |
+| GET    | `/api/conversations`          | Lista las conversaciones del usuario     |
+| GET    | `/api/conversations/{id}`     | Devuelve una conversación con mensajes   |
+| PATCH  | `/api/conversations/{id}`     | Renombra una conversación                |
+| DELETE | `/api/conversations/{id}`     | Elimina una conversación y sus mensajes  |
+| GET    | `/api/settings`               | Preferencias del usuario                 |
+| PATCH  | `/api/settings`               | Actualiza preferencias (tema, modelo, RAG)|
+| GET    | `/api/plans`                  | Catálogo de planes                       |
+| GET    | `/api/usage`                  | Plan actual y consumo del día            |
+| DELETE | `/api/account`                | Elimina la cuenta y todos sus datos      |
 
 ## Funciones de IA (sección 6)
 
@@ -142,6 +153,20 @@ pruebas en cada push y pull request.
   del chat. Tablas `documents` y `document_chunks`.
 - **Frontend**: dictado por voz (Web Speech API), lectura en voz alta,
   modo imagen y gestor de base de conocimiento.
+
+## Producto (sección 4)
+
+- **Historial en servidor**: las conversaciones y sus mensajes se guardan en la
+  base de datos y se recuperan por usuario. El frontend permite crear, abrir,
+  renombrar y eliminar conversaciones.
+- **Ajustes de usuario**: tema (oscuro/claro), modelo preferido y uso de la base
+  de conocimiento (RAG) por defecto, persistidos en `user_settings`.
+- **Planes y cuotas**: `plans.py` define `free` (100 mensajes/día, 5 imágenes/día,
+  3 documentos), `pro` (2000/100/50) y `enterprise` (ilimitado). El consumo diario
+  se registra en `usage`; el chat, la generación de imágenes y la creación de
+  documentos comprueban la cuota y responden `429` al superarla.
+- **Cuenta**: `DELETE /api/account` borra conversaciones, mensajes, documentos,
+  ajustes y consumo del usuario.
 
 ## Seguridad
 
