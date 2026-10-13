@@ -7,14 +7,25 @@ Plataforma de chat con IA de nivel enterprise: backend **FastAPI** conectado a *
 ```
 CoreIA/
 ├── backend/
-│   ├── main.py            # API FastAPI (auth Discord + chat Gemini)
-│   ├── requirements.txt   # Dependencias
-│   ├── Procfile           # Comando de arranque (Render/Railway)
-│   ├── .env               # Variables locales (NO se sube a git)
+│   ├── main.py             # API FastAPI (auth Discord + chat Gemini)
+│   ├── config.py           # Configuración central (settings)
+│   ├── database.py         # Motor y sesiones SQLAlchemy
+│   ├── models.py           # User, Conversation, Message
+│   ├── cache.py            # Caché opcional con Redis
+│   ├── requirements.txt    # Dependencias de producción
+│   ├── requirements-dev.txt# Dependencias de desarrollo/pruebas
+│   ├── Dockerfile          # Imagen de producción
+│   ├── docker-compose.yml  # API + Postgres + Redis en local
+│   ├── pytest.ini          # Config de pruebas
+│   ├── tests/              # Pruebas (pytest)
+│   ├── Procfile            # Comando de arranque (Render/Railway)
+│   ├── .env.example        # Plantilla de variables
 │   └── .gitignore
-├── index.html             # Frontend Core IA (modo oscuro, sidebar)
-├── script.js              # Lógica de sesión y chat
-└── render.yaml            # Blueprint de despliegue en Render
+├── .github/workflows/ci.yml# CI: lint + tests
+├── index.html              # Frontend Core IA (modo oscuro, sidebar)
+├── script.js               # Lógica de sesión y chat
+├── vercel.json             # Config de despliegue en Vercel
+└── render.yaml             # Blueprint de despliegue en Render
 ```
 
 ## 1. Crear la app en Discord
@@ -41,9 +52,16 @@ DISCORD_CLIENT_SECRET=...
 DISCORD_REDIRECT_URI=https://TU-BACKEND.onrender.com/api/auth/discord/callback
 FRONTEND_URL=https://TU-FRONTEND
 ALLOWED_ORIGINS=https://TU-FRONTEND,http://localhost:5500
+DATABASE_URL=postgresql://usuario:password@host:5432/coreia   # opcional (si falta usa SQLite)
+REDIS_URL=                # opcional (caché + rate limiting distribuido)
+SENTRY_DSN=               # opcional (observabilidad)
+ENVIRONMENT=production
+RATE_LIMIT=30/minute
 ```
 
 ## 3. Local
+
+Con Python:
 
 ```bash
 cd backend
@@ -53,8 +71,26 @@ pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
+O con Docker (levanta API + Postgres + Redis):
+
+```bash
+cd backend
+docker compose up --build
+```
+
 Backend en `http://127.0.0.1:8000`. Sirve el frontend con un servidor estático
 (por ejemplo `npx serve` en la raíz) y ajusta `BACKEND_URL` en `script.js`.
+
+## Pruebas y CI
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+pytest
+```
+
+El flujo **`.github/workflows/ci.yml`** ejecuta *lint* (errores reales) y las
+pruebas en cada push y pull request.
 
 ## 4. Despliegue en Render
 
@@ -63,15 +99,27 @@ Backend en `http://127.0.0.1:8000`. Sirve el frontend con un servidor estático
 3. Define las variables marcadas como secretas (AI_API_KEY, SESSION_SECRET, DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET).
 4. Al terminar, copia la URL pública y verifica que coincida con `DISCORD_REDIRECT_URI` y `BACKEND_URL`.
 
+## Arquitectura e infraestructura
+
+- **Persistencia**: PostgreSQL con SQLAlchemy 2.x (`DATABASE_URL`). Si no se
+  define, cae a SQLite (solo desarrollo). Tablas: `users`, `conversations`,
+  `messages`; se crean automáticamente al arrancar.
+- **Caché / rate limiting**: `slowapi` limita `RATE_LIMIT` por usuario/IP. Si se
+  define `REDIS_URL`, el límite es distribuido y `cache.py` habilita caché.
+- **Observabilidad**: si defines `SENTRY_DSN`, se inicializa Sentry.
+- **Docker**: `Dockerfile` (producción) y `docker-compose.yml` (API+Postgres+Redis).
+- **CI**: lint + pytest en GitHub Actions.
+
 ## Endpoints
 
 | Método | Ruta                          | Descripción                              |
 | ------ | ----------------------------- | ---------------------------------------- |
+| GET    | `/`                           | Estado del servicio (incluye caché)      |
 | GET    | `/api/auth/discord/login`     | Redirige a Discord OAuth2                |
 | GET    | `/api/auth/discord/callback`  | Intercambia el código y crea la sesión   |
 | GET    | `/api/auth/me`                | Perfil del usuario autenticado           |
 | POST   | `/api/auth/logout`            | Cierra la sesión                         |
-| POST   | `/api/chat`                   | Chat con Gemini (requiere Bearer token)  |
+| POST   | `/api/chat`                   | Chat con Gemini (Bearer + rate limit)    |
 
 ## Seguridad
 
@@ -79,3 +127,4 @@ Backend en `http://127.0.0.1:8000`. Sirve el frontend con un servidor estático
 - Token de sesión firmado con `SESSION_SECRET` (itsdangerous, con expiración).
 - El `access_token` de Discord nunca se expone al cliente.
 - La `state` de OAuth está firmada y expira en 10 minutos.
+- `state` incluye la URL de retorno validada contra `ALLOWED_ORIGINS` (multi-frontend).
