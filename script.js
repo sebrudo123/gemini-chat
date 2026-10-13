@@ -319,8 +319,12 @@ async function sendMessage(text) {
   try {
     const data = await api("/api/chat", {
       method: "POST",
-      body: JSON.stringify({ message: text }),
+      body: JSON.stringify({ message: text, conversation_id: chat.conversationId || null }),
     });
+    if (data.conversation_id) {
+      chat.conversationId = data.conversation_id;
+      persistChats();
+    }
     removeTyping();
     addMessage("bot", data.reply || "Sin respuesta.");
     renderChat();

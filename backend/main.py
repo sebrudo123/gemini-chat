@@ -1,55 +1,67 @@
 """Core IA - Backend FastAPI (Enterprise).
 
-Módulos:
-    - Autenticación OAuth2 con Discord.
-    - Sesiones firmadas de forma segura (itsdangerous).
-    - Chat con Google Gemini mediante el SDK oficial google-genai.
+Características:
+    - Autenticación OAuth2 con Discord y sesiones firmadas (itsdangerous).
+    - Persistencia de usuarios, conversaciones y mensajes (SQLAlchemy).
+    - Chat con Google Gemini (SDK oficial google-genai) con reintentos y
+      modelos de respaldo ante saturación.
+    - Rate limiting por usuario/cliente (slowapi, con soporte de Redis).
+    - Observabilidad opcional con Sentry.
 
-Variables de entorno requeridas:
-    SESSION_SECRET         Clave para firmar los tokens de sesión.
-    AI_API_KEY             Clave de la API de Google Gemini.
-    DISCORD_CLIENT_ID      Client ID de la aplicación de Discord.
-    DISCORD_CLIENT_SECRET  Client Secret de la aplicación de Discord.
-    DISCORD_REDIRECT_URI   URL de callback registrada en Discord.
-
-Variables opcionales:
-    AI_MODEL               Modelo de Gemini (por defecto gemini-3.8-flash).
-    FRONTEND_URL           URL del frontend para redirecciones post-login.
-    ALLOWED_ORIGINS        Orígenes CORS permitidos (separados por coma).
-    TOKEN_MAX_AGE          Vigencia del token de sesión en segundos.
+Consulta el README para las variables de entorno.
 """
 
-import os
 import secrets
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import urlencode, urlparse
 
 import httpx
-from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from google import genai
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel, Field
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+from sqlalchemy.orm import Session
 
-load_dotenv()
+from cache import is_enabled as cache_is_enabled
+from config import settings
+from database import get_db, init_db
+from models import Conversation, Message, User
 
 # --------------------------------------------------------------------------- #
-# Configuración
+# Observabilidad (Sentry opcional)
 # --------------------------------------------------------------------------- #
 
-AI_API_KEY = os.environ.get("AI_API_KEY", "")
-AI_MODEL = os.environ.get("AI_MODEL", "gemini-3.8-flash")
-AI_MODEL_FALLBACKS = [
-    model.strip()
-    for model in os.environ.get(
-        "AI_MODEL_FALLBACKS", "gemini-3.7-flash,gemini-3.5-flash,gemini-flash-latest"
-    ).split(",")
-    if model.strip()
-]
-AI_RETRIES = int(os.environ.get("AI_RETRIES", "2"))
+if settings.sentry_dsn:
+    try:
+        import sentry_sdk
+
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            environment=settings.environment,
+            traces_sample_rate=0.1,
+            send_default_pii=False,
+        )
+    except Exception:  # noqa: BLE001 - nunca impedir el arranque
+        pass
+
+# --------------------------------------------------------------------------- #
+# Constantes
+# --------------------------------------------------------------------------- #
+
+DISCORD_API = "https://discord.com/api/v10"
+DISCORD_AUTHORIZE_URL = "https://discord.com/oauth2/authorize"
+DISCORD_TOKEN_URL = f"{DISCORD_API}/oauth2/token"
+DISCORD_USER_URL = f"{DISCORD_API}/users/@me"
+SESSION_SALT = "core-ia.session.v1"
+
 TRANSIENT_MARKERS = (
     "503",
     "UNAVAILABLE",
@@ -61,40 +73,40 @@ TRANSIENT_MARKERS = (
     "high demand",
 )
 
-DISCORD_CLIENT_ID = os.environ.get("DISCORD_CLIENT_ID", "")
-DISCORD_CLIENT_SECRET = os.environ.get("DISCORD_CLIENT_SECRET", "")
-DISCORD_REDIRECT_URI = os.environ.get("DISCORD_REDIRECT_URI", "")
+serializer = URLSafeTimedSerializer(settings.session_secret, salt=SESSION_SALT)
+genai_client = genai.Client(api_key=settings.ai_api_key) if settings.ai_api_key else None
 
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5500").rstrip("/")
-SESSION_SECRET = os.environ.get("SESSION_SECRET", "")
-TOKEN_MAX_AGE = int(os.environ.get("TOKEN_MAX_AGE", str(60 * 60 * 24 * 7)))
-STATE_MAX_AGE = 600
 
-ALLOWED_ORIGINS = [
-    origin.strip()
-    for origin in os.environ.get("ALLOWED_ORIGINS", FRONTEND_URL).split(",")
-    if origin.strip()
-]
+# --------------------------------------------------------------------------- #
+# Rate limiting
+# --------------------------------------------------------------------------- #
 
-DISCORD_API = "https://discord.com/api/v10"
-DISCORD_AUTHORIZE_URL = "https://discord.com/oauth2/authorize"
-DISCORD_TOKEN_URL = f"{DISCORD_API}/oauth2/token"
-DISCORD_USER_URL = f"{DISCORD_API}/users/@me"
-SESSION_SALT = "core-ia.session.v1"
+def rate_limit_key(request: Request) -> str:
+    """Clave de rate limiting: por token de sesión o, si no, por IP."""
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        return f"tok:{auth.split(' ', 1)[1].strip()[-32:]}"
+    return f"ip:{get_remote_address(request)}"
 
-if not SESSION_SECRET:
-    raise RuntimeError("Debes definir SESSION_SECRET en el entorno.")
 
-serializer = URLSafeTimedSerializer(SESSION_SECRET, salt=SESSION_SALT)
-genai_client = genai.Client(api_key=AI_API_KEY) if AI_API_KEY else None
+limiter = Limiter(key_func=rate_limit_key, storage_uri=settings.redis_url or "memory://")
 
-app = FastAPI(title="Core IA API", version="2.0.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    init_db()
+    yield
+
+
+app = FastAPI(title="Core IA API", version="2.1.0", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=settings.allowed_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -113,29 +125,6 @@ def require_config(value: str, name: str) -> str:
     return value
 
 
-def allowed_return_url(return_to: str | None) -> str:
-    """Valida que la URL de retorno pertenezca a un origen permitido."""
-    if not return_to:
-        return f"{FRONTEND_URL}/"
-    parsed = urlparse(return_to)
-    origin = f"{parsed.scheme}://{parsed.netloc}"
-    if origin not in ALLOWED_ORIGINS:
-        return f"{FRONTEND_URL}/"
-    path = parsed.path or "/"
-    if not path.endswith("/"):
-        path = path.rsplit("/", 1)[0] + "/"
-    return f"{origin}{path}"
-
-
-def resolve_return_url(state: str | None) -> str:
-    """Obtiene la URL de retorno desde un `state` firmado (con valor por defecto)."""
-    try:
-        data = serializer.loads(state or "", max_age=STATE_MAX_AGE)
-        return allowed_return_url(data.get("return_to"))
-    except (BadSignature, SignatureExpired):
-        return f"{FRONTEND_URL}/"
-
-
 def build_avatar_url(user: dict[str, Any]) -> str | None:
     """Construye la URL del avatar del usuario de Discord."""
     user_id = user.get("id")
@@ -149,13 +138,36 @@ def build_avatar_url(user: dict[str, Any]) -> str | None:
     return f"https://cdn.discordapp.com/embed/avatars/{index}.png"
 
 
-def create_session_token(user: dict[str, Any]) -> str:
+def allowed_return_url(return_to: str | None) -> str:
+    """Valida que la URL de retorno pertenezca a un origen permitido."""
+    if not return_to:
+        return f"{settings.frontend_url}/"
+    parsed = urlparse(return_to)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    if origin not in settings.allowed_origins:
+        return f"{settings.frontend_url}/"
+    path = parsed.path or "/"
+    if not path.endswith("/"):
+        path = path.rsplit("/", 1)[0] + "/"
+    return f"{origin}{path}"
+
+
+def resolve_return_url(state: str | None) -> str:
+    """Obtiene la URL de retorno desde un `state` firmado."""
+    try:
+        data = serializer.loads(state or "", max_age=settings.state_max_age)
+        return allowed_return_url(data.get("return_to"))
+    except (BadSignature, SignatureExpired):
+        return f"{settings.frontend_url}/"
+
+
+def create_session_token(profile: dict[str, Any]) -> str:
     """Genera un token firmado con los datos públicos del usuario."""
-    return serializer.dumps({"user": user})
+    return serializer.dumps({"user": profile})
 
 
 def get_current_user(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    """Dependencia que valida el token Bearer y devuelve el usuario."""
+    """Valida el token Bearer y devuelve el perfil del usuario."""
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -164,7 +176,7 @@ def get_current_user(authorization: str | None = Header(default=None)) -> dict[s
         )
     token = authorization.split(" ", 1)[1].strip()
     try:
-        payload = serializer.loads(token, max_age=TOKEN_MAX_AGE)
+        payload = serializer.loads(token, max_age=settings.token_max_age)
     except SignatureExpired as exc:
         raise HTTPException(status_code=401, detail="La sesión ha expirado.") from exc
     except BadSignature as exc:
@@ -176,16 +188,65 @@ def get_current_user(authorization: str | None = Header(default=None)) -> dict[s
     return user
 
 
+def upsert_user(db: Session, profile: dict[str, Any]) -> User:
+    """Crea o actualiza el usuario a partir del perfil de Discord."""
+    user = db.query(User).filter(User.discord_id == profile.get("id")).first()
+    if user is None:
+        user = User(discord_id=profile.get("id"))
+        db.add(user)
+    user.username = profile.get("username")
+    user.display_name = profile.get("display_name")
+    user.email = profile.get("email")
+    user.avatar_url = profile.get("avatar_url")
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def is_transient_error(exc: Exception) -> bool:
+    """Determina si un error de Gemini es temporal (saturación, rate limit)."""
+    text = str(exc)
+    return any(marker in text for marker in TRANSIENT_MARKERS)
+
+
+def generate_reply(message: str) -> str:
+    """Genera una respuesta probando varios modelos y reintentos."""
+    models = [settings.ai_model] + [m for m in settings.ai_model_fallbacks if m != settings.ai_model]
+    last_error: Exception | None = None
+
+    for model in models:
+        for attempt in range(max(1, settings.ai_retries)):
+            try:
+                response = genai_client.models.generate_content(model=model, contents=message)
+                return (response.text or "").strip()
+            except Exception as exc:  # noqa: BLE001 - se decide según el tipo de error
+                last_error = exc
+                if not is_transient_error(exc):
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Error al contactar con Gemini ({model}): {exc}",
+                    ) from exc
+                if attempt < settings.ai_retries - 1:
+                    time.sleep(1.2 * (attempt + 1))
+
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Core IA está experimentando alta demanda. Inténtalo de nuevo en unos segundos.",
+    ) from last_error
+
+
 # --------------------------------------------------------------------------- #
-# Modelos
+# Modelos de entrada/salida
 # --------------------------------------------------------------------------- #
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=8000)
+    conversation_id: int | None = None
 
 
 class ChatResponse(BaseModel):
     reply: str
+    conversation_id: int | None = None
 
 
 class UserResponse(BaseModel):
@@ -197,8 +258,8 @@ class UserResponse(BaseModel):
 # --------------------------------------------------------------------------- #
 
 @app.get("/")
-def health() -> dict[str, str]:
-    return {"status": "ok", "service": "core-ia"}
+def health() -> dict[str, Any]:
+    return {"status": "ok", "service": "core-ia", "cache": cache_is_enabled()}
 
 
 # --------------------------------------------------------------------------- #
@@ -208,14 +269,11 @@ def health() -> dict[str, str]:
 @app.get("/api/auth/discord/login")
 def discord_login(return_to: str | None = None) -> RedirectResponse:
     """Redirige al usuario a la pantalla de autorización de Discord."""
-    client_id = require_config(DISCORD_CLIENT_ID, "DISCORD_CLIENT_ID")
-    redirect_uri = require_config(DISCORD_REDIRECT_URI, "DISCORD_REDIRECT_URI")
+    client_id = require_config(settings.discord_client_id, "DISCORD_CLIENT_ID")
+    redirect_uri = require_config(settings.discord_redirect_uri, "DISCORD_REDIRECT_URI")
 
     state = serializer.dumps(
-        {
-            "nonce": secrets.token_urlsafe(16),
-            "return_to": allowed_return_url(return_to),
-        }
+        {"nonce": secrets.token_urlsafe(16), "return_to": allowed_return_url(return_to)}
     )
     params = {
         "client_id": client_id,
@@ -233,19 +291,20 @@ async def discord_callback(
     code: str | None = None,
     state: str | None = None,
     error: str | None = None,
+    db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    """Intercambia el `code` por un token, obtiene el perfil y crea la sesión."""
+    """Intercambia el `code`, obtiene el perfil y crea la sesión."""
     if error or not code:
         return RedirectResponse(f"{resolve_return_url(state)}?auth=error")
 
     try:
-        state_data = serializer.loads(state or "", max_age=STATE_MAX_AGE)
+        state_data = serializer.loads(state or "", max_age=settings.state_max_age)
     except (BadSignature, SignatureExpired) as exc:
         raise HTTPException(status_code=400, detail="Estado OAuth inválido o expirado.") from exc
 
-    client_id = require_config(DISCORD_CLIENT_ID, "DISCORD_CLIENT_ID")
-    client_secret = require_config(DISCORD_CLIENT_SECRET, "DISCORD_CLIENT_SECRET")
-    redirect_uri = require_config(DISCORD_REDIRECT_URI, "DISCORD_REDIRECT_URI")
+    client_id = require_config(settings.discord_client_id, "DISCORD_CLIENT_ID")
+    client_secret = require_config(settings.discord_client_secret, "DISCORD_CLIENT_SECRET")
+    redirect_uri = require_config(settings.discord_redirect_uri, "DISCORD_REDIRECT_URI")
 
     async with httpx.AsyncClient(timeout=15) as client:
         token_resp = await client.post(
@@ -281,6 +340,7 @@ async def discord_callback(
         "email": discord_user.get("email"),
         "avatar_url": build_avatar_url(discord_user),
     }
+    upsert_user(db, profile)
 
     token = create_session_token(profile)
     return_url = allowed_return_url(state_data.get("return_to"))
@@ -295,7 +355,7 @@ def auth_me(user: dict[str, Any] = Depends(get_current_user)) -> UserResponse:
 
 @app.post("/api/auth/logout")
 def auth_logout(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, bool]:
-    """Punto de cierre de sesión (el cliente descarta el token)."""
+    """Cierre de sesión (el cliente descarta el token)."""
     return {"ok": True}
 
 
@@ -303,44 +363,15 @@ def auth_logout(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, b
 # Chat con Gemini
 # --------------------------------------------------------------------------- #
 
-def is_transient_error(exc: Exception) -> bool:
-    """Determina si un error de Gemini es temporal (saturación, rate limit)."""
-    text = str(exc)
-    return any(marker in text for marker in TRANSIENT_MARKERS)
-
-
-def generate_reply(message: str) -> str:
-    """Genera una respuesta probando varios modelos y reintentos ante fallos temporales."""
-    models = [AI_MODEL] + [m for m in AI_MODEL_FALLBACKS if m != AI_MODEL]
-    last_error: Exception | None = None
-
-    for model in models:
-        for attempt in range(max(1, AI_RETRIES)):
-            try:
-                response = genai_client.models.generate_content(model=model, contents=message)
-                return (response.text or "").strip()
-            except Exception as exc:  # noqa: BLE001 - se decide según el tipo de error
-                last_error = exc
-                if not is_transient_error(exc):
-                    raise HTTPException(
-                        status_code=502,
-                        detail=f"Error al contactar con Gemini ({model}): {exc}",
-                    ) from exc
-                if attempt < AI_RETRIES - 1:
-                    time.sleep(1.2 * (attempt + 1))
-
-    raise HTTPException(
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail="Core IA está experimentando alta demanda. Inténtalo de nuevo en unos segundos.",
-    ) from last_error
-
-
 @app.post("/api/chat", response_model=ChatResponse)
+@limiter.limit(settings.rate_limit)
 def chat(
+    request: Request,
     payload: ChatRequest,
-    user: dict[str, Any] = Depends(get_current_user),
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> ChatResponse:
-    """Genera una respuesta de Gemini para el mensaje del usuario autenticado."""
+    """Genera una respuesta de Gemini y persiste la conversación."""
     message = payload.message.strip()
     if not message:
         raise HTTPException(status_code=400, detail="El mensaje no puede estar vacío.")
@@ -350,4 +381,30 @@ def chat(
             detail="El servidor no tiene configurada AI_API_KEY.",
         )
 
-    return ChatResponse(reply=generate_reply(message))
+    user = upsert_user(db, profile)
+
+    conversation = None
+    if payload.conversation_id is not None:
+        conversation = (
+            db.query(Conversation)
+            .filter(
+                Conversation.id == payload.conversation_id,
+                Conversation.user_id == user.id,
+            )
+            .first()
+        )
+    if conversation is None:
+        conversation = Conversation(user_id=user.id, title=message[:60] or "Nuevo chat")
+        db.add(conversation)
+        db.commit()
+        db.refresh(conversation)
+
+    db.add(Message(conversation_id=conversation.id, role="user", content=message))
+    db.commit()
+
+    reply = generate_reply(message)
+
+    db.add(Message(conversation_id=conversation.id, role="assistant", content=reply))
+    db.commit()
+
+    return ChatResponse(reply=reply, conversation_id=conversation.id)
