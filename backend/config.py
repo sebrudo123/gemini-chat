@@ -36,6 +36,35 @@ class Settings:
         self.discord_client_secret = os.environ.get("DISCORD_CLIENT_SECRET", "")
         self.discord_redirect_uri = os.environ.get("DISCORD_REDIRECT_URI", "")
 
+        # --- Google OAuth2 ---
+        self.google_client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
+        self.google_client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+        self.google_redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI", "")
+
+        # --- Microsoft OAuth2 ---
+        self.microsoft_client_id = os.environ.get("MICROSOFT_CLIENT_ID", "")
+        self.microsoft_client_secret = os.environ.get("MICROSOFT_CLIENT_SECRET", "")
+        self.microsoft_redirect_uri = os.environ.get("MICROSOFT_REDIRECT_URI", "")
+        self.microsoft_tenant = os.environ.get("MICROSOFT_TENANT", "common")
+
+        # --- Proveedores de login habilitados ---
+        self.auth_providers = [
+            provider.strip().lower()
+            for provider in os.environ.get(
+                "AUTH_PROVIDERS", "discord,google,microsoft"
+            ).split(",")
+            if provider.strip()
+        ]
+
+        # --- Administración ---
+        self.founder_ids = [
+            founder.strip()
+            for founder in os.environ.get(
+                "FOUNDER_DISCORD_IDS", "719050307593830440"
+            ).split(",")
+            if founder.strip()
+        ]
+
         # --- Sesión / frontend ---
         self.session_secret = os.environ.get("SESSION_SECRET", "")
         self.token_max_age = int(os.environ.get("TOKEN_MAX_AGE", str(60 * 60 * 24 * 7)))

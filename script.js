@@ -1,6 +1,7 @@
 /**
  * Core IA - Frontend
- * Sesión (Discord OAuth2), historial en servidor, ajustes, planes y chat.
+ * Sesión (Discord/Google/Microsoft OAuth2), historial en servidor, ajustes,
+ * planes, panel de administración y chat.
  */
 
 const BACKEND_URL = "https://gemini-chat-backend-vyrz.onrender.com";
@@ -13,7 +14,7 @@ const chatEl = document.getElementById("chat");
 const welcomeEl = document.getElementById("welcome");
 const splashEl = document.getElementById("splash");
 const authGateEl = document.getElementById("auth-gate");
-const authLoginEl = document.getElementById("auth-login");
+const authProvidersEl = document.getElementById("auth-providers");
 const scrollEl = document.getElementById("chat-scroll");
 const historyEl = document.getElementById("history");
 const profileEl = document.getElementById("profile");
@@ -52,6 +53,11 @@ const plansClose = document.getElementById("plans-close");
 const usageList = document.getElementById("usage-list");
 const plansList = document.getElementById("plans-list");
 
+const adminModal = document.getElementById("admin-modal");
+const adminClose = document.getElementById("admin-close");
+const adminStats = document.getElementById("admin-stats");
+const adminUsers = document.getElementById("admin-users");
+
 let token = localStorage.getItem(TOKEN_KEY) || null;
 let currentUser = null;
 let conversations = [];
@@ -63,6 +69,7 @@ let ttsEnabled = localStorage.getItem(TTS_KEY) === "1";
 let settings = { theme: "dark", preferred_model: null, use_rag: true };
 let usage = null;
 let catalog = null;
+let providers = null;
 
 const splashStart = performance.now();
 let splashHidden = false;
@@ -112,9 +119,50 @@ async function api(path, options = {}) {
 /* Sesión                                                              */
 /* ------------------------------------------------------------------ */
 
-function loginUrl() {
+const PROVIDER_META = {
+  discord: {
+    label: "Discord",
+    icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20.3 4.4A19.8 19.8 0 0 0 15.4 3l-.3.5a18 18 0 0 1 4.4 1.4 15.9 15.9 0 0 0-4.1-1.3 16.6 16.6 0 0 0-6.8 0A15.9 15.9 0 0 0 4.5 4.9 18 18 0 0 1 8.9 3.5L8.6 3a19.8 19.8 0 0 0-4.9 1.4C.8 8.6 0 12.6.4 16.6a19.9 19.9 0 0 0 6 3l.8-1.3c-.9-.3-1.7-.7-2.5-1.2l.6-.5a14.3 14.3 0 0 0 12.2 0l.6.5c-.8.5-1.6.9-2.5 1.2l.8 1.3a19.9 19.9 0 0 0 6-3c.5-4.6-.7-8.6-2.9-12.2ZM8.5 14.6c-1.2 0-2.1-1.1-2.1-2.4S7.3 9.8 8.5 9.8s2.1 1.1 2.1 2.4-.9 2.4-2.1 2.4Zm7 0c-1.2 0-2.1-1.1-2.1-2.4s.9-2.4 2.1-2.4 2.1 1.1 2.1 2.4-.9 2.4-2.1 2.4Z"/></svg>',
+  },
+  google: {
+    label: "Google",
+    icon: '<svg width="20" height="20" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.9 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.3 6.1 29.4 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.3-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16 19 13 24 13c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.3 6.1 29.4 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.3 0-9.7-3.1-11.3-7.5l-6.5 5C9.6 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.1-4.1 5.5l6.2 5.2C41.1 35.9 44 30.5 44 24c0-1.3-.1-2.3-.4-3.5z"/></svg>',
+  },
+  microsoft: {
+    label: "Microsoft",
+    icon: '<svg width="20" height="20" viewBox="0 0 23 23"><path fill="#f35325" d="M1 1h10v10H1z"/><path fill="#81bc06" d="M12 1h10v10H12z"/><path fill="#05a6f0" d="M1 12h10v10H1z"/><path fill="#ffba08" d="M12 12h10v10H12z"/></svg>',
+  },
+};
+
+function loginUrl(provider) {
   const returnTo = encodeURIComponent(window.location.origin + window.location.pathname);
-  return `${BACKEND_URL}/api/auth/discord/login?return_to=${returnTo}`;
+  return `${BACKEND_URL}/api/auth/${provider}/login?return_to=${returnTo}`;
+}
+
+async function loadProviders() {
+  try {
+    const data = await api("/api/auth/providers");
+    providers = data.providers && data.providers.length ? data.providers : ["discord"];
+  } catch (_) {
+    providers = ["discord"];
+  }
+}
+
+function renderLoginButtons(container, variant) {
+  container.innerHTML = "";
+  const list = providers && providers.length ? providers : ["discord"];
+  list.forEach((provider) => {
+    const meta = PROVIDER_META[provider];
+    if (!meta) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `${variant} provider-${provider}`;
+    btn.innerHTML = `${meta.icon}<span>Continuar con ${meta.label}</span>`;
+    btn.addEventListener("click", () => {
+      window.location.href = loginUrl(provider);
+    });
+    container.appendChild(btn);
+  });
 }
 
 function clearSession() {
@@ -174,15 +222,10 @@ function renderProfile() {
   profileEl.innerHTML = "";
 
   if (!currentUser) {
-    const btn = document.createElement("button");
-    btn.className = "login-btn";
-    btn.innerHTML =
-      '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M20.3 4.4A19.8 19.8 0 0 0 15.4 3l-.3.5a18 18 0 0 1 4.4 1.4 15.9 15.9 0 0 0-4.1-1.3 16.6 16.6 0 0 0-6.8 0A15.9 15.9 0 0 0 4.5 4.9 18 18 0 0 1 8.9 3.5L8.6 3a19.8 19.8 0 0 0-4.9 1.4C.8 8.6 0 12.6.4 16.6a19.9 19.9 0 0 0 6 3l.8-1.3c-.9-.3-1.7-.7-2.5-1.2l.6-.5a14.3 14.3 0 0 0 12.2 0l.6.5c-.8.5-1.6.9-2.5 1.2l.8 1.3a19.9 19.9 0 0 0 6-3c.5-4.6-.7-8.6-2.9-12.2ZM8.5 14.6c-1.2 0-2.1-1.1-2.1-2.4S7.3 9.8 8.5 9.8s2.1 1.1 2.1 2.4-.9 2.4-2.1 2.4Zm7 0c-1.2 0-2.1-1.1-2.1-2.4s.9-2.4 2.1-2.4 2.1 1.1 2.1 2.4-.9 2.4-2.1 2.4Z"/></svg>' +
-      "Iniciar sesión con Discord";
-    btn.addEventListener("click", () => {
-      window.location.href = loginUrl();
-    });
-    profileEl.appendChild(btn);
+    const box = document.createElement("div");
+    box.className = "auth-providers-side";
+    renderLoginButtons(box, "login-btn");
+    profileEl.appendChild(box);
     return;
   }
 
@@ -206,7 +249,7 @@ function renderProfile() {
 
   const sub = document.createElement("div");
   sub.className = "user-sub";
-  sub.textContent = currentUser.username ? `@${currentUser.username}` : "Discord";
+  sub.textContent = currentUser.username ? `@${currentUser.username}` : "Cuenta";
 
   meta.append(name, sub);
 
@@ -220,7 +263,17 @@ function renderProfile() {
     clearSession();
   });
 
-  card.append(avatar, meta, logout);
+  if (currentUser.is_admin) {
+    const admin = document.createElement("button");
+    admin.className = "icon-btn";
+    admin.title = "Panel de administración";
+    admin.innerHTML =
+      '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>';
+    admin.addEventListener("click", openAdmin);
+    card.append(avatar, meta, admin, logout);
+  } else {
+    card.append(avatar, meta, logout);
+  }
   profileEl.appendChild(card);
 }
 
@@ -714,7 +767,7 @@ document.querySelectorAll(".suggestion").forEach((btn) => {
       updateSendState();
       inputEl.focus();
     } else {
-      window.location.href = loginUrl();
+      showAuthGate();
     }
   });
 });
@@ -1094,6 +1147,147 @@ function renderPlans() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Administración                                                      */
+/* ------------------------------------------------------------------ */
+
+async function openAdmin() {
+  if (!currentUser || !currentUser.is_admin) {
+    renderError("Acceso reservado al fundador.");
+    return;
+  }
+  adminModal.classList.add("show");
+  adminStats.innerHTML = "";
+  adminUsers.innerHTML = "";
+  try {
+    const [statsData, usersData] = await Promise.all([
+      api("/api/admin/stats"),
+      api("/api/admin/users"),
+    ]);
+    renderAdminStats(statsData);
+    renderAdminUsers(usersData.users || []);
+  } catch (err) {
+    renderError(err.message);
+  }
+}
+
+function closeAdmin() {
+  adminModal.classList.remove("show");
+}
+
+function adminStat(value, label) {
+  const box = document.createElement("div");
+  box.className = "admin-stat";
+  const v = document.createElement("div");
+  v.className = "value";
+  v.textContent = value;
+  const l = document.createElement("div");
+  l.className = "label";
+  l.textContent = label;
+  box.append(v, l);
+  return box;
+}
+
+function renderAdminStats(stats) {
+  adminStats.innerHTML = "";
+  adminStats.appendChild(adminStat(stats.users, "Usuarios"));
+  adminStats.appendChild(adminStat(stats.conversations, "Conversaciones"));
+  adminStats.appendChild(adminStat(stats.messages, "Mensajes"));
+  adminStats.appendChild(adminStat(stats.documents, "Documentos"));
+  adminStats.appendChild(adminStat(stats.active_today, "Activos hoy"));
+  adminStats.appendChild(adminStat(stats.messages_today, "Mensajes hoy"));
+}
+
+function renderAdminUsers(users) {
+  adminUsers.innerHTML = "";
+  if (!users.length) {
+    const empty = document.createElement("div");
+    empty.className = "modal-sub";
+    empty.textContent = "Todavía no hay usuarios.";
+    adminUsers.appendChild(empty);
+    return;
+  }
+  users.forEach((user) => adminUsers.appendChild(adminUserRow(user)));
+}
+
+function adminUserRow(user) {
+  const row = document.createElement("div");
+  row.className = "admin-user";
+
+  if (user.avatar_url) {
+    const img = document.createElement("img");
+    img.src = user.avatar_url;
+    img.alt = "";
+    img.addEventListener("error", () => {
+      img.style.display = "none";
+    });
+    row.appendChild(img);
+  } else {
+    const fb = document.createElement("div");
+    fb.className = "fallback-avatar";
+    fb.textContent = (user.display_name || user.username || "?").charAt(0).toUpperCase();
+    row.appendChild(fb);
+  }
+
+  const info = document.createElement("div");
+  info.className = "admin-user-info";
+  const name = document.createElement("div");
+  name.className = "admin-user-name";
+  name.textContent = user.display_name || user.username || "Usuario";
+  if (user.is_founder) {
+    const tag = document.createElement("span");
+    tag.className = "admin-tag";
+    tag.textContent = "Fundador";
+    name.appendChild(tag);
+  }
+  const sub = document.createElement("div");
+  sub.className = "admin-user-sub";
+  sub.textContent = `${user.conversations} chats · ${user.documents} docs · ${user.discord_id || ""}`;
+  info.append(name, sub);
+  row.appendChild(info);
+
+  const select = document.createElement("select");
+  ["free", "pro", "enterprise"].forEach((plan) => {
+    const opt = document.createElement("option");
+    opt.value = plan;
+    opt.textContent = plan;
+    if (user.plan === plan) opt.selected = true;
+    select.appendChild(opt);
+  });
+  select.addEventListener("change", async () => {
+    select.disabled = true;
+    try {
+      await api(`/api/admin/users/${user.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ plan: select.value }),
+      });
+    } catch (err) {
+      renderError(err.message);
+    } finally {
+      select.disabled = false;
+    }
+  });
+  row.appendChild(select);
+
+  const del = document.createElement("button");
+  del.className = "admin-del";
+  del.title = "Eliminar usuario";
+  del.textContent = "🗑";
+  del.disabled = user.is_founder;
+  del.addEventListener("click", async () => {
+    if (!window.confirm(`¿Eliminar a ${user.display_name || user.username} y todos sus datos?`)) return;
+    try {
+      await api(`/api/admin/users/${user.id}`, { method: "DELETE" });
+      row.remove();
+    } catch (err) {
+      renderError(err.message);
+    }
+  });
+  row.appendChild(del);
+
+  return row;
+}
+
+/* ------------------------------------------------------------------ */
 /* Eventos                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -1121,8 +1315,9 @@ plansModal.addEventListener("click", (event) => {
   if (event.target === plansModal) closePlans();
 });
 
-authLoginEl.addEventListener("click", () => {
-  window.location.href = loginUrl();
+adminClose.addEventListener("click", closeAdmin);
+adminModal.addEventListener("click", (event) => {
+  if (event.target === adminModal) closeAdmin();
 });
 
 /* ------------------------------------------------------------------ */
@@ -1135,12 +1330,14 @@ authLoginEl.addEventListener("click", () => {
   const params = new URLSearchParams(window.location.search);
   if (params.get("auth") === "error") {
     window.history.replaceState(null, "", window.location.pathname);
-    setTimeout(() => renderError("El inicio de sesión con Discord fue cancelado."), 300);
+    setTimeout(() => renderError("El inicio de sesión fue cancelado."), 300);
   }
   applyTtsState();
   updateSendState();
   updatePlanBadge();
   autoResize();
+  await loadProviders();
+  if (authProvidersEl) renderLoginButtons(authProvidersEl, "auth-login");
   try {
     await loadSession();
   } finally {

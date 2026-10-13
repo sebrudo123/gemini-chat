@@ -6,7 +6,7 @@ alternativa de desarrollo/pruebas si no se define la variable.
 
 from collections.abc import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from config import settings
@@ -42,7 +42,51 @@ def get_db() -> Iterator[Session]:
 
 
 def init_db() -> None:
-    """Crea las tablas si no existen."""
+    """Crea las tablas si no existen y aplica migraciones ligeras."""
     import models  # noqa: F401  (registra los modelos en el metadata)
 
     Base.metadata.create_all(bind=engine)
+    migrate_schema()
+
+
+def migrate_schema() -> None:
+    """Añade columnas nuevas a tablas existentes (compatibilidad multi-proveedor).
+
+    `create_all` no altera tablas ya creadas, así que añadimos manualmente las
+    columnas de identidad (Google/Microsoft) y permitimos `discord_id` nulo en
+    bases de datos que ya existían antes de soportar varios proveedores.
+    """
+    inspector = inspect(engine)
+    if "users" not in inspector.get_table_names():
+        return
+
+    columns = {column["name"]: column for column in inspector.get_columns("users")}
+    dialect = engine.dialect.name
+
+    statements: list[str] = []
+    if "google_id" not in columns:
+        statements.append("ALTER TABLE users ADD COLUMN google_id VARCHAR(64)")
+    if "microsoft_id" not in columns:
+        statements.append("ALTER TABLE users ADD COLUMN microsoft_id VARCHAR(64)")
+    if dialect == "postgresql" and not columns.get("discord_id", {}).get("nullable", True):
+        statements.append("ALTER TABLE users ALTER COLUMN discord_id DROP NOT NULL")
+
+    existing_indexes = {index["name"] for index in inspector.get_indexes("users")}
+    index_statements: list[str] = []
+    if "ix_users_google_id" not in existing_indexes:
+        index_statements.append(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_google_id ON users (google_id)"
+        )
+    if "ix_users_microsoft_id" not in existing_indexes:
+        index_statements.append(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_microsoft_id ON users (microsoft_id)"
+        )
+
+    if not statements and not index_statements:
+        return
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+        for statement in index_statements:
+            connection.execute(text(statement))

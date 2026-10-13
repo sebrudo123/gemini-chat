@@ -18,12 +18,20 @@ from database import Base
 
 
 class User(Base):
-    """Usuario autenticado mediante Discord."""
+    """Usuario autenticado mediante Discord, Google o Microsoft."""
 
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    discord_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    discord_id: Mapped[str | None] = mapped_column(
+        String(32), unique=True, index=True, default=None
+    )
+    google_id: Mapped[str | None] = mapped_column(
+        String(64), unique=True, index=True, default=None
+    )
+    microsoft_id: Mapped[str | None] = mapped_column(
+        String(64), unique=True, index=True, default=None
+    )
     username: Mapped[str | None] = mapped_column(String(64), default=None)
     display_name: Mapped[str | None] = mapped_column(String(64), default=None)
     email: Mapped[str | None] = mapped_column(String(255), default=None)

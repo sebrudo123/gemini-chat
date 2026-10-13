@@ -40,6 +40,26 @@ CoreIA/
      `https://TU-BACKEND.onrender.com/api/auth/discord/callback`
 3. Guarda los cambios.
 
+## 1b. Login con Google y Microsoft (opcional)
+
+Además de Discord, Core IA admite Google y Microsoft. Solo aparecen en la
+interfaz los proveedores que tengan sus credenciales configuradas.
+
+**Google** (https://console.cloud.google.com/apis/credentials):
+
+1. Crea credenciales → **ID de cliente de OAuth** (aplicación web).
+2. Añade el origen autorizado de tu frontend y como URI de redirección:
+   `https://TU-BACKEND.onrender.com/api/auth/google/callback`
+3. Rellena `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` y `GOOGLE_REDIRECT_URI`.
+
+**Microsoft** (https://portal.azure.com → Microsoft Entra ID → App registrations):
+
+1. **New registration** → añade como Redirect URI (Web):
+   `https://TU-BACKEND.onrender.com/api/auth/microsoft/callback`
+2. Crea un **client secret** y copia el Application (client) ID.
+3. Rellena `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`,
+   `MICROSOFT_REDIRECT_URI` y, si usas un tenant concreto, `MICROSOFT_TENANT`.
+
 ## 2. Variables de entorno
 
 Copia `backend/.env.example` a `backend/.env` y rellena:
@@ -57,6 +77,15 @@ SESSION_SECRET=...        # cadena aleatoria larga
 DISCORD_CLIENT_ID=...
 DISCORD_CLIENT_SECRET=...
 DISCORD_REDIRECT_URI=https://TU-BACKEND.onrender.com/api/auth/discord/callback
+GOOGLE_CLIENT_ID=             # opcional
+GOOGLE_CLIENT_SECRET=         # opcional
+GOOGLE_REDIRECT_URI=https://TU-BACKEND.onrender.com/api/auth/google/callback
+MICROSOFT_CLIENT_ID=          # opcional
+MICROSOFT_CLIENT_SECRET=      # opcional
+MICROSOFT_REDIRECT_URI=https://TU-BACKEND.onrender.com/api/auth/microsoft/callback
+MICROSOFT_TENANT=common
+AUTH_PROVIDERS=discord,google,microsoft
+FOUNDER_DISCORD_IDS=719050307593830440   # IDs con acceso al panel de administración
 FRONTEND_URL=https://TU-FRONTEND
 ALLOWED_ORIGINS=https://TU-FRONTEND,http://localhost:5500
 DATABASE_URL=postgresql://usuario:password@host:5432/coreia   # opcional (si falta usa SQLite)
@@ -167,6 +196,30 @@ pruebas en cada push y pull request.
   documentos comprueban la cuota y responden `429` al superarla.
 - **Cuenta**: `DELETE /api/account` borra conversaciones, mensajes, documentos,
   ajustes y consumo del usuario.
+
+## Autenticación multi-proveedor
+
+- **Proveedores**: Discord, Google y Microsoft OAuth2. `GET /api/auth/providers`
+  devuelve los que estén configurados; el frontend dibuja dinámicamente un botón
+  por proveedor (con su icono y color).
+- **Identidad**: cada usuario se identifica por `discord_id`, `google_id` o
+  `microsoft_id`. Las cuentas con el mismo correo verificado se enlazan.
+- **Migración**: al arrancar, `init_db()` añade las columnas nuevas de identidad y
+  permite `discord_id` nulo en bases de datos ya existentes.
+
+## Panel de administración
+
+- Acceso reservado a los **fundadores** (IDs de Discord en `FOUNDER_DISCORD_IDS`).
+  El perfil expone `is_admin` y los endpoints `/api/admin/*` comprueban el permiso
+  en el servidor (`403` para el resto).
+- `GET /api/admin/stats`: totales de usuarios, conversaciones, mensajes, documentos,
+  actividad y mensajes de hoy, y reparto por plan.
+- `GET /api/admin/users`: listado de usuarios con plan, nº de chats y documentos.
+- `PATCH /api/admin/users/{id}`: cambia el plan (`free`/`pro`/`enterprise`).
+- `DELETE /api/admin/users/{id}`: elimina un usuario y todos sus datos (los
+  fundadores están protegidos).
+- En el frontend, el fundador ve un botón con forma de escudo en la barra lateral
+  que abre el panel (métricas + gestión de usuarios).
 
 ## Seguridad
 

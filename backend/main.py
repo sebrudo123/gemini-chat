@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 import plans
@@ -74,7 +75,22 @@ DISCORD_API = "https://discord.com/api/v10"
 DISCORD_AUTHORIZE_URL = "https://discord.com/oauth2/authorize"
 DISCORD_TOKEN_URL = f"{DISCORD_API}/oauth2/token"
 DISCORD_USER_URL = f"{DISCORD_API}/users/@me"
+
+GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_USER_URL = "https://openidconnect.googleapis.com/v1/userinfo"
+
+MICROSOFT_AUTHORIZE_URL = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize"
+MICROSOFT_TOKEN_URL = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
+MICROSOFT_USER_URL = "https://graph.microsoft.com/v1.0/me"
+
 SESSION_SALT = "core-ia.session.v1"
+
+PROVIDER_COLUMNS = {
+    "discord": "discord_id",
+    "google": "google_id",
+    "microsoft": "microsoft_id",
+}
 
 TRANSIENT_MARKERS = (
     "503",
@@ -202,16 +218,82 @@ def get_current_user(authorization: str | None = Header(default=None)) -> dict[s
     return user
 
 
+def is_admin(profile: dict[str, Any] | None) -> bool:
+    """Indica si el perfil pertenece a un fundador/administrador.
+
+    Los fundadores se identifican por su ID de Discord.
+    """
+    if not profile:
+        return False
+    provider = (profile.get("provider") or "discord").lower()
+    return provider == "discord" and str(profile.get("id")) in settings.founder_ids
+
+
+def require_admin(profile: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    """Dependencia que restringe el acceso a los fundadores."""
+    if not is_admin(profile):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acceso reservado al fundador.",
+        )
+    return profile
+
+
+def delete_user_data(db: Session, user: User) -> None:
+    """Elimina todos los datos asociados a un usuario (y el propio usuario)."""
+    conv_ids = [row[0] for row in db.query(Conversation.id).filter(Conversation.user_id == user.id)]
+    if conv_ids:
+        db.query(Message).filter(Message.conversation_id.in_(conv_ids)).delete(
+            synchronize_session=False
+        )
+    db.query(Conversation).filter(Conversation.user_id == user.id).delete(
+        synchronize_session=False
+    )
+
+    doc_ids = [row[0] for row in db.query(Document.id).filter(Document.user_id == user.id)]
+    if doc_ids:
+        db.query(DocumentChunk).filter(DocumentChunk.document_id.in_(doc_ids)).delete(
+            synchronize_session=False
+        )
+    db.query(Document).filter(Document.user_id == user.id).delete(synchronize_session=False)
+
+    db.query(Usage).filter(Usage.user_id == user.id).delete(synchronize_session=False)
+    db.query(UserSettings).filter(UserSettings.user_id == user.id).delete(
+        synchronize_session=False
+    )
+    db.delete(user)
+    db.commit()
+
+
 def upsert_user(db: Session, profile: dict[str, Any]) -> User:
-    """Crea o actualiza el usuario a partir del perfil de Discord."""
-    user = db.query(User).filter(User.discord_id == profile.get("id")).first()
+    """Crea o actualiza el usuario a partir del perfil de un proveedor OAuth.
+
+    El perfil incluye `provider` (discord/google/microsoft) e `id` (el
+    identificador del usuario en ese proveedor). Si el proveedor no viene
+    indicado se asume Discord (compatibilidad con tokens antiguos).
+    """
+    provider = (profile.get("provider") or "discord").lower()
+    provider_id = profile.get("id")
+    column = PROVIDER_COLUMNS.get(provider)
+
+    user = None
+    if column and provider_id:
+        user = db.query(User).filter(getattr(User, column) == provider_id).first()
+
+    # Vincula cuentas del mismo correo (Google/Microsoft verifican el email).
+    if user is None and profile.get("email"):
+        user = db.query(User).filter(User.email == profile.get("email")).first()
+
     if user is None:
-        user = User(discord_id=profile.get("id"))
+        user = User()
         db.add(user)
-    user.username = profile.get("username")
-    user.display_name = profile.get("display_name")
-    user.email = profile.get("email")
-    user.avatar_url = profile.get("avatar_url")
+
+    if column and provider_id:
+        setattr(user, column, provider_id)
+    user.username = profile.get("username") or user.username
+    user.display_name = profile.get("display_name") or user.display_name
+    user.email = profile.get("email") or user.email
+    user.avatar_url = profile.get("avatar_url") or user.avatar_url
     db.commit()
     db.refresh(user)
     return user
@@ -412,24 +494,97 @@ def health() -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
-# Autenticación con Discord OAuth2
+# Autenticación OAuth2 (Discord, Google, Microsoft)
 # --------------------------------------------------------------------------- #
+
+def _oauth_state(return_to: str | None) -> str:
+    """Crea un `state` firmado con el nonce y la URL de retorno."""
+    return serializer.dumps(
+        {"nonce": secrets.token_urlsafe(16), "return_to": allowed_return_url(return_to)}
+    )
+
+
+def _read_state(state: str | None) -> dict[str, Any]:
+    """Valida y decodifica el `state` firmado del flujo OAuth."""
+    try:
+        return serializer.loads(state or "", max_age=settings.state_max_age)
+    except (BadSignature, SignatureExpired) as exc:
+        raise HTTPException(status_code=400, detail="Estado OAuth inválido o expirado.") from exc
+
+
+def _provider_env(provider: str) -> tuple[str, str, str]:
+    """Devuelve (client_id, client_secret, redirect_uri) del proveedor."""
+    if provider == "discord":
+        return settings.discord_client_id, settings.discord_client_secret, settings.discord_redirect_uri
+    if provider == "google":
+        return settings.google_client_id, settings.google_client_secret, settings.google_redirect_uri
+    if provider == "microsoft":
+        return settings.microsoft_client_id, settings.microsoft_client_secret, settings.microsoft_redirect_uri
+    raise HTTPException(status_code=404, detail="Proveedor de login no soportado.")
+
+
+def enabled_providers() -> list[str]:
+    """Proveedores habilitados y totalmente configurados."""
+    providers: list[str] = []
+    for provider in settings.auth_providers:
+        if provider not in PROVIDER_COLUMNS:
+            continue
+        client_id, client_secret, redirect_uri = _provider_env(provider)
+        if client_id and client_secret and redirect_uri:
+            providers.append(provider)
+    return providers
+
+
+async def _exchange_code(token_url: str, data: dict[str, Any]) -> str:
+    """Intercambia el `code` OAuth por un access token."""
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.post(
+            token_url,
+            data=data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+    if response.status_code != 200:
+        raise HTTPException(status_code=401, detail="No se pudo obtener el token del proveedor.")
+    access_token = response.json().get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=401, detail="El proveedor no devolvió un access token.")
+    return access_token
+
+
+async def _fetch_profile(url: str, access_token: str) -> dict[str, Any]:
+    """Obtiene el perfil del usuario desde el endpoint del proveedor."""
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.get(url, headers={"Authorization": f"Bearer {access_token}"})
+    if response.status_code != 200:
+        raise HTTPException(status_code=401, detail="No se pudo obtener el perfil del proveedor.")
+    return response.json()
+
+
+def _finish_login(db: Session, profile: dict[str, Any], state_data: dict[str, Any]) -> RedirectResponse:
+    """Crea/actualiza el usuario, genera la sesión y redirige al frontend."""
+    upsert_user(db, profile)
+    token = create_session_token(profile)
+    return_url = allowed_return_url(state_data.get("return_to"))
+    return RedirectResponse(f"{return_url}#token={token}")
+
+
+@app.get("/api/auth/providers")
+def auth_providers() -> dict[str, Any]:
+    """Lista de proveedores de login disponibles."""
+    return {"providers": enabled_providers()}
+
 
 @app.get("/api/auth/discord/login")
 def discord_login(return_to: str | None = None) -> RedirectResponse:
     """Redirige al usuario a la pantalla de autorización de Discord."""
     client_id = require_config(settings.discord_client_id, "DISCORD_CLIENT_ID")
     redirect_uri = require_config(settings.discord_redirect_uri, "DISCORD_REDIRECT_URI")
-
-    state = serializer.dumps(
-        {"nonce": secrets.token_urlsafe(16), "return_to": allowed_return_url(return_to)}
-    )
     params = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
         "scope": "identify email",
-        "state": state,
+        "state": _oauth_state(return_to),
         "prompt": "consent",
     }
     return RedirectResponse(f"{DISCORD_AUTHORIZE_URL}?{urlencode(params)}")
@@ -445,61 +600,150 @@ async def discord_callback(
     """Intercambia el `code`, obtiene el perfil y crea la sesión."""
     if error or not code:
         return RedirectResponse(f"{resolve_return_url(state)}?auth=error")
-
-    try:
-        state_data = serializer.loads(state or "", max_age=settings.state_max_age)
-    except (BadSignature, SignatureExpired) as exc:
-        raise HTTPException(status_code=400, detail="Estado OAuth inválido o expirado.") from exc
-
+    state_data = _read_state(state)
     client_id = require_config(settings.discord_client_id, "DISCORD_CLIENT_ID")
     client_secret = require_config(settings.discord_client_secret, "DISCORD_CLIENT_SECRET")
     redirect_uri = require_config(settings.discord_redirect_uri, "DISCORD_REDIRECT_URI")
 
-    async with httpx.AsyncClient(timeout=15) as client:
-        token_resp = await client.post(
-            DISCORD_TOKEN_URL,
-            data={
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": redirect_uri,
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        if token_resp.status_code != 200:
-            raise HTTPException(status_code=401, detail="No se pudo obtener el token de Discord.")
-
-        access_token = token_resp.json().get("access_token")
-        if not access_token:
-            raise HTTPException(status_code=401, detail="Discord no devolvió un access token.")
-
-        user_resp = await client.get(
-            DISCORD_USER_URL,
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        if user_resp.status_code != 200:
-            raise HTTPException(status_code=401, detail="No se pudo obtener el perfil de Discord.")
-        discord_user = user_resp.json()
-
+    access_token = await _exchange_code(
+        DISCORD_TOKEN_URL,
+        {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+        },
+    )
+    raw = await _fetch_profile(DISCORD_USER_URL, access_token)
     profile = {
-        "id": discord_user.get("id"),
-        "username": discord_user.get("username"),
-        "display_name": discord_user.get("global_name") or discord_user.get("username"),
-        "email": discord_user.get("email"),
-        "avatar_url": build_avatar_url(discord_user),
+        "provider": "discord",
+        "id": raw.get("id"),
+        "username": raw.get("username"),
+        "display_name": raw.get("global_name") or raw.get("username"),
+        "email": raw.get("email"),
+        "avatar_url": build_avatar_url(raw),
     }
-    upsert_user(db, profile)
+    return _finish_login(db, profile, state_data)
 
-    token = create_session_token(profile)
-    return_url = allowed_return_url(state_data.get("return_to"))
-    return RedirectResponse(f"{return_url}#token={token}")
+
+@app.get("/api/auth/google/login")
+def google_login(return_to: str | None = None) -> RedirectResponse:
+    """Redirige al usuario a la pantalla de autorización de Google."""
+    client_id = require_config(settings.google_client_id, "GOOGLE_CLIENT_ID")
+    redirect_uri = require_config(settings.google_redirect_uri, "GOOGLE_REDIRECT_URI")
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": _oauth_state(return_to),
+        "prompt": "consent",
+    }
+    return RedirectResponse(f"{GOOGLE_AUTHORIZE_URL}?{urlencode(params)}")
+
+
+@app.get("/api/auth/google/callback")
+async def google_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Callback OAuth de Google."""
+    if error or not code:
+        return RedirectResponse(f"{resolve_return_url(state)}?auth=error")
+    state_data = _read_state(state)
+    client_id = require_config(settings.google_client_id, "GOOGLE_CLIENT_ID")
+    client_secret = require_config(settings.google_client_secret, "GOOGLE_CLIENT_SECRET")
+    redirect_uri = require_config(settings.google_redirect_uri, "GOOGLE_REDIRECT_URI")
+
+    access_token = await _exchange_code(
+        GOOGLE_TOKEN_URL,
+        {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+        },
+    )
+    raw = await _fetch_profile(GOOGLE_USER_URL, access_token)
+    profile = {
+        "provider": "google",
+        "id": raw.get("sub"),
+        "username": raw.get("email"),
+        "display_name": raw.get("name"),
+        "email": raw.get("email"),
+        "avatar_url": raw.get("picture"),
+    }
+    return _finish_login(db, profile, state_data)
+
+
+@app.get("/api/auth/microsoft/login")
+def microsoft_login(return_to: str | None = None) -> RedirectResponse:
+    """Redirige al usuario a la pantalla de autorización de Microsoft."""
+    client_id = require_config(settings.microsoft_client_id, "MICROSOFT_CLIENT_ID")
+    redirect_uri = require_config(settings.microsoft_redirect_uri, "MICROSOFT_REDIRECT_URI")
+    tenant = settings.microsoft_tenant or "common"
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "response_mode": "query",
+        "scope": "openid email profile User.Read",
+        "state": _oauth_state(return_to),
+        "prompt": "consent",
+    }
+    return RedirectResponse(f"{MICROSOFT_AUTHORIZE_URL.format(tenant=tenant)}?{urlencode(params)}")
+
+
+@app.get("/api/auth/microsoft/callback")
+async def microsoft_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Callback OAuth de Microsoft (Microsoft Entra ID)."""
+    if error or not code:
+        return RedirectResponse(f"{resolve_return_url(state)}?auth=error")
+    state_data = _read_state(state)
+    client_id = require_config(settings.microsoft_client_id, "MICROSOFT_CLIENT_ID")
+    client_secret = require_config(settings.microsoft_client_secret, "MICROSOFT_CLIENT_SECRET")
+    redirect_uri = require_config(settings.microsoft_redirect_uri, "MICROSOFT_REDIRECT_URI")
+    tenant = settings.microsoft_tenant or "common"
+
+    access_token = await _exchange_code(
+        MICROSOFT_TOKEN_URL.format(tenant=tenant),
+        {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "scope": "openid email profile User.Read",
+        },
+    )
+    raw = await _fetch_profile(MICROSOFT_USER_URL, access_token)
+    email = raw.get("mail") or raw.get("userPrincipalName")
+    profile = {
+        "provider": "microsoft",
+        "id": raw.get("id"),
+        "username": email,
+        "display_name": raw.get("displayName"),
+        "email": email,
+        "avatar_url": None,
+    }
+    return _finish_login(db, profile, state_data)
 
 
 @app.get("/api/auth/me", response_model=UserResponse)
 def auth_me(user: dict[str, Any] = Depends(get_current_user)) -> UserResponse:
     """Devuelve el perfil del usuario autenticado."""
-    return UserResponse(user=user)
+    profile = dict(user)
+    profile["is_admin"] = is_admin(user)
+    return UserResponse(user=profile)
 
 
 @app.post("/api/auth/logout")
@@ -922,27 +1166,105 @@ def delete_account(
 ) -> dict[str, bool]:
     """Elimina la cuenta del usuario y todos sus datos."""
     user = upsert_user(db, profile)
+    delete_user_data(db, user)
+    return {"ok": True}
 
-    conv_ids = [row[0] for row in db.query(Conversation.id).filter(Conversation.user_id == user.id)]
-    if conv_ids:
-        db.query(Message).filter(Message.conversation_id.in_(conv_ids)).delete(
-            synchronize_session=False
-        )
-    db.query(Conversation).filter(Conversation.user_id == user.id).delete(
-        synchronize_session=False
-    )
 
-    doc_ids = [row[0] for row in db.query(Document.id).filter(Document.user_id == user.id)]
-    if doc_ids:
-        db.query(DocumentChunk).filter(DocumentChunk.document_id.in_(doc_ids)).delete(
-            synchronize_session=False
-        )
-    db.query(Document).filter(Document.user_id == user.id).delete(synchronize_session=False)
+# --------------------------------------------------------------------------- #
+# Administración (reservado al fundador)
+# --------------------------------------------------------------------------- #
 
-    db.query(Usage).filter(Usage.user_id == user.id).delete(synchronize_session=False)
-    db.query(UserSettings).filter(UserSettings.user_id == user.id).delete(
-        synchronize_session=False
-    )
-    db.delete(user)
+
+class AdminUserUpdate(BaseModel):
+    """Cambios que el administrador puede aplicar a un usuario."""
+
+    plan: str | None = Field(default=None, pattern="^(free|pro|enterprise)$")
+
+
+def _serialize_admin_user(db: Session, user: User) -> dict[str, Any]:
+    """Representación de un usuario para el panel de administración."""
+    return {
+        "id": user.id,
+        "discord_id": user.discord_id,
+        "username": user.username,
+        "display_name": user.display_name,
+        "avatar_url": user.avatar_url,
+        "plan": user.plan,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "is_founder": user.discord_id in settings.founder_ids,
+        "conversations": db.query(func.count(Conversation.id))
+        .filter(Conversation.user_id == user.id)
+        .scalar()
+        or 0,
+        "documents": db.query(func.count(Document.id))
+        .filter(Document.user_id == user.id)
+        .scalar()
+        or 0,
+    }
+
+
+@app.get("/api/admin/stats")
+def admin_stats(
+    _: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Métricas globales de la plataforma."""
+    day = today_str()
+    today_rows = db.query(Usage).filter(Usage.day == day).all()
+    plan_rows = db.query(User.plan, func.count(User.id)).group_by(User.plan).all()
+    return {
+        "users": db.query(func.count(User.id)).scalar() or 0,
+        "conversations": db.query(func.count(Conversation.id)).scalar() or 0,
+        "messages": db.query(func.count(Message.id)).scalar() or 0,
+        "documents": db.query(func.count(Document.id)).scalar() or 0,
+        "messages_today": sum(row.messages for row in today_rows),
+        "images_today": sum(row.images for row in today_rows),
+        "active_today": sum(1 for row in today_rows if row.messages or row.images),
+        "plan_breakdown": {plan or "free": count for plan, count in plan_rows},
+        "founders": settings.founder_ids,
+        "day": day,
+    }
+
+
+@app.get("/api/admin/users")
+def admin_users(
+    _: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Lista de todos los usuarios registrados."""
+    users = db.query(User).order_by(User.created_at.desc()).all()
+    return {"users": [_serialize_admin_user(db, user) for user in users]}
+
+
+@app.patch("/api/admin/users/{user_id}")
+def admin_update_user(
+    user_id: int,
+    payload: AdminUserUpdate,
+    _: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Cambia el plan de un usuario."""
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+    if payload.plan is not None:
+        user.plan = payload.plan
     db.commit()
+    db.refresh(user)
+    return {"user": _serialize_admin_user(db, user)}
+
+
+@app.delete("/api/admin/users/{user_id}")
+def admin_delete_user(
+    user_id: int,
+    _: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    """Elimina un usuario y todos sus datos (los fundadores están protegidos)."""
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+    if user.discord_id in settings.founder_ids:
+        raise HTTPException(status_code=400, detail="No puedes eliminar a un fundador.")
+    delete_user_data(db, user)
     return {"ok": True}
