@@ -336,6 +336,182 @@ function renderChat() {
   scrollToBottom();
 }
 
+/* ------------------------------------------------------------------ */
+/* Markdown mínimo (seguro, sin dependencias)                          */
+/* ------------------------------------------------------------------ */
+
+function appendInline(parent, text) {
+  const parts = text.split(/(`[^`]+`)/g);
+  parts.forEach((part) => {
+    if (part.length > 1 && part.startsWith("`") && part.endsWith("`")) {
+      const code = document.createElement("code");
+      code.className = "inline-code";
+      code.textContent = part.slice(1, -1);
+      parent.appendChild(code);
+    } else {
+      appendFormatted(parent, part);
+    }
+  });
+}
+
+function appendFormatted(parent, text) {
+  const re = /\*\*([^*]+)\*\*|\*([^*]+)\*|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  let last = 0;
+  let match;
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > last) {
+      parent.appendChild(document.createTextNode(text.slice(last, match.index)));
+    }
+    if (match[1] !== undefined) {
+      const strong = document.createElement("strong");
+      strong.textContent = match[1];
+      parent.appendChild(strong);
+    } else if (match[2] !== undefined) {
+      const em = document.createElement("em");
+      em.textContent = match[2];
+      parent.appendChild(em);
+    } else {
+      const a = document.createElement("a");
+      a.href = match[3];
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = match[4];
+      parent.appendChild(a);
+    }
+    last = re.lastIndex;
+  }
+  if (last < text.length) {
+    parent.appendChild(document.createTextNode(text.slice(last)));
+  }
+}
+
+function buildCodeBlock(lang, code) {
+  const wrap = document.createElement("div");
+  wrap.className = "code-block";
+
+  const head = document.createElement("div");
+  head.className = "code-head";
+  const label = document.createElement("span");
+  label.textContent = lang || "code";
+  const copy = document.createElement("button");
+  copy.className = "code-copy";
+  copy.type = "button";
+  copy.textContent = "Copiar";
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      copy.textContent = "Copiado";
+      setTimeout(() => {
+        copy.textContent = "Copiar";
+      }, 1500);
+    } catch (_) {
+      copy.textContent = "Error";
+    }
+  });
+  head.append(label, copy);
+
+  const pre = document.createElement("pre");
+  const codeEl = document.createElement("code");
+  codeEl.textContent = code;
+  pre.appendChild(codeEl);
+
+  wrap.append(head, pre);
+  return wrap;
+}
+
+function buildTextBlock(text) {
+  const block = document.createElement("div");
+  block.className = "md";
+  const lines = text.split("\n");
+  let para = [];
+  let list = null;
+  let listType = null;
+
+  const flushPara = () => {
+    if (!para.length) return;
+    const p = document.createElement("div");
+    p.className = "md-p";
+    para.forEach((line, index) => {
+      if (index > 0) p.appendChild(document.createElement("br"));
+      appendInline(p, line);
+    });
+    block.appendChild(p);
+    para = [];
+  };
+  const flushList = () => {
+    list = null;
+    listType = null;
+  };
+
+  lines.forEach((line) => {
+    const heading = line.match(/^(#{1,4})\s+(.*)$/);
+    const ul = line.match(/^\s*[-*+]\s+(.*)$/);
+    const ol = line.match(/^\s*\d+[.)]\s+(.*)$/);
+
+    if (heading) {
+      flushPara();
+      flushList();
+      const el = document.createElement("div");
+      el.className = `md-h md-h${heading[1].length}`;
+      appendInline(el, heading[2]);
+      block.appendChild(el);
+      return;
+    }
+    if (ul) {
+      flushPara();
+      if (listType !== "ul") {
+        flushList();
+        list = document.createElement("ul");
+        listType = "ul";
+        block.appendChild(list);
+      }
+      const li = document.createElement("li");
+      appendInline(li, ul[1]);
+      list.appendChild(li);
+      return;
+    }
+    if (ol) {
+      flushPara();
+      if (listType !== "ol") {
+        flushList();
+        list = document.createElement("ol");
+        listType = "ol";
+        block.appendChild(list);
+      }
+      const li = document.createElement("li");
+      appendInline(li, ol[1]);
+      list.appendChild(li);
+      return;
+    }
+    if (line.trim() === "") {
+      flushPara();
+      flushList();
+      return;
+    }
+    flushList();
+    para.push(line);
+  });
+
+  flushPara();
+  return block;
+}
+
+function renderRich(container, text) {
+  let last = 0;
+  const re = /```([^\n`]*)\n?([\s\S]*?)```/g;
+  let match;
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > last) {
+      container.appendChild(buildTextBlock(text.slice(last, match.index)));
+    }
+    container.appendChild(buildCodeBlock(match[1].trim(), match[2]));
+    last = re.lastIndex;
+  }
+  if (last < text.length) {
+    container.appendChild(buildTextBlock(text.slice(last)));
+  }
+}
+
 function buildMessage(role, text, image) {
   const row = document.createElement("div");
   row.className = `msg ${role}`;
@@ -349,7 +525,14 @@ function buildMessage(role, text, image) {
 
   const bubble = document.createElement("div");
   bubble.className = "bubble";
-  if (text) bubble.textContent = text;
+  if (text) {
+    if (role === "bot") {
+      renderRich(bubble, text);
+    } else {
+      const block = buildTextBlock(text);
+      bubble.appendChild(block);
+    }
+  }
   if (image) {
     const img = document.createElement("img");
     img.src = image;
