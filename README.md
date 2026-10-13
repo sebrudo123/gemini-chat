@@ -33,7 +33,7 @@ Copia `backend/.env.example` a `backend/.env` y rellena:
 ```
 AI_API_KEY=...            # https://aistudio.google.com/apikey
 AI_MODEL=gemini-3.8-flash
-AI_MODEL_FALLBACKS=gemini-3.7-flash,gemini-3.5-flash,gemini-flash-latest
+AI_MODEL_FALLBACKS=gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.7-flash,gemini-flash-latest
 AI_RETRIES=2
 SESSION_SECRET=...        # cadena aleatoria larga
 DISCORD_CLIENT_ID=...
