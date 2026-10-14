@@ -1,0 +1,49 @@
+plugins {
+    id "com.android.application"
+}
+
+def keystorePath = System.getenv("KEYSTORE_FILE")
+def hasKeystore = keystorePath != null && file(keystorePath).exists()
+
+android {
+    namespace "com.coreia.app"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.coreia.app"
+        minSdk 24
+        targetSdk 34
+        versionCode System.getenv("VERSION_CODE") != null ? System.getenv("VERSION_CODE").toInteger() : 1
+        versionName System.getenv("VERSION_NAME") != null ? System.getenv("VERSION_NAME") : "1.0.0"
+    }
+
+    signingConfigs {
+        release {
+            if (hasKeystore) {
+                storeFile file(keystorePath)
+                storePassword System.getenv("KEYSTORE_PASSWORD")
+                keyAlias System.getenv("KEY_ALIAS")
+                keyPassword System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            shrinkResources false
+            signingConfig hasKeystore ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation "androidx.appcompat:appcompat:1.7.0"
+    implementation "androidx.webkit:webkit:1.11.0"
+    implementation "androidx.core:core:1.13.1"
+}

@@ -36,16 +36,11 @@ class Settings:
         self.discord_client_secret = os.environ.get("DISCORD_CLIENT_SECRET", "")
         self.discord_redirect_uri = os.environ.get("DISCORD_REDIRECT_URI", "")
 
-        # --- Google OAuth2 ---
-        self.google_client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
-        self.google_client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "")
-        self.google_redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI", "")
-
         # --- Proveedores de login OAuth habilitados ---
         # El login por correo/contraseña está siempre disponible.
         self.auth_providers = [
             provider.strip().lower()
-            for provider in os.environ.get("AUTH_PROVIDERS", "discord,google").split(",")
+            for provider in os.environ.get("AUTH_PROVIDERS", "discord").split(",")
             if provider.strip()
         ]
 
@@ -75,6 +70,15 @@ class Settings:
         self.sentry_dsn = os.environ.get("SENTRY_DSN", "")
         self.environment = os.environ.get("ENVIRONMENT", "production")
         self.rate_limit = os.environ.get("RATE_LIMIT", "30/minute")
+        self.metrics_ip_allowlist = [
+            ip.strip() for ip in os.environ.get("METRICS_IP_ALLOWLIST", "").split(",") if ip.strip()
+        ]
+        self.metrics_require_admin = os.environ.get("METRICS_REQUIRE_ADMIN", "false").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        self.backend_url = os.environ.get("BACKEND_URL", "http://localhost:8000").rstrip("/")
 
         if not self.session_secret:
             raise RuntimeError("Debes definir SESSION_SECRET en el entorno.")

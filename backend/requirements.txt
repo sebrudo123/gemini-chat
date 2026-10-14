@@ -10,3 +10,5 @@ psycopg[binary]
 redis
 slowapi
 sentry-sdk[fastapi]
+alembic
+prometheus-client

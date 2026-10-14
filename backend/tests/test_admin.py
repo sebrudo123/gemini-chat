@@ -85,20 +85,73 @@ def test_admin_stats_and_user_management(client, monkeypatch):
     assert all(user["discord_id"] != member_id for user in remaining)
 
 
+def test_admin_can_ban_and_suspend_user(client):
+    founder = auth(FOUNDER_ID)
+    member_id = "800000000000000004"
+    member = auth(member_id)
+
+    client.post("/api/chat", json={"message": "hola"}, headers=member)
+    users = client.get("/api/admin/users", headers=founder).json()["users"]
+    target = next(user for user in users if user["discord_id"] == member_id)
+
+    banned = client.patch(
+        f"/api/admin/users/{target['id']}", json={"is_banned": True}, headers=founder
+    )
+    assert banned.status_code == 200
+    assert banned.json()["user"]["is_banned"] is True
+
+    blocked = client.get("/api/auth/me", headers=member)
+    assert blocked.status_code == 403
+
+    client.patch(
+        f"/api/admin/users/{target['id']}",
+        json={"is_banned": False, "is_active": True},
+        headers=founder,
+    )
+    client.delete(f"/api/admin/users/{target['id']}", headers=founder)
+
+
+def test_admin_audit_flags_and_notices(client):
+    founder = auth(FOUNDER_ID)
+
+    flags = client.get("/api/admin/flags", headers=founder)
+    assert flags.status_code == 200
+    keys = {flag["key"] for flag in flags.json()["flags"]}
+    assert {"chat", "image_generation", "rag"} <= keys
+
+    toggled = client.patch(
+        "/api/admin/flags/image_generation", json={"enabled": False}, headers=founder
+    )
+    assert toggled.status_code == 200
+    assert toggled.json()["flag"]["enabled"] is False
+    assert client.get("/api/config").json()["flags"]["image_generation"] is False
+
+    created = client.post(
+        "/api/admin/notices",
+        json={"message": "Mantenimiento programado", "level": "warning"},
+        headers=founder,
+    )
+    assert created.status_code == 200
+    notice_id = created.json()["notice"]["id"]
+
+    public = client.get("/api/notices").json()["notices"]
+    assert any(notice["id"] == notice_id for notice in public)
+
+    audit = client.get("/api/admin/audit", headers=founder).json()["logs"]
+    actions = {entry["action"] for entry in audit}
+    assert "flag.update" in actions
+    assert "notice.create" in actions
+
+    deleted = client.delete(f"/api/admin/notices/{notice_id}", headers=founder)
+    assert deleted.status_code == 200
+
+    client.patch("/api/admin/flags/image_generation", json={"enabled": True}, headers=founder)
+
+
 def test_providers_endpoint_returns_configured(client):
     data = client.get("/api/auth/providers").json()
     assert "discord" in data["providers"]
-
-
-def test_unconfigured_provider_returns_503(client):
-    assert client.get("/api/auth/google/login", follow_redirects=False).status_code == 503
-
-
-def test_google_provider_user_can_chat(client, monkeypatch):
-    monkeypatch.setattr(main, "generate_reply", lambda message, preferred_model=None: "ok")
-    headers = auth("google-user-1", provider="google")
-    response = client.post("/api/chat", json={"message": "hola"}, headers=headers)
-    assert response.status_code == 200
+    assert "google" not in data["providers"]
 
 
 def test_email_register_and_login(client):

@@ -1,0 +1,20 @@
+{
+  "name": "Core IA",
+  "short_name": "Core IA",
+  "description": "Asistente de inteligencia artificial con historial en la nube y base de conocimiento.",
+  "lang": "es",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#212121",
+  "theme_color": "#212121",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

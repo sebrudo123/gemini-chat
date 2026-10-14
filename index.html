@@ -5,6 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="Core IA - Asistente de inteligencia artificial" />
   <meta name="theme-color" content="#212121" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="apple-touch-icon" href="favicon.svg" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Core IA" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" crossorigin="anonymous" />
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" crossorigin="anonymous"></script>
   <title>Core IA</title>
   <script>
     try {
@@ -444,6 +453,30 @@
       border: 1px solid var(--border);
     }
 
+    .hidden-flag { display: none !important; }
+
+    .chat-scroll.dragging {
+      outline: 2px dashed var(--accent);
+      outline-offset: -12px;
+      background: var(--accent-soft);
+    }
+
+    .md table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13.5px;
+      margin: 4px 0;
+      overflow: hidden;
+      border-radius: 10px;
+    }
+    .md th, .md td {
+      border: 1px solid var(--border);
+      padding: 7px 10px;
+      text-align: left;
+    }
+    .md th { background: var(--surface); font-weight: 600; }
+    .md .katex { font-size: 1.05em; }
+
     /* ================= Markdown ================= */
     .md { display: flex; flex-direction: column; gap: 10px; }
     .md-p { white-space: pre-wrap; }
@@ -825,11 +858,11 @@
       gap: 10px;
       width: 100%;
     }
-    .auth-login.provider-google { background: #fff; color: #1f1f1f; }
-    .auth-login.provider-google:hover { filter: brightness(1.06); }
+    .auth-login.provider-discord { background: #5865f2; color: #fff; }
+    .auth-login.provider-discord:hover { filter: brightness(1.08); }
     .auth-providers-side { display: flex; flex-direction: column; gap: 8px; width: 100%; }
-    .login-btn.provider-google { background: #fff; color: #1f1f1f; }
-    .login-btn.provider-google:hover { filter: brightness(1.06); }
+    .login-btn.provider-discord { background: #5865f2; color: #fff; }
+    .login-btn.provider-discord:hover { filter: brightness(1.08); }
     .auth-divider {
       display: flex; align-items: center; gap: 10px;
       width: 100%; max-width: 320px;
@@ -1034,6 +1067,129 @@
     .admin-del:hover { background: rgba(248, 113, 113, .12); }
     .admin-del:disabled { opacity: .35; cursor: not-allowed; }
 
+    /* ================= Avisos globales ================= */
+    .notice-banner {
+      display: none;
+      margin: 0 16px;
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 13.5px;
+      line-height: 1.45;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+    }
+    .notice-banner.show { display: flex; align-items: center; gap: 10px; animation: fadeUp .3s ease both; }
+    .notice-banner .notice-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--accent); }
+    .notice-banner .notice-text { flex: 1; }
+    .notice-banner .notice-close {
+      background: transparent; border: none; color: var(--muted);
+      font-size: 15px; padding: 2px 6px; border-radius: 6px; cursor: pointer;
+    }
+    .notice-banner .notice-close:hover { background: var(--surface-hover); color: var(--text); }
+    .notice-banner.level-warning { border-color: rgba(249, 115, 22, .5); background: rgba(249, 115, 22, .1); }
+    .notice-banner.level-warning .notice-dot { background: #f97316; }
+    .notice-banner.level-success { border-color: rgba(34, 197, 94, .5); background: rgba(34, 197, 94, .1); }
+    .notice-banner.level-success .notice-dot { background: #22c55e; }
+
+    /* ================= Admin (pestañas) ================= */
+    .admin-tabs {
+      display: flex; gap: 4px; overflow-x: auto;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 6px;
+    }
+    .admin-tab {
+      background: transparent; border: none; color: var(--muted);
+      font-size: 13px; font-weight: 500; padding: 8px 12px;
+      border-radius: 9px; white-space: nowrap; cursor: pointer;
+      transition: background .15s, color .15s;
+    }
+    .admin-tab:hover { background: var(--surface-hover); color: var(--text); }
+    .admin-tab.active { background: var(--accent-soft); color: var(--accent); }
+    .admin-pane { display: none; flex-direction: column; gap: 12px; }
+    .admin-pane.active { display: flex; }
+
+    .admin-chart {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      display: flex;
+      align-items: flex-end;
+      gap: 6px;
+      height: 160px;
+    }
+    .admin-chart .bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; justify-content: flex-end; }
+    .admin-chart .bar {
+      width: 100%; max-width: 26px;
+      background: var(--grad);
+      border-radius: 6px 6px 0 0;
+      min-height: 3px;
+      transition: height .4s ease;
+    }
+    .admin-chart .bar-label { font-size: 10px; color: var(--faint); }
+    .admin-chart .chart-empty { color: var(--muted); font-size: 13px; margin: auto; }
+
+    .admin-flags { display: flex; flex-direction: column; gap: 8px; }
+    .admin-flag {
+      display: flex; align-items: center; gap: 12px;
+      padding: 11px 13px; background: var(--bg);
+      border: 1px solid var(--border); border-radius: 12px;
+    }
+    .admin-flag .flag-info { flex: 1; min-width: 0; }
+    .admin-flag .flag-key { font-size: 13.5px; font-weight: 600; }
+    .admin-flag .flag-desc { font-size: 12px; color: var(--muted); }
+    .switch { position: relative; width: 42px; height: 24px; flex-shrink: 0; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .switch .slider {
+      position: absolute; inset: 0; cursor: pointer;
+      background: var(--border-strong); border-radius: 999px; transition: background .2s;
+    }
+    .switch .slider::before {
+      content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px;
+      background: #fff; border-radius: 50%; transition: transform .2s;
+    }
+    .switch input:checked + .slider { background: var(--accent); }
+    .switch input:checked + .slider::before { transform: translateX(18px); }
+
+    .admin-notice-form { display: flex; gap: 8px; flex-wrap: wrap; }
+    .admin-notice-form input {
+      flex: 1; min-width: 180px;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 11px;
+      color: var(--text); font-family: inherit; font-size: 14px; padding: 11px 13px; outline: none;
+    }
+    .admin-notice-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    .admin-notice-form select {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 11px;
+      color: var(--text); font-family: inherit; font-size: 14px; padding: 11px 13px; outline: none;
+    }
+    .admin-notices, .admin-audit { display: flex; flex-direction: column; gap: 7px; max-height: 40vh; overflow-y: auto; }
+    .admin-notice, .admin-audit-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 13px; background: var(--bg);
+      border: 1px solid var(--border); border-radius: 11px; font-size: 13px;
+    }
+    .admin-notice .notice-body { flex: 1; min-width: 0; }
+    .admin-notice .notice-meta { font-size: 11.5px; color: var(--muted); }
+    .admin-audit-row .audit-action { font-weight: 600; }
+    .admin-audit-row .audit-detail { color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .admin-audit-row .audit-time { font-size: 11.5px; color: var(--faint); flex-shrink: 0; }
+    .admin-badge {
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+      padding: 2px 7px; border-radius: 6px; flex-shrink: 0;
+    }
+    .admin-badge.banned { background: rgba(248,113,113,.16); color: var(--danger); }
+    .admin-badge.suspended { background: rgba(249,115,22,.16); color: #f97316; }
+    .admin-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+    .admin-mini {
+      border: 1px solid var(--border); background: transparent; color: var(--muted);
+      font-size: 12px; padding: 5px 9px; border-radius: 8px; cursor: pointer;
+      transition: background .15s, color .15s, border-color .15s;
+    }
+    .admin-mini:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border-strong); }
+    .admin-mini.danger { color: var(--danger); border-color: rgba(248,113,113,.4); }
+    .admin-mini.danger:hover { background: rgba(248,113,113,.12); }
+
     /* ================= Responsive ================= */
     @media (max-width: 820px) {
       .sidebar {
@@ -1131,6 +1287,8 @@
         </button>
       </header>
 
+      <div class="notice-banner" id="notice-banner" role="status" aria-live="polite"></div>
+
       <div class="chat-scroll" id="chat-scroll">
         <div class="chat-inner" id="chat"></div>
         <div class="welcome" id="welcome">
@@ -1210,6 +1368,7 @@
         <input type="checkbox" id="settings-rag" />
         <span>Usar mi base de conocimiento (RAG) al responder</span>
       </label>
+      <button class="admin-mini" id="settings-notify" type="button">Activar notificaciones de respuesta</button>
       <button class="primary-btn" id="settings-save" type="button">Guardar cambios</button>
       <button class="danger-btn" id="delete-account" type="button">Eliminar mi cuenta</button>
     </div>
@@ -1233,9 +1392,48 @@
         <h2>Panel de administración</h2>
         <button class="icon-btn" id="admin-close" type="button" aria-label="Cerrar">✕</button>
       </div>
-      <p class="modal-sub">Métricas globales y gestión de usuarios (solo fundador).</p>
-      <div class="admin-stats" id="admin-stats"></div>
-      <div class="admin-users" id="admin-users"></div>
+      <p class="modal-sub">Métricas globales, usuarios, feature flags y avisos (solo fundador).</p>
+
+      <div class="admin-tabs" id="admin-tabs">
+        <button class="admin-tab active" data-tab="overview" type="button">Resumen</button>
+        <button class="admin-tab" data-tab="users" type="button">Usuarios</button>
+        <button class="admin-tab" data-tab="flags" type="button">Funciones</button>
+        <button class="admin-tab" data-tab="notices" type="button">Avisos</button>
+        <button class="admin-tab" data-tab="audit" type="button">Auditoría</button>
+      </div>
+
+      <div class="admin-pane active" data-pane="overview">
+        <div class="admin-stats" id="admin-stats"></div>
+        <div class="admin-chart" id="admin-chart"></div>
+      </div>
+
+      <div class="admin-pane" data-pane="users">
+        <div class="admin-users" id="admin-users"></div>
+      </div>
+
+      <div class="admin-pane" data-pane="flags">
+        <p class="modal-sub">Activa o desactiva funciones de la plataforma.</p>
+        <div class="admin-flags" id="admin-flags"></div>
+      </div>
+
+      <div class="admin-pane" data-pane="notices">
+        <p class="modal-sub">Publica un aviso visible para todos los usuarios.</p>
+        <div class="admin-notice-form">
+          <input id="notice-input" type="text" maxlength="500" placeholder="Mensaje del aviso..." />
+          <select id="notice-level">
+            <option value="info">Información</option>
+            <option value="warning">Aviso</option>
+            <option value="success">Novedad</option>
+          </select>
+          <button class="primary-btn" id="notice-create" type="button">Publicar</button>
+        </div>
+        <div class="admin-notices" id="admin-notices"></div>
+      </div>
+
+      <div class="admin-pane" data-pane="audit">
+        <p class="modal-sub">Últimas acciones administrativas.</p>
+        <div class="admin-audit" id="admin-audit"></div>
+      </div>
     </div>
   </div>
 

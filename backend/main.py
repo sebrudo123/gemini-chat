@@ -14,10 +14,12 @@ Consulta el README para las variables de entorno.
 import base64
 import hashlib
 import hmac
+import os
 import re
 import secrets
 import time
 from collections.abc import AsyncIterator
+from pathlib import Path
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
@@ -26,7 +28,7 @@ from urllib.parse import urlencode, urlparse
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from google import genai
 from google.genai import types
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -34,19 +36,29 @@ from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
-from sqlalchemy import func
+from sqlalchemy import func, text as sa_text
 from sqlalchemy.orm import Session
+
+try:
+    from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+
+    PROMETHEUS_AVAILABLE = True
+except Exception:  # noqa: BLE001 - métricas opcionales
+    PROMETHEUS_AVAILABLE = False
 
 import plans
 import rag
 from cache import is_enabled as cache_is_enabled
 from config import settings
-from database import get_db, init_db
+from database import SessionLocal, get_db, init_db
 from models import (
+    AuditLog,
     Conversation,
     Document,
     DocumentChunk,
+    FeatureFlag,
     Message,
+    Notice,
     Usage,
     User,
     UserSettings,
@@ -79,15 +91,10 @@ DISCORD_AUTHORIZE_URL = "https://discord.com/oauth2/authorize"
 DISCORD_TOKEN_URL = f"{DISCORD_API}/oauth2/token"
 DISCORD_USER_URL = f"{DISCORD_API}/users/@me"
 
-GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-GOOGLE_USER_URL = "https://openidconnect.googleapis.com/v1/userinfo"
-
 SESSION_SALT = "core-ia.session.v1"
 
 PROVIDER_COLUMNS = {
     "discord": "discord_id",
-    "google": "google_id",
 }
 
 TRANSIENT_MARKERS = (
@@ -123,6 +130,11 @@ limiter = Limiter(key_func=rate_limit_key, storage_uri=settings.redis_url or "me
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     init_db()
+    db = SessionLocal()
+    try:
+        seed_flags(db)
+    finally:
+        db.close()
     yield
 
 
@@ -137,6 +149,32 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+
+# --------------------------------------------------------------------------- #
+# Métricas Prometheus (opcionales)
+# --------------------------------------------------------------------------- #
+
+if PROMETHEUS_AVAILABLE:
+    REQUEST_COUNT = Counter(
+        "coreia_http_requests_total",
+        "Número total de peticiones HTTP.",
+        ["method", "path", "status"],
+    )
+    REQUEST_LATENCY = Histogram(
+        "coreia_http_request_duration_seconds",
+        "Duración de las peticiones HTTP en segundos.",
+        ["method", "path"],
+    )
+
+    @app.middleware("http")
+    async def _prometheus_middleware(request: Request, call_next):
+        start = time.perf_counter()
+        response = await call_next(request)
+        path = request.scope.get("route").path if request.scope.get("route") else request.url.path
+        REQUEST_COUNT.labels(request.method, path, str(response.status_code)).inc()
+        REQUEST_LATENCY.labels(request.method, path).observe(time.perf_counter() - start)
+        return response
 
 
 # --------------------------------------------------------------------------- #
@@ -287,7 +325,7 @@ def delete_user_data(db: Session, user: User) -> None:
 def upsert_user(db: Session, profile: dict[str, Any]) -> User:
     """Crea o actualiza el usuario a partir del perfil de un proveedor OAuth.
 
-    El perfil incluye `provider` (discord/google/email) e `id` (el
+    El perfil incluye `provider` (discord/email) e `id` (el
     identificador del usuario en ese proveedor). Si el proveedor no viene
     indicado se asume Discord (compatibilidad con tokens antiguos).
     """
@@ -299,7 +337,7 @@ def upsert_user(db: Session, profile: dict[str, Any]) -> User:
     if column and provider_id:
         user = db.query(User).filter(getattr(User, column) == provider_id).first()
 
-    # Vincula cuentas del mismo correo (Google verifica el email).
+    # Vincula cuentas del mismo correo.
     if user is None and profile.get("email"):
         user = db.query(User).filter(User.email == profile.get("email")).first()
 
@@ -315,7 +353,22 @@ def upsert_user(db: Session, profile: dict[str, Any]) -> User:
     user.avatar_url = profile.get("avatar_url") or user.avatar_url
     db.commit()
     db.refresh(user)
+    _ensure_user_allowed(user)
     return user
+
+
+def _ensure_user_allowed(user: User) -> None:
+    """Bloquea el acceso de usuarios suspendidos o baneados."""
+    if user.is_banned:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tu cuenta ha sido bloqueada. Contacta con el administrador.",
+        )
+    if user.is_active is False:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tu cuenta está suspendida temporalmente.",
+        )
 
 
 def get_settings_row(db: Session, user: User) -> UserSettings:
@@ -349,6 +402,28 @@ def get_usage_row(db: Session, user: User) -> Usage:
 def count_documents(db: Session, user: User) -> int:
     """Número de documentos de conocimiento del usuario."""
     return db.query(Document).filter(Document.user_id == user.id).count()
+
+
+DEFAULT_FLAGS = {
+    "chat": "Chat de texto con Gemini",
+    "image_generation": "Generación de imágenes",
+    "rag": "Base de conocimiento (RAG)",
+}
+
+
+def flag_enabled(db: Session, key: str, default: bool = True) -> bool:
+    """Consulta el estado de una feature flag (por defecto activada)."""
+    flag = db.get(FeatureFlag, key)
+    return default if flag is None else bool(flag.enabled)
+
+
+def seed_flags(db: Session) -> None:
+    """Crea las feature flags por defecto si no existen."""
+    existing = {row[0] for row in db.query(FeatureFlag.key)}
+    for key, description in DEFAULT_FLAGS.items():
+        if key not in existing:
+            db.add(FeatureFlag(key=key, enabled=True, description=description))
+    db.commit()
 
 
 def check_quota(db: Session, user: User, kind: str) -> Usage:
@@ -507,13 +582,107 @@ class ConversationRenameRequest(BaseModel):
 # Salud
 # --------------------------------------------------------------------------- #
 
+STATIC_ROOT = Path(os.environ.get("STATIC_ROOT", Path(__file__).resolve().parent.parent))
+
+
+def _static_response(filename: str) -> FileResponse:
+    """Devuelve un archivo estático del frontend con su tipo MIME."""
+    path = STATIC_ROOT / filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Archivo no encontrado.")
+    if filename.endswith(".webmanifest"):
+        media = "application/manifest+json"
+    elif filename.endswith(".js"):
+        media = "application/javascript"
+    elif filename.endswith(".svg"):
+        media = "image/svg+xml"
+    elif filename.endswith(".ico"):
+        media = "image/x-icon"
+    else:
+        media = "text/html"
+    return FileResponse(path, media_type=media)
+
+
 @app.get("/")
-def health() -> dict[str, Any]:
+def root() -> Any:
+    """Sirve el frontend si está disponible; si no, responde con el estado."""
+    index = STATIC_ROOT / "index.html"
+    if index.is_file():
+        return FileResponse(index)
     return {"status": "ok", "service": "core-ia", "cache": cache_is_enabled()}
 
 
+@app.get("/script.js", include_in_schema=False)
+def serve_script() -> FileResponse:
+    return _static_response("script.js")
+
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+def serve_manifest() -> FileResponse:
+    return _static_response("manifest.webmanifest")
+
+
+@app.get("/sw.js", include_in_schema=False)
+def serve_service_worker() -> FileResponse:
+    return _static_response("sw.js")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def serve_favicon() -> FileResponse:
+    return _static_response("favicon.ico")
+
+
+@app.get("/favicon.svg", include_in_schema=False)
+def serve_favicon_svg() -> FileResponse:
+    return _static_response("favicon.svg")
+
+
+@app.get("/health")
+def health() -> dict[str, Any]:
+    """Liveness: el proceso está vivo."""
+    return {"status": "ok", "service": "core-ia"}
+
+
+@app.get("/health/ready")
+def health_ready(db: Session = Depends(get_db)) -> JSONResponse:
+    """Readiness: comprueba la base de datos (y la caché si está activa)."""
+    checks: dict[str, str] = {}
+    healthy = True
+    try:
+        db.execute(sa_text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception as exc:  # noqa: BLE001
+        checks["database"] = f"error: {exc.__class__.__name__}"
+        healthy = False
+    checks["cache"] = "ok" if cache_is_enabled() else "disabled"
+    payload = {"status": "ok" if healthy else "degraded", "checks": checks}
+    return JSONResponse(payload, status_code=200 if healthy else 503)
+
+
+@app.get("/metrics")
+def metrics(request: Request) -> Response:
+    """Métricas Prometheus protegidas por IP allowlist o usuario admin."""
+    profile: dict[str, Any] | None = None
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        try:
+            profile = serializer.loads(
+                auth.split(" ", 1)[1].strip(), max_age=settings.token_max_age
+            ).get("user")
+        except (BadSignature, SignatureExpired):
+            profile = None
+    if not _metrics_allowed(request, profile):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Métricas restringidas. Configura METRICS_IP_ALLOWLIST o usa una cuenta admin.",
+        )
+    if not PROMETHEUS_AVAILABLE:
+        return Response("# prometheus_client no está instalado\n", media_type="text/plain")
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 # --------------------------------------------------------------------------- #
-# Autenticación OAuth2 (Discord, Google) y por correo
+# Autenticación OAuth2 (Discord) y por correo
 # --------------------------------------------------------------------------- #
 
 def _oauth_state(return_to: str | None) -> str:
@@ -535,8 +704,6 @@ def _provider_env(provider: str) -> tuple[str, str, str]:
     """Devuelve (client_id, client_secret, redirect_uri) del proveedor."""
     if provider == "discord":
         return settings.discord_client_id, settings.discord_client_secret, settings.discord_redirect_uri
-    if provider == "google":
-        return settings.google_client_id, settings.google_client_secret, settings.google_redirect_uri
     raise HTTPException(status_code=404, detail="Proveedor de login no soportado.")
 
 
@@ -644,59 +811,6 @@ async def discord_callback(
     return _finish_login(db, profile, state_data)
 
 
-@app.get("/api/auth/google/login")
-def google_login(return_to: str | None = None) -> RedirectResponse:
-    """Redirige al usuario a la pantalla de autorización de Google."""
-    client_id = require_config(settings.google_client_id, "GOOGLE_CLIENT_ID")
-    redirect_uri = require_config(settings.google_redirect_uri, "GOOGLE_REDIRECT_URI")
-    params = {
-        "client_id": client_id,
-        "redirect_uri": redirect_uri,
-        "response_type": "code",
-        "scope": "openid email profile",
-        "state": _oauth_state(return_to),
-        "prompt": "consent",
-    }
-    return RedirectResponse(f"{GOOGLE_AUTHORIZE_URL}?{urlencode(params)}")
-
-
-@app.get("/api/auth/google/callback")
-async def google_callback(
-    code: str | None = None,
-    state: str | None = None,
-    error: str | None = None,
-    db: Session = Depends(get_db),
-) -> RedirectResponse:
-    """Callback OAuth de Google."""
-    if error or not code:
-        return RedirectResponse(f"{resolve_return_url(state)}?auth=error")
-    state_data = _read_state(state)
-    client_id = require_config(settings.google_client_id, "GOOGLE_CLIENT_ID")
-    client_secret = require_config(settings.google_client_secret, "GOOGLE_CLIENT_SECRET")
-    redirect_uri = require_config(settings.google_redirect_uri, "GOOGLE_REDIRECT_URI")
-
-    access_token = await _exchange_code(
-        GOOGLE_TOKEN_URL,
-        {
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": redirect_uri,
-        },
-    )
-    raw = await _fetch_profile(GOOGLE_USER_URL, access_token)
-    profile = {
-        "provider": "google",
-        "id": raw.get("sub"),
-        "username": raw.get("email"),
-        "display_name": raw.get("name"),
-        "email": raw.get("email"),
-        "avatar_url": raw.get("picture"),
-    }
-    return _finish_login(db, profile, state_data)
-
-
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -771,15 +885,22 @@ def email_login(
     if user is None or not user.password_hash or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos.")
 
+    _ensure_user_allowed(user)
     profile = _email_profile(user)
     return AuthTokenResponse(token=create_session_token(profile), user=profile)
 
 
 @app.get("/api/auth/me", response_model=UserResponse)
-def auth_me(user: dict[str, Any] = Depends(get_current_user)) -> UserResponse:
+def auth_me(
+    user: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> UserResponse:
     """Devuelve el perfil del usuario autenticado."""
+    db_user = upsert_user(db, user)
     profile = dict(user)
     profile["is_admin"] = is_admin(user)
+    profile["is_banned"] = db_user.is_banned
+    profile["is_active"] = db_user.is_active
     return UserResponse(user=profile)
 
 
@@ -805,6 +926,11 @@ def chat(
     message = payload.message.strip()
     if not message:
         raise HTTPException(status_code=400, detail="El mensaje no puede estar vacío.")
+    if not flag_enabled(db, "chat"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="El chat está desactivado temporalmente por el administrador.",
+        )
     if genai_client is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -882,6 +1008,11 @@ def generate_image(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="La generación de imágenes no está habilitada en este servidor.",
         )
+    if not flag_enabled(db, "image_generation"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="La generación de imágenes está desactivada por el administrador.",
+        )
 
     prompt = payload.prompt.strip()
     if not prompt:
@@ -936,7 +1067,7 @@ def create_document(
     db: Session = Depends(get_db),
 ) -> DocumentResponse:
     """Divide, vectoriza y almacena un documento de conocimiento."""
-    if not settings.rag_enabled:
+    if not settings.rag_enabled or not flag_enabled(db, "rag"):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="El módulo de conocimiento no está habilitado.",
@@ -1216,6 +1347,28 @@ class AdminUserUpdate(BaseModel):
     """Cambios que el administrador puede aplicar a un usuario."""
 
     plan: str | None = Field(default=None, pattern="^(free|pro|enterprise)$")
+    is_active: bool | None = None
+    is_banned: bool | None = None
+
+
+class NoticeRequest(BaseModel):
+    """Aviso global publicado por el administrador."""
+
+    message: str = Field(..., min_length=1, max_length=500)
+    level: str = Field(default="info", pattern="^(info|warning|success)$")
+
+
+class FlagUpdate(BaseModel):
+    """Estado de un feature flag."""
+
+    enabled: bool
+
+
+def record_audit(db: Session, actor: dict[str, Any], action: str, target: str, detail: str = "") -> None:
+    """Registra una acción administrativa en el log de auditoría."""
+    actor_name = actor.get("display_name") or actor.get("username") or str(actor.get("id"))
+    db.add(AuditLog(actor=str(actor_name), action=action, target=target, detail=detail))
+    db.commit()
 
 
 def _serialize_admin_user(db: Session, user: User) -> dict[str, Any]:
@@ -1225,8 +1378,11 @@ def _serialize_admin_user(db: Session, user: User) -> dict[str, Any]:
         "discord_id": user.discord_id,
         "username": user.username,
         "display_name": user.display_name,
+        "email": user.email,
         "avatar_url": user.avatar_url,
         "plan": user.plan,
+        "is_active": user.is_active is not False,
+        "is_banned": bool(user.is_banned),
         "created_at": user.created_at.isoformat() if user.created_at else None,
         "is_founder": user.discord_id in settings.founder_ids,
         "conversations": db.query(func.count(Conversation.id))
@@ -1249,15 +1405,29 @@ def admin_stats(
     day = today_str()
     today_rows = db.query(Usage).filter(Usage.day == day).all()
     plan_rows = db.query(User.plan, func.count(User.id)).group_by(User.plan).all()
+    daily = (
+        db.query(Usage.day, func.sum(Usage.messages), func.sum(Usage.images))
+        .group_by(Usage.day)
+        .order_by(Usage.day.desc())
+        .limit(14)
+        .all()
+    )
+    series = [
+        {"day": row[0], "messages": int(row[1] or 0), "images": int(row[2] or 0)}
+        for row in reversed(daily)
+    ]
     return {
         "users": db.query(func.count(User.id)).scalar() or 0,
         "conversations": db.query(func.count(Conversation.id)).scalar() or 0,
         "messages": db.query(func.count(Message.id)).scalar() or 0,
         "documents": db.query(func.count(Document.id)).scalar() or 0,
+        "banned": db.query(func.count(User.id)).filter(User.is_banned.is_(True)).scalar() or 0,
+        "suspended": db.query(func.count(User.id)).filter(User.is_active.is_(False)).scalar() or 0,
         "messages_today": sum(row.messages for row in today_rows),
         "images_today": sum(row.images for row in today_rows),
         "active_today": sum(1 for row in today_rows if row.messages or row.images),
         "plan_breakdown": {plan or "free": count for plan, count in plan_rows},
+        "series": series,
         "founders": settings.founder_ids,
         "day": day,
     }
@@ -1277,24 +1447,38 @@ def admin_users(
 def admin_update_user(
     user_id: int,
     payload: AdminUserUpdate,
-    _: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Cambia el plan de un usuario."""
+    """Cambia el plan o el estado (activo/baneado) de un usuario."""
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+    if user.discord_id in settings.founder_ids:
+        raise HTTPException(status_code=400, detail="No puedes modificar a un fundador.")
+
+    changes: list[str] = []
     if payload.plan is not None:
         user.plan = payload.plan
+        changes.append(f"plan={payload.plan}")
+    if payload.is_active is not None:
+        user.is_active = payload.is_active
+        changes.append(f"is_active={payload.is_active}")
+    if payload.is_banned is not None:
+        user.is_banned = payload.is_banned
+        changes.append(f"is_banned={payload.is_banned}")
+
     db.commit()
     db.refresh(user)
+    if changes:
+        record_audit(db, admin, "user.update", str(user.id), ", ".join(changes))
     return {"user": _serialize_admin_user(db, user)}
 
 
 @app.delete("/api/admin/users/{user_id}")
 def admin_delete_user(
     user_id: int,
-    _: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, bool]:
     """Elimina un usuario y todos sus datos (los fundadores están protegidos)."""
@@ -1303,5 +1487,166 @@ def admin_delete_user(
         raise HTTPException(status_code=404, detail="Usuario no encontrado.")
     if user.discord_id in settings.founder_ids:
         raise HTTPException(status_code=400, detail="No puedes eliminar a un fundador.")
+    target = str(user.id)
     delete_user_data(db, user)
+    record_audit(db, admin, "user.delete", target, "")
     return {"ok": True}
+
+
+@app.get("/api/admin/audit")
+def admin_audit(
+    _: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Últimas acciones administrativas registradas."""
+    limit = max(1, min(limit, 200))
+    rows = db.query(AuditLog).order_by(AuditLog.id.desc()).limit(limit).all()
+    return {
+        "logs": [
+            {
+                "id": row.id,
+                "actor": row.actor,
+                "action": row.action,
+                "target": row.target,
+                "detail": row.detail,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.get("/api/admin/flags")
+def admin_flags(
+    _: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Lista las feature flags con su estado."""
+    rows = db.query(FeatureFlag).order_by(FeatureFlag.key).all()
+    return {
+        "flags": [
+            {"key": row.key, "enabled": bool(row.enabled), "description": row.description}
+            for row in rows
+        ]
+    }
+
+
+@app.patch("/api/admin/flags/{key}")
+def admin_update_flag(
+    key: str,
+    payload: FlagUpdate,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Activa o desactiva una feature flag."""
+    flag = db.get(FeatureFlag, key)
+    if flag is None:
+        flag = FeatureFlag(key=key, description="")
+        db.add(flag)
+    flag.enabled = payload.enabled
+    db.commit()
+    db.refresh(flag)
+    record_audit(db, admin, "flag.update", key, f"enabled={payload.enabled}")
+    return {"flag": {"key": flag.key, "enabled": bool(flag.enabled), "description": flag.description}}
+
+
+@app.get("/api/admin/notices")
+def admin_notices(
+    _: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Lista los avisos publicados."""
+    rows = db.query(Notice).order_by(Notice.id.desc()).limit(50).all()
+    return {
+        "notices": [
+            {
+                "id": row.id,
+                "message": row.message,
+                "level": row.level,
+                "active": bool(row.active),
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.post("/api/admin/notices")
+def admin_create_notice(
+    payload: NoticeRequest,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Publica un aviso global para todos los usuarios."""
+    notice = Notice(message=payload.message, level=payload.level, active=True)
+    db.add(notice)
+    db.commit()
+    db.refresh(notice)
+    record_audit(db, admin, "notice.create", str(notice.id), payload.message[:120])
+    return {"notice": {"id": notice.id, "message": notice.message, "level": notice.level}}
+
+
+@app.delete("/api/admin/notices/{notice_id}")
+def admin_delete_notice(
+    notice_id: int,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    """Elimina un aviso."""
+    notice = db.get(Notice, notice_id)
+    if notice is None:
+        raise HTTPException(status_code=404, detail="Aviso no encontrado.")
+    db.delete(notice)
+    db.commit()
+    record_audit(db, admin, "notice.delete", str(notice_id), "")
+    return {"ok": True}
+
+
+@app.get("/api/config")
+def public_config(db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Configuración pública para el frontend (feature flags activas)."""
+    flags = {row.key: bool(row.enabled) for row in db.query(FeatureFlag).all()}
+    return {"flags": flags}
+
+
+@app.get("/api/notices")
+def list_notices(db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Avisos activos visibles para cualquier usuario."""
+    rows = (
+        db.query(Notice)
+        .filter(Notice.active.is_(True))
+        .order_by(Notice.id.desc())
+        .limit(5)
+        .all()
+    )
+    return {
+        "notices": [
+            {"id": row.id, "message": row.message, "level": row.level}
+            for row in rows
+        ]
+    }
+
+
+def _client_ip(request: Request) -> str:
+    """Extrae la IP real del cliente considerando proxies (Render/Cloudflare)."""
+    xff = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+    if xff:
+        return xff
+    xri = request.headers.get("X-Real-IP", "").strip()
+    if xri:
+        return xri
+    if request.client is not None:
+        return request.client.host
+    return "127.0.0.1"
+
+
+def _metrics_allowed(request: Request, current_user: dict[str, Any] | None = None) -> bool:
+    """Permite acceso a /metrics si IP en allowlist OR usuario admin."""
+    ip = _client_ip(request)
+    allowlist = set(settings.metrics_ip_allowlist)
+    if allowlist and ip in allowlist:
+        return True
+    if is_admin(current_user):
+        return True
+    return False

@@ -18,7 +18,7 @@ from database import Base
 
 
 class User(Base):
-    """Usuario autenticado mediante Discord, Google o correo/contraseña."""
+    """Usuario autenticado mediante Discord o correo/contraseña."""
 
     __tablename__ = "users"
 
@@ -26,15 +26,14 @@ class User(Base):
     discord_id: Mapped[str | None] = mapped_column(
         String(32), unique=True, index=True, default=None
     )
-    google_id: Mapped[str | None] = mapped_column(
-        String(64), unique=True, index=True, default=None
-    )
     password_hash: Mapped[str | None] = mapped_column(String(255), default=None)
     username: Mapped[str | None] = mapped_column(String(64), default=None)
     display_name: Mapped[str | None] = mapped_column(String(64), default=None)
     email: Mapped[str | None] = mapped_column(String(255), default=None)
     avatar_url: Mapped[str | None] = mapped_column(String(512), default=None)
     plan: Mapped[str] = mapped_column(String(16), default="free")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_banned: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     conversations: Mapped[list["Conversation"]] = relationship(
@@ -139,3 +138,41 @@ class Usage(Base):
     day: Mapped[str] = mapped_column(String(10), index=True)
     messages: Mapped[int] = mapped_column(Integer, default=0)
     images: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class AuditLog(Base):
+    """Registro de acciones administrativas (auditoría)."""
+
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    actor: Mapped[str] = mapped_column(String(128), default="")
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    target: Mapped[str] = mapped_column(String(128), default="")
+    detail: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FeatureFlag(Base):
+    """Interruptor de funcionalidad configurable desde el panel admin."""
+
+    __tablename__ = "feature_flags"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    description: Mapped[str] = mapped_column(String(255), default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Notice(Base):
+    """Aviso global publicado por el administrador."""
+
+    __tablename__ = "notices"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    message: Mapped[str] = mapped_column(Text)
+    level: Mapped[str] = mapped_column(String(16), default="info")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

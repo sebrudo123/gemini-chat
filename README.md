@@ -40,20 +40,6 @@ CoreIA/
      `https://TU-BACKEND.onrender.com/api/auth/discord/callback`
 3. Guarda los cambios.
 
-## 1b. Login con Google (opcional)
-
-Además de Discord y del login por correo/contraseña, Core IA admite Google.
-Solo aparecen en la interfaz los proveedores OAuth que tengan sus credenciales
-configuradas.
-
-**Google** (https://console.cloud.google.com/apis/credentials):
-
-1. Crea credenciales → **ID de cliente de OAuth** (aplicación web).
-2. En **Orígenes autorizados de JavaScript** añade tu frontend
-   (`https://TU-FRONTEND`) y en **URIs de redirección autorizadas**:
-   `https://TU-BACKEND.onrender.com/api/auth/google/callback`
-3. Rellena `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` y `GOOGLE_REDIRECT_URI`.
-
 El **login por correo y contraseña** funciona sin configuración adicional
 (registro en `POST /api/auth/register`, acceso en `POST /api/auth/login`).
 
@@ -74,10 +60,7 @@ SESSION_SECRET=...        # cadena aleatoria larga
 DISCORD_CLIENT_ID=...
 DISCORD_CLIENT_SECRET=...
 DISCORD_REDIRECT_URI=https://TU-BACKEND.onrender.com/api/auth/discord/callback
-GOOGLE_CLIENT_ID=             # opcional
-GOOGLE_CLIENT_SECRET=         # opcional
-GOOGLE_REDIRECT_URI=https://TU-BACKEND.onrender.com/api/auth/google/callback
-AUTH_PROVIDERS=discord,google
+AUTH_PROVIDERS=discord
 FOUNDER_DISCORD_IDS=719050307593830440   # IDs con acceso al panel de administración
 FRONTEND_URL=https://TU-FRONTEND
 ALLOWED_ORIGINS=https://TU-FRONTEND,http://localhost:5500
@@ -190,16 +173,16 @@ pruebas en cada push y pull request.
 - **Cuenta**: `DELETE /api/account` borra conversaciones, mensajes, documentos,
   ajustes y consumo del usuario.
 
-## Autenticación multi-proveedor
+## Autenticación
 
-- **Proveedores**: Discord y Google (OAuth2) más correo/contraseña. `GET /api/auth/providers`
+- **Proveedores**: Discord (OAuth2) más correo/contraseña. `GET /api/auth/providers`
   devuelve los OAuth configurados; el frontend dibuja dinámicamente un botón por
   proveedor (con su icono y color) y siempre muestra el formulario de correo.
 - **Correo/contraseña**: `POST /api/auth/register` y `POST /api/auth/login` devuelven
   `{ token, user }`. Las contraseñas se guardan como `pbkdf2_sha256` (200 000
   iteraciones, salt aleatorio). El login por correo está siempre disponible.
-- **Identidad**: cada usuario se identifica por `discord_id`, `google_id` o
-  `password_hash`/email. Las cuentas con el mismo correo verificado se enlazan.
+- **Identidad**: cada usuario se identifica por `discord_id` o
+  `password_hash`/email. Las cuentas con el mismo correo se enlazan.
 - **Migración**: al arrancar, `init_db()` añade las columnas nuevas de identidad y
   permite `discord_id` nulo en bases de datos ya existentes.
 

@@ -1,6 +1,6 @@
 /**
  * Core IA - Frontend
- * Sesión (Discord/Google OAuth2 + correo), historial en servidor, ajustes,
+ * Sesión (Discord OAuth2 + correo), historial en servidor, ajustes,
  * planes, panel de administración y chat.
  */
 
@@ -65,6 +65,15 @@ const adminModal = document.getElementById("admin-modal");
 const adminClose = document.getElementById("admin-close");
 const adminStats = document.getElementById("admin-stats");
 const adminUsers = document.getElementById("admin-users");
+const adminChart = document.getElementById("admin-chart");
+const adminFlags = document.getElementById("admin-flags");
+const adminNotices = document.getElementById("admin-notices");
+const adminAudit = document.getElementById("admin-audit");
+const adminTabs = document.getElementById("admin-tabs");
+const noticeBanner = document.getElementById("notice-banner");
+const noticeInput = document.getElementById("notice-input");
+const noticeLevel = document.getElementById("notice-level");
+const noticeCreate = document.getElementById("notice-create");
 
 let token = localStorage.getItem(TOKEN_KEY) || null;
 let currentUser = null;
@@ -78,6 +87,7 @@ let settings = { theme: "dark", preferred_model: null, use_rag: true };
 let usage = null;
 let catalog = null;
 let providers = null;
+let flags = { chat: true, image_generation: true, rag: true };
 
 const splashStart = performance.now();
 let splashHidden = false;
@@ -132,10 +142,6 @@ const PROVIDER_META = {
     label: "Discord",
     icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20.3 4.4A19.8 19.8 0 0 0 15.4 3l-.3.5a18 18 0 0 1 4.4 1.4 15.9 15.9 0 0 0-4.1-1.3 16.6 16.6 0 0 0-6.8 0A15.9 15.9 0 0 0 4.5 4.9 18 18 0 0 1 8.9 3.5L8.6 3a19.8 19.8 0 0 0-4.9 1.4C.8 8.6 0 12.6.4 16.6a19.9 19.9 0 0 0 6 3l.8-1.3c-.9-.3-1.7-.7-2.5-1.2l.6-.5a14.3 14.3 0 0 0 12.2 0l.6.5c-.8.5-1.6.9-2.5 1.2l.8 1.3a19.9 19.9 0 0 0 6-3c.5-4.6-.7-8.6-2.9-12.2ZM8.5 14.6c-1.2 0-2.1-1.1-2.1-2.4S7.3 9.8 8.5 9.8s2.1 1.1 2.1 2.4-.9 2.4-2.1 2.4Zm7 0c-1.2 0-2.1-1.1-2.1-2.4s.9-2.4 2.1-2.4 2.1 1.1 2.1 2.4-.9 2.4-2.1 2.4Z"/></svg>',
   },
-  google: {
-    label: "Google",
-    icon: '<svg width="20" height="20" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.9 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.3 6.1 29.4 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.3-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16 19 13 24 13c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.3 6.1 29.4 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.3 0-9.7-3.1-11.3-7.5l-6.5 5C9.6 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.1-4.1 5.5l6.2 5.2C41.1 35.9 44 30.5 44 24c0-1.3-.1-2.3-.4-3.5z"/></svg>',
-  },
 };
 
 function loginUrl(provider) {
@@ -146,10 +152,11 @@ function loginUrl(provider) {
 async function loadProviders() {
   try {
     const data = await api("/api/auth/providers");
-    providers = data.providers && data.providers.length ? data.providers : ["discord"];
+    providers = (data.providers || []).filter((provider) => PROVIDER_META[provider]);
   } catch (_) {
-    providers = ["discord"];
+    providers = [];
   }
+  if (!providers.length) providers = ["discord"];
 }
 
 function renderLoginButtons(container, variant) {
@@ -273,6 +280,71 @@ async function loadSession() {
     clearSession();
     renderChat();
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Configuración pública (feature flags) y avisos                      */
+/* ------------------------------------------------------------------ */
+
+async function loadConfig() {
+  try {
+    const data = await api("/api/config");
+    flags = { ...flags, ...(data.flags || {}) };
+  } catch (_) {
+    /* mantener valores por defecto */
+  }
+  applyFlags();
+}
+
+function applyFlags() {
+  if (imageBtn) imageBtn.classList.toggle("hidden-flag", flags.image_generation === false);
+  if (kbBtn) kbBtn.classList.toggle("hidden-flag", flags.rag === false);
+  if (inputEl && flags.chat === false) {
+    inputEl.placeholder = "El chat está desactivado temporalmente.";
+    inputEl.disabled = true;
+  } else if (inputEl) {
+    inputEl.disabled = false;
+  }
+  updateSendState();
+}
+
+async function loadNotices() {
+  try {
+    const data = await api("/api/notices");
+    renderNotices(data.notices || []);
+  } catch (_) {
+    /* silencioso */
+  }
+}
+
+function renderNotices(notices) {
+  if (!noticeBanner) return;
+  const dismissed = JSON.parse(localStorage.getItem("coreia_notices") || "[]");
+  const notice = notices.find((item) => !dismissed.includes(item.id));
+  if (!notice) {
+    noticeBanner.classList.remove("show");
+    noticeBanner.innerHTML = "";
+    return;
+  }
+  noticeBanner.className = `notice-banner show level-${notice.level || "info"}`;
+  noticeBanner.innerHTML = "";
+  const dot = document.createElement("span");
+  dot.className = "notice-dot";
+  const text = document.createElement("span");
+  text.className = "notice-text";
+  text.textContent = notice.message;
+  const close = document.createElement("button");
+  close.className = "notice-close";
+  close.type = "button";
+  close.setAttribute("aria-label", "Cerrar aviso");
+  close.textContent = "✕";
+  close.addEventListener("click", () => {
+    const current = JSON.parse(localStorage.getItem("coreia_notices") || "[]");
+    current.push(notice.id);
+    localStorage.setItem("coreia_notices", JSON.stringify(current.slice(-20)));
+    noticeBanner.classList.remove("show");
+  });
+  noticeBanner.append(dot, text, close);
 }
 
 /* ------------------------------------------------------------------ */
@@ -479,7 +551,7 @@ function renderChat() {
 /* Markdown mínimo (seguro, sin dependencias)                          */
 /* ------------------------------------------------------------------ */
 
-function appendInline(parent, text) {
+function appendCodeAndFormat(parent, text) {
   const parts = text.split(/(`[^`]+`)/g);
   parts.forEach((part) => {
     if (part.length > 1 && part.startsWith("`") && part.endsWith("`")) {
@@ -491,6 +563,29 @@ function appendInline(parent, text) {
       appendFormatted(parent, part);
     }
   });
+}
+
+function appendInline(parent, text) {
+  if (!window.katex || !text.includes("$")) {
+    appendCodeAndFormat(parent, text);
+    return;
+  }
+  const re = /\$\$([^$]+)\$\$|\$([^$]+)\$/g;
+  let last = 0;
+  let match;
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > last) appendCodeAndFormat(parent, text.slice(last, match.index));
+    const expr = match[1] !== undefined ? match[1] : match[2];
+    const span = document.createElement("span");
+    try {
+      window.katex.render(expr, span, { throwOnError: false, display: match[1] !== undefined });
+    } catch (_) {
+      span.textContent = match[0];
+    }
+    parent.appendChild(span);
+    last = re.lastIndex;
+  }
+  if (last < text.length) appendCodeAndFormat(parent, text.slice(last));
 }
 
 function appendFormatted(parent, text) {
@@ -558,6 +653,47 @@ function buildCodeBlock(lang, code) {
   return wrap;
 }
 
+function isTableRow(line) {
+  return line.includes("|") && line.trim().length > 0;
+}
+
+function isTableSeparator(line) {
+  return /^\s*\|?[\s:|-]+\|?\s*$/.test(line) && line.includes("-");
+}
+
+function splitTableRow(line) {
+  let trimmed = line.trim();
+  if (trimmed.startsWith("|")) trimmed = trimmed.slice(1);
+  if (trimmed.endsWith("|")) trimmed = trimmed.slice(0, -1);
+  return trimmed.split("|").map((cell) => cell.trim());
+}
+
+function buildTable(header, rows) {
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  header.forEach((cell) => {
+    const th = document.createElement("th");
+    appendInline(th, cell);
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  rows.forEach((cells) => {
+    const tr = document.createElement("tr");
+    cells.forEach((cell) => {
+      const td = document.createElement("td");
+      appendInline(td, cell);
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  return table;
+}
+
 function buildTextBlock(text) {
   const block = document.createElement("div");
   block.className = "md";
@@ -582,7 +718,24 @@ function buildTextBlock(text) {
     listType = null;
   };
 
-  lines.forEach((line) => {
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+
+    if (isTableRow(line) && index + 1 < lines.length && isTableSeparator(lines[index + 1])) {
+      flushPara();
+      flushList();
+      const header = splitTableRow(line);
+      const rows = [];
+      index += 2;
+      while (index < lines.length && isTableRow(lines[index]) && !isTableSeparator(lines[index])) {
+        rows.push(splitTableRow(lines[index]));
+        index += 1;
+      }
+      block.appendChild(buildTable(header, rows));
+      continue;
+    }
+
     const heading = line.match(/^(#{1,4})\s+(.*)$/);
     const ul = line.match(/^\s*[-*+]\s+(.*)$/);
     const ol = line.match(/^\s*\d+[.)]\s+(.*)$/);
@@ -594,9 +747,7 @@ function buildTextBlock(text) {
       el.className = `md-h md-h${heading[1].length}`;
       appendInline(el, heading[2]);
       block.appendChild(el);
-      return;
-    }
-    if (ul) {
+    } else if (ul) {
       flushPara();
       if (listType !== "ul") {
         flushList();
@@ -607,9 +758,7 @@ function buildTextBlock(text) {
       const li = document.createElement("li");
       appendInline(li, ul[1]);
       list.appendChild(li);
-      return;
-    }
-    if (ol) {
+    } else if (ol) {
       flushPara();
       if (listType !== "ol") {
         flushList();
@@ -620,16 +769,15 @@ function buildTextBlock(text) {
       const li = document.createElement("li");
       appendInline(li, ol[1]);
       list.appendChild(li);
-      return;
-    }
-    if (line.trim() === "") {
+    } else if (line.trim() === "") {
       flushPara();
       flushList();
-      return;
+    } else {
+      flushList();
+      para.push(line);
     }
-    flushList();
-    para.push(line);
-  });
+    index += 1;
+  }
 
   flushPara();
   return block;
@@ -752,6 +900,7 @@ async function sendMessage(text) {
       addMessage("bot", reply);
       renderChat();
       if (ttsEnabled) speak(reply);
+      notifyReply(reply);
       await loadConversations();
       loadUsage();
     }
@@ -787,7 +936,7 @@ function renderError(message) {
 /* ------------------------------------------------------------------ */
 
 function updateSendState() {
-  sendEl.disabled = sending || inputEl.value.trim().length === 0;
+  sendEl.disabled = sending || inputEl.disabled || inputEl.value.trim().length === 0;
 }
 
 function autoResize() {
@@ -797,6 +946,10 @@ function autoResize() {
 
 formEl.addEventListener("submit", (e) => {
   e.preventDefault();
+  if (flags.chat === false) {
+    renderError("El chat está desactivado temporalmente por el administrador.");
+    return;
+  }
   const text = inputEl.value.trim();
   if (!text || sending) return;
   inputEl.value = "";
@@ -918,6 +1071,10 @@ function toggleDictation() {
 /* ------------------------------------------------------------------ */
 
 function toggleImageMode() {
+  if (flags.image_generation === false) {
+    renderError("La generación de imágenes está desactivada por el administrador.");
+    return;
+  }
   imageMode = !imageMode;
   imageBtn.classList.toggle("active", imageMode);
   inputEl.placeholder = imageMode
@@ -1211,6 +1368,8 @@ function renderPlans() {
 /* Administración                                                      */
 /* ------------------------------------------------------------------ */
 
+const ADMIN_TABS = ["overview", "users", "flags", "notices", "audit"];
+
 async function openAdmin() {
   if (!currentUser || !currentUser.is_admin) {
     renderError("Acceso reservado al fundador.");
@@ -1219,13 +1378,24 @@ async function openAdmin() {
   adminModal.classList.add("show");
   adminStats.innerHTML = "";
   adminUsers.innerHTML = "";
+  adminChart.innerHTML = "";
+  adminFlags.innerHTML = "";
+  adminNotices.innerHTML = "";
+  adminAudit.innerHTML = "";
   try {
-    const [statsData, usersData] = await Promise.all([
+    const [statsData, usersData, flagsData, noticesData, auditData] = await Promise.all([
       api("/api/admin/stats"),
       api("/api/admin/users"),
+      api("/api/admin/flags"),
+      api("/api/admin/notices"),
+      api("/api/admin/audit"),
     ]);
     renderAdminStats(statsData);
+    renderAdminChart(statsData.series || []);
     renderAdminUsers(usersData.users || []);
+    renderAdminFlags(flagsData.flags || []);
+    renderAdminNotices(noticesData.notices || []);
+    renderAdminAudit(auditData.logs || []);
   } catch (err) {
     renderError(err.message);
   }
@@ -1233,6 +1403,174 @@ async function openAdmin() {
 
 function closeAdmin() {
   adminModal.classList.remove("show");
+}
+
+function switchAdminTab(tab) {
+  if (!ADMIN_TABS.includes(tab)) return;
+  adminTabs.querySelectorAll(".admin-tab").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.tab === tab);
+  });
+  adminModal.querySelectorAll(".admin-pane").forEach((pane) => {
+    pane.classList.toggle("active", pane.dataset.pane === tab);
+  });
+}
+
+function renderAdminChart(series) {
+  adminChart.innerHTML = "";
+  if (!series.length) {
+    const empty = document.createElement("div");
+    empty.className = "chart-empty";
+    empty.textContent = "Sin datos de uso todavía.";
+    adminChart.appendChild(empty);
+    return;
+  }
+  const max = Math.max(...series.map((point) => point.messages + point.images), 1);
+  series.forEach((point) => {
+    const wrap = document.createElement("div");
+    wrap.className = "bar-wrap";
+    const bar = document.createElement("div");
+    bar.className = "bar";
+    bar.style.height = `${Math.round(((point.messages + point.images) / max) * 100)}%`;
+    bar.title = `${point.day}: ${point.messages} mensajes, ${point.images} imágenes`;
+    const label = document.createElement("div");
+    label.className = "bar-label";
+    label.textContent = point.day ? point.day.slice(5) : "";
+    wrap.append(bar, label);
+    adminChart.appendChild(wrap);
+  });
+}
+
+function renderAdminFlags(list) {
+  adminFlags.innerHTML = "";
+  if (!list.length) {
+    const empty = document.createElement("div");
+    empty.className = "modal-sub";
+    empty.textContent = "No hay funciones configurables.";
+    adminFlags.appendChild(empty);
+    return;
+  }
+  list.forEach((flag) => {
+    const row = document.createElement("div");
+    row.className = "admin-flag";
+
+    const info = document.createElement("div");
+    info.className = "flag-info";
+    const key = document.createElement("div");
+    key.className = "flag-key";
+    key.textContent = flag.key;
+    const desc = document.createElement("div");
+    desc.className = "flag-desc";
+    desc.textContent = flag.description || "";
+    info.append(key, desc);
+
+    const toggle = document.createElement("label");
+    toggle.className = "switch";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = flag.enabled !== false;
+    const slider = document.createElement("span");
+    slider.className = "slider";
+    checkbox.addEventListener("change", async () => {
+      checkbox.disabled = true;
+      try {
+        await api(`/api/admin/flags/${encodeURIComponent(flag.key)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ enabled: checkbox.checked }),
+        });
+        flags[flag.key] = checkbox.checked;
+        applyFlags();
+      } catch (err) {
+        checkbox.checked = !checkbox.checked;
+        renderError(err.message);
+      } finally {
+        checkbox.disabled = false;
+      }
+    });
+    toggle.append(checkbox, slider);
+
+    row.append(info, toggle);
+    adminFlags.appendChild(row);
+  });
+}
+
+function formatDate(value) {
+  if (!value) return "";
+  try {
+    return new Date(value).toLocaleString("es-ES", {
+      day: "2-digit",
+      month: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch (_) {
+    return value;
+  }
+}
+
+function renderAdminNotices(list) {
+  adminNotices.innerHTML = "";
+  if (!list.length) {
+    const empty = document.createElement("div");
+    empty.className = "modal-sub";
+    empty.textContent = "No hay avisos publicados.";
+    adminNotices.appendChild(empty);
+    return;
+  }
+  list.forEach((notice) => {
+    const row = document.createElement("div");
+    row.className = "admin-notice";
+
+    const body = document.createElement("div");
+    body.className = "notice-body";
+    const message = document.createElement("div");
+    message.textContent = notice.message;
+    const meta = document.createElement("div");
+    meta.className = "notice-meta";
+    meta.textContent = `${notice.level} · ${formatDate(notice.created_at)}`;
+    body.append(message, meta);
+
+    const del = document.createElement("button");
+    del.className = "admin-mini danger";
+    del.type = "button";
+    del.textContent = "Eliminar";
+    del.addEventListener("click", async () => {
+      try {
+        await api(`/api/admin/notices/${notice.id}`, { method: "DELETE" });
+        row.remove();
+      } catch (err) {
+        renderError(err.message);
+      }
+    });
+
+    row.append(body, del);
+    adminNotices.appendChild(row);
+  });
+}
+
+function renderAdminAudit(list) {
+  adminAudit.innerHTML = "";
+  if (!list.length) {
+    const empty = document.createElement("div");
+    empty.className = "modal-sub";
+    empty.textContent = "Sin actividad registrada.";
+    adminAudit.appendChild(empty);
+    return;
+  }
+  list.forEach((entry) => {
+    const row = document.createElement("div");
+    row.className = "admin-audit-row";
+    const action = document.createElement("span");
+    action.className = "audit-action";
+    action.textContent = entry.action;
+    const detail = document.createElement("span");
+    detail.className = "audit-detail";
+    detail.textContent = [entry.actor, entry.detail].filter(Boolean).join(" · ");
+    const time = document.createElement("span");
+    time.className = "audit-time";
+    time.textContent = formatDate(entry.created_at);
+    row.append(action, detail, time);
+    adminAudit.appendChild(row);
+  });
 }
 
 function adminStat(value, label) {
@@ -1256,6 +1594,8 @@ function renderAdminStats(stats) {
   adminStats.appendChild(adminStat(stats.documents, "Documentos"));
   adminStats.appendChild(adminStat(stats.active_today, "Activos hoy"));
   adminStats.appendChild(adminStat(stats.messages_today, "Mensajes hoy"));
+  adminStats.appendChild(adminStat(stats.banned || 0, "Baneados"));
+  adminStats.appendChild(adminStat(stats.suspended || 0, "Suspendidos"));
 }
 
 function renderAdminUsers(users) {
@@ -1329,10 +1669,50 @@ function adminUserRow(user) {
   });
   row.appendChild(select);
 
+  const actions = document.createElement("div");
+  actions.className = "admin-actions";
+
+  const suspend = document.createElement("button");
+  suspend.className = "admin-mini";
+  suspend.type = "button";
+  suspend.textContent = user.is_active === false ? "Reactivar" : "Suspender";
+  suspend.disabled = user.is_founder;
+  suspend.addEventListener("click", async () => {
+    try {
+      const data = await api(`/api/admin/users/${user.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ is_active: user.is_active === false }),
+      });
+      user.is_active = data.user.is_active;
+      row.replaceWith(adminUserRow(user));
+    } catch (err) {
+      renderError(err.message);
+    }
+  });
+
+  const ban = document.createElement("button");
+  ban.className = "admin-mini danger";
+  ban.type = "button";
+  ban.textContent = user.is_banned ? "Quitar ban" : "Banear";
+  ban.disabled = user.is_founder;
+  ban.addEventListener("click", async () => {
+    try {
+      const data = await api(`/api/admin/users/${user.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ is_banned: !user.is_banned }),
+      });
+      user.is_banned = data.user.is_banned;
+      row.replaceWith(adminUserRow(user));
+    } catch (err) {
+      renderError(err.message);
+    }
+  });
+
   const del = document.createElement("button");
-  del.className = "admin-del";
-  del.title = "Eliminar usuario";
-  del.textContent = "🗑";
+  del.className = "admin-mini danger";
+  del.type = "button";
+  del.title = "Eliminar usuario y todos sus datos";
+  del.textContent = "Eliminar";
   del.disabled = user.is_founder;
   del.addEventListener("click", async () => {
     if (!window.confirm(`¿Eliminar a ${user.display_name || user.username} y todos sus datos?`)) return;
@@ -1343,9 +1723,147 @@ function adminUserRow(user) {
       renderError(err.message);
     }
   });
-  row.appendChild(del);
+
+  if (user.is_banned) {
+    const badge = document.createElement("span");
+    badge.className = "admin-badge banned";
+    badge.textContent = "Baneado";
+    actions.appendChild(badge);
+  } else if (user.is_active === false) {
+    const badge = document.createElement("span");
+    badge.className = "admin-badge suspended";
+    badge.textContent = "Suspendido";
+    actions.appendChild(badge);
+  }
+  actions.append(suspend, ban, del);
+  row.appendChild(actions);
 
   return row;
+}
+
+/* ------------------------------------------------------------------ */
+/* Notificaciones, atajos de teclado y arrastrar y soltar             */
+/* ------------------------------------------------------------------ */
+
+function notifyReply(text) {
+  if (!text || typeof Notification === "undefined") return;
+  if (Notification.permission !== "granted" || !document.hidden) return;
+  try {
+    new Notification("Core IA", { body: text.slice(0, 180), icon: "favicon.svg" });
+  } catch (_) {
+    /* algunos navegadores requieren service worker */
+  }
+}
+
+function requestNotifications() {
+  if (typeof Notification === "undefined") {
+    renderError("Tu navegador no soporta notificaciones.");
+    return;
+  }
+  if (Notification.permission === "default") {
+    Notification.requestPermission();
+  }
+}
+
+function isTypingTarget(target) {
+  if (!target) return false;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable;
+}
+
+function anyModalOpen() {
+  return Array.from(document.querySelectorAll(".modal.show")).length > 0;
+}
+
+function closeTopModal() {
+  const open = document.querySelector(".modal.show");
+  if (open) {
+    open.classList.remove("show");
+    return true;
+  }
+  if (sidebarEl.classList.contains("open")) {
+    closeSidebar();
+    return true;
+  }
+  return false;
+}
+
+document.addEventListener("keydown", (event) => {
+  const mod = event.ctrlKey || event.metaKey;
+
+  if (event.key === "Escape") {
+    if (closeTopModal()) event.preventDefault();
+    return;
+  }
+  if (mod && event.key.toLowerCase() === "k") {
+    event.preventDefault();
+    startNewChat();
+    return;
+  }
+  if (mod && event.shiftKey && event.key.toLowerCase() === "o") {
+    event.preventDefault();
+    openSettings();
+    return;
+  }
+  if (event.key === "/" && !isTypingTarget(event.target) && !anyModalOpen()) {
+    event.preventDefault();
+    inputEl.focus();
+  }
+});
+
+function handleDroppedFile(file) {
+  if (!file) return;
+  const name = (file.name || "").toLowerCase();
+  const isText =
+    file.type.startsWith("text/") ||
+    /\.(txt|md|markdown|csv|json|log|py|js|ts|html|css)$/.test(name);
+  if (!isText) {
+    renderError("Solo puedo adjuntar archivos de texto (txt, md, csv, json...).");
+    return;
+  }
+  if (file.size > 200 * 1024) {
+    renderError("El archivo es demasiado grande (máx. 200 KB).");
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    if (!currentUser) {
+      showAuthGate();
+      return;
+    }
+    kbTitle.value = file.name.replace(/\.[^.]+$/, "").slice(0, 160);
+    kbText.value = String(reader.result || "").slice(0, 50000);
+    kbModal.classList.add("show");
+    loadDocuments();
+  };
+  reader.readAsText(file);
+}
+
+function initDragAndDrop() {
+  const target = scrollEl;
+  ["dragenter", "dragover"].forEach((type) => {
+    target.addEventListener(type, (event) => {
+      event.preventDefault();
+      target.classList.add("dragging");
+    });
+  });
+  ["dragleave", "dragend", "drop"].forEach((type) => {
+    target.addEventListener(type, () => target.classList.remove("dragging"));
+  });
+  target.addEventListener("drop", (event) => {
+    event.preventDefault();
+    const file = event.dataTransfer && event.dataTransfer.files[0];
+    handleDroppedFile(file);
+  });
+}
+
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator) || location.protocol === "file:") return;
+  try {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  } catch (_) {
+    /* ignora entornos sin soporte */
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1366,6 +1884,7 @@ settingsBtn.addEventListener("click", openSettings);
 settingsClose.addEventListener("click", closeSettings);
 settingsSave.addEventListener("click", saveSettings);
 deleteAccountBtn.addEventListener("click", deleteAccount);
+document.getElementById("settings-notify").addEventListener("click", requestNotifications);
 settingsModal.addEventListener("click", (event) => {
   if (event.target === settingsModal) closeSettings();
 });
@@ -1379,6 +1898,31 @@ plansModal.addEventListener("click", (event) => {
 adminClose.addEventListener("click", closeAdmin);
 adminModal.addEventListener("click", (event) => {
   if (event.target === adminModal) closeAdmin();
+});
+
+adminTabs.addEventListener("click", (event) => {
+  const btn = event.target.closest(".admin-tab");
+  if (btn) switchAdminTab(btn.dataset.tab);
+});
+
+noticeCreate.addEventListener("click", async () => {
+  const message = noticeInput.value.trim();
+  if (!message) return;
+  noticeCreate.disabled = true;
+  try {
+    await api("/api/admin/notices", {
+      method: "POST",
+      body: JSON.stringify({ message, level: noticeLevel.value }),
+    });
+    noticeInput.value = "";
+    const data = await api("/api/admin/notices");
+    renderAdminNotices(data.notices || []);
+    loadNotices();
+  } catch (err) {
+    renderError(err.message);
+  } finally {
+    noticeCreate.disabled = false;
+  }
 });
 
 authFormEl.addEventListener("submit", submitEmailAuth);
@@ -1403,7 +1947,9 @@ authSwitchBtn.addEventListener("click", () => {
   updatePlanBadge();
   autoResize();
   setAuthMode("login");
-  await loadProviders();
+  initDragAndDrop();
+  registerServiceWorker();
+  await Promise.all([loadProviders(), loadConfig(), loadNotices()]);
   if (authProvidersEl) renderLoginButtons(authProvidersEl, "auth-login");
   try {
     await loadSession();

@@ -50,11 +50,11 @@ def init_db() -> None:
 
 
 def migrate_schema() -> None:
-    """Añade columnas nuevas a tablas existentes (compatibilidad multi-proveedor).
+    """Añade columnas nuevas a tablas existentes (compatibilidad multi-login).
 
-    `create_all` no altera tablas ya creadas, así que añadimos manualmente las
-    columnas de identidad (Google) y de contraseña, y permitimos `discord_id`
-    nulo en bases de datos que ya existían antes de soportar varios métodos.
+    `create_all` no altera tablas ya creadas, así que añadimos manualmente la
+    columna de contraseña y permitimos `discord_id` nulo en bases de datos que
+    ya existían antes de soportar el login por correo/contraseña.
     """
     inspector = inspect(engine)
     if "users" not in inspector.get_table_names():
@@ -64,25 +64,20 @@ def migrate_schema() -> None:
     dialect = engine.dialect.name
 
     statements: list[str] = []
-    if "google_id" not in columns:
-        statements.append("ALTER TABLE users ADD COLUMN google_id VARCHAR(64)")
     if "password_hash" not in columns:
         statements.append("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)")
+    if "is_active" not in columns:
+        statements.append("ALTER TABLE users ADD COLUMN is_active BOOLEAN DEFAULT true")
+        statements.append("UPDATE users SET is_active = true WHERE is_active IS NULL")
+    if "is_banned" not in columns:
+        statements.append("ALTER TABLE users ADD COLUMN is_banned BOOLEAN DEFAULT false")
+        statements.append("UPDATE users SET is_banned = false WHERE is_banned IS NULL")
     if dialect == "postgresql" and not columns.get("discord_id", {}).get("nullable", True):
         statements.append("ALTER TABLE users ALTER COLUMN discord_id DROP NOT NULL")
 
-    existing_indexes = {index["name"] for index in inspector.get_indexes("users")}
-    index_statements: list[str] = []
-    if "ix_users_google_id" not in existing_indexes:
-        index_statements.append(
-            "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_google_id ON users (google_id)"
-        )
-
-    if not statements and not index_statements:
+    if not statements:
         return
 
     with engine.begin() as connection:
         for statement in statements:
-            connection.execute(text(statement))
-        for statement in index_statements:
             connection.execute(text(statement))
