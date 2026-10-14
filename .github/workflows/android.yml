@@ -32,6 +32,12 @@ jobs:
         with:
           gradle-version: "8.7"
 
+      - name: Cache debug keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: android-debug-keystore-v1
+
       - name: Copy web assets into the APK
         run: |
           mkdir -p app/src/main/assets/www
