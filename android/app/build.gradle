@@ -3,7 +3,7 @@ plugins {
 }
 
 def keystorePath = System.getenv("KEYSTORE_FILE")
-def hasKeystore = keystorePath != null && file(keystorePath).exists()
+def hasKeystore = keystorePath != null && !keystorePath.trim().isEmpty() && file(keystorePath).exists()
 
 android {
     namespace "com.coreia.app"
