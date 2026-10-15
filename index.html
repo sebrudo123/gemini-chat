@@ -1424,6 +1424,11 @@
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation: none !important; transition: none !important; }
     }
+  .verify-banner { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: #111827; color: #f1f5f9; padding: 6px 12px; border-radius: 999px; box-shadow: 0 10px 40px -20px rgba(0,0,0,.5); display: none; z-index: 100; }
+.verify-banner.show { display: flex; align-items: center; gap: 10px; animation: popIn .2s both; }
+.verify-content { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
+.verify-btn { background: var(--accent); color: #fff; border: none; padding: 4px 8px; border-radius: 999px; cursor: pointer; font-size: 12px; }
+.verify-btn:disabled { opacity: .5; }
   </style>
 </head>
 <body>

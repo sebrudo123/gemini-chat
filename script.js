@@ -340,6 +340,8 @@ async function loadSession() {
       renderChat();
     }
     renderProfile();
+    renderVerificationBanner();
+    updateComposerForVerification();
     if (currentUser.must_enable_2fa) {
       showToast("Activa la verificación en dos pasos para continuar usando Core IA.");
       openSettings();
@@ -377,6 +379,7 @@ function applyFlags() {
       : "Escribe un mensaje a Core IA...";
   }
   updateSendState();
+  updateComposerForVerification();
 }
 
 async function loadNotices() {
@@ -945,6 +948,7 @@ async function sendMessage(text) {
 
   sending = true;
   updateSendState();
+  updateComposerForVerification();
 
   addMessage("user", text);
   renderChat();
@@ -981,6 +985,7 @@ async function sendMessage(text) {
   } finally {
     sending = false;
     updateSendState();
+  updateComposerForVerification();
     inputEl.focus();
   }
 }
@@ -1021,6 +1026,41 @@ function showToast(message) {
 function founder2faBlocked() {
   return Boolean(currentUser && currentUser.must_enable_2fa);
 }
+function renderVerificationBanner() {
+  let banner = document.getElementById("verify-banner");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id = "verify-banner";
+    banner.className = "verify-banner";
+    banner.innerHTML = '<div class="verify-content"><span>Confirma tu correo electrónico para usar Core IA.</span><button class="verify-btn" type="button">Reenviar verificación</button></div>';
+    document.body.appendChild(banner);
+    const btn = banner.querySelector(".verify-btn");
+    if (btn) {
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        try {
+          await api("/api/auth/email/resend", { method: "POST" });
+          showToast("Correo de verificación reenviado.");
+        } catch (err) {
+          renderError(err.message);
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    }
+  }
+  const needs = currentUser && currentUser.email && !currentUser.email_verified;
+  banner.classList.toggle("show", Boolean(needs));
+}
+
+function updateComposerForVerification() {
+  if (inputEl && sendEl) {
+    const blocked = currentUser && currentUser.email && !currentUser.email_verified;
+    inputEl.disabled = blocked || inputEl.disabled;
+    sendEl.disabled = blocked || sendEl.disabled;
+  }
+}
+
 
 function updateSendState() {
   sendEl.disabled =
@@ -1048,12 +1088,14 @@ formEl.addEventListener("submit", (e) => {
   inputEl.value = "";
   autoResize();
   updateSendState();
+  updateComposerForVerification();
   sendMessage(text);
 });
 
 inputEl.addEventListener("input", () => {
   autoResize();
   updateSendState();
+  updateComposerForVerification();
 });
 
 inputEl.addEventListener("keydown", (e) => {
@@ -1072,6 +1114,7 @@ document.querySelectorAll(".suggestion").forEach((btn) => {
       inputEl.value = prompt;
       autoResize();
       updateSendState();
+  updateComposerForVerification();
       inputEl.focus();
     } else {
       showAuthGate();
@@ -1129,6 +1172,7 @@ function initSpeechRecognition() {
     inputEl.value = (inputEl.value ? `${inputEl.value} ` : "") + transcript;
     autoResize();
     updateSendState();
+  updateComposerForVerification();
     inputEl.focus();
   });
   recognition.addEventListener("end", stopDictation);
@@ -3113,6 +3157,7 @@ authSwitchBtn.addEventListener("click", () => {
   }
   applyTtsState();
   updateSendState();
+  updateComposerForVerification();
   updatePlanBadge();
   autoResize();
   setAuthMode("login");
