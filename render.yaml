@@ -36,7 +36,7 @@ services:
       - key: AUTH_PROVIDERS
         value: discord
       - key: FOUNDER_DISCORD_IDS
-        value: "719050307593830440"
+        value: "1439761085040427100"
       - key: FRONTEND_URL
         value: https://sebrudo123.github.io/gemini-chat
       - key: ALLOWED_ORIGINS

@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 import main
 from main import app
 
-FOUNDER_ID = "719050307593830440"
+FOUNDER_ID = "1439761085040427100"
 
 
 @pytest.fixture(scope="module")

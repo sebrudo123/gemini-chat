@@ -48,7 +48,7 @@ class Settings:
         self.founder_ids = [
             founder.strip()
             for founder in os.environ.get(
-                "FOUNDER_DISCORD_IDS", "719050307593830440"
+                "FOUNDER_DISCORD_IDS", "1439761085040427100"
             ).split(",")
             if founder.strip()
         ]
