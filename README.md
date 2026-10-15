@@ -62,6 +62,7 @@ DISCORD_CLIENT_SECRET=...
 DISCORD_REDIRECT_URI=https://TU-BACKEND.onrender.com/api/auth/discord/callback
 AUTH_PROVIDERS=discord
 FOUNDER_DISCORD_IDS=1439761085040427100   # IDs con acceso al panel de administración
+FOUNDER_2FA_REQUIRED=true                  # exige 2FA al fundador antes de usar el chat
 FRONTEND_URL=https://TU-FRONTEND
 ALLOWED_ORIGINS=https://TU-FRONTEND,http://localhost:5500
 DATABASE_URL=postgresql://usuario:password@host:5432/coreia   # opcional (si falta usa SQLite)
@@ -69,6 +70,7 @@ REDIS_URL=                # opcional (caché + rate limiting distribuido)
 SENTRY_DSN=               # opcional (observabilidad)
 ENVIRONMENT=production
 RATE_LIMIT=30/minute
+AUTH_RATE_LIMIT=10/minute # límite específico de login, registro y verificación 2FA
 EMAIL_RELAY_URL=          # opción A) relevo HTTPS propio (Google Apps Script -> tu Gmail)
 EMAIL_RELAY_TOKEN=        # token compartido con el relevo
 BREVO_API_KEY=            # opción B) API HTTPS (https://app.brevo.com), sin dominio
@@ -231,12 +233,24 @@ pruebas en cada push y pull request.
   en el servidor (`403` para el resto).
 - `GET /api/admin/stats`: totales de usuarios, conversaciones, mensajes, documentos,
   actividad y mensajes de hoy, y reparto por plan.
-- `GET /api/admin/users`: listado de usuarios con plan, nº de chats y documentos.
-- `PATCH /api/admin/users/{id}`: cambia el plan (`free`/`pro`/`enterprise`).
+- `GET /api/admin/users`: listado de usuarios con plan, nº de chats, documentos,
+  notas internas y etiquetas.
+- `GET /api/admin/users/{id}`: ficha completa (datos, cuotas y consumo, lista de
+  conversaciones y documentos).
+- `PATCH /api/admin/users/{id}`: edita plan, estado (activo/baneado), nombre
+  visible, usuario, correo, verificación, notas y etiquetas; `reset_2fa` para
+  desactivar la 2FA.
+- `POST /api/admin/users/{id}/reset-2fa`: restablece la 2FA del usuario.
+- `POST /api/admin/users/{id}/resend-verification`: reenvía el correo de verificación.
+- `POST /api/admin/users/{id}/logout-all`: cierra todas las sesiones activas
+  (incrementa `User.session_epoch`, invalidando los tokens anteriores).
+- `GET /api/admin/export/users?format=csv|json`: exporta la lista de usuarios.
+- `GET|DELETE /api/admin/conversations/{id}`: consulta o elimina conversaciones.
+- `DELETE /api/admin/documents/{id}`: elimina documentos de conocimiento.
 - `DELETE /api/admin/users/{id}`: elimina un usuario y todos sus datos (los
-  fundadores están protegidos).
+  fundadores están protegidos frente a suspensión, borrado y cambio de plan).
 - En el frontend, el fundador ve un botón con forma de escudo en la barra lateral
-  que abre el panel (métricas + gestión de usuarios).
+  que abre el panel (métricas, usuarios con drill-down, flags, avisos y auditoría).
 
 ## Seguridad
 

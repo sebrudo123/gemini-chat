@@ -82,6 +82,13 @@ def migrate_schema() -> None:
         statements.append("UPDATE users SET totp_enabled = false WHERE totp_enabled IS NULL")
     if "recovery_codes" not in columns:
         statements.append("ALTER TABLE users ADD COLUMN recovery_codes TEXT")
+    if "notes" not in columns:
+        statements.append("ALTER TABLE users ADD COLUMN notes TEXT")
+    if "tags" not in columns:
+        statements.append("ALTER TABLE users ADD COLUMN tags VARCHAR(255)")
+    if "session_epoch" not in columns:
+        statements.append("ALTER TABLE users ADD COLUMN session_epoch INTEGER DEFAULT 0")
+        statements.append("UPDATE users SET session_epoch = 0 WHERE session_epoch IS NULL")
     if dialect == "postgresql" and not columns.get("discord_id", {}).get("nullable", True):
         statements.append("ALTER TABLE users ALTER COLUMN discord_id DROP NOT NULL")
 

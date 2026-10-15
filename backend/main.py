@@ -12,8 +12,10 @@ Consulta el README para las variables de entorno.
 """
 
 import base64
+import csv
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
@@ -235,9 +237,26 @@ def resolve_return_url(state: str | None) -> str:
         return f"{settings.frontend_url}/"
 
 
-def create_session_token(profile: dict[str, Any]) -> str:
-    """Genera un token firmado con los datos públicos del usuario."""
-    return serializer.dumps({"user": profile})
+def create_session_token(profile: dict[str, Any], epoch: int = 0) -> str:
+    """Genera un token firmado con los datos públicos del usuario.
+
+    `epoch` permite invalidar todas las sesiones de un usuario incrementando
+    `User.session_epoch` (por ejemplo, al cerrar sesión en todos los dispositivos).
+    """
+    return serializer.dumps({"user": profile, "epoch": int(epoch or 0)})
+
+
+def session_epoch_for(db: Session, profile: dict[str, Any]) -> int:
+    """Devuelve la época de sesión actual del usuario (0 si no existe)."""
+    provider = (profile.get("provider") or "discord").lower()
+    provider_id = profile.get("id")
+    if provider_id is None:
+        return 0
+    if provider == "email":
+        user = db.get(User, provider_id)
+    else:
+        user = db.query(User).filter(User.discord_id == str(provider_id)).first()
+    return int(getattr(user, "session_epoch", 0) or 0) if user else 0
 
 
 def hash_password(password: str) -> str:
@@ -261,7 +280,10 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(derived.hex(), hash_hex)
 
 
-def get_current_user(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+def get_current_user(
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
     """Valida el token Bearer y devuelve el perfil del usuario."""
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(
@@ -280,6 +302,11 @@ def get_current_user(authorization: str | None = Header(default=None)) -> dict[s
     user = payload.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Token de sesión inválido.")
+    if int(payload.get("epoch", 0) or 0) < session_epoch_for(db, user):
+        raise HTTPException(
+            status_code=401,
+            detail="La sesión se ha cerrado. Vuelve a iniciar sesión.",
+        )
     return user
 
 
@@ -782,7 +809,7 @@ def _finish_login(db: Session, profile: dict[str, Any], state_data: dict[str, An
     if user.totp_enabled:
         pending = twofa_serializer.dumps({"user": profile})
         return RedirectResponse(f"{return_url}#pending2fa={pending}")
-    token = create_session_token(profile)
+    token = create_session_token(profile, user.session_epoch)
     return RedirectResponse(f"{return_url}#token={token}")
 
 
@@ -1128,7 +1155,7 @@ def email_register(
 
     profile = _email_profile(user)
     _send_verification_email(user)
-    return AuthTokenResponse(token=create_session_token(profile), user=profile)
+    return AuthTokenResponse(token=create_session_token(profile, user.session_epoch), user=profile)
 
 
 @app.post("/api/auth/login")
@@ -1149,7 +1176,7 @@ def email_login(
         pending = twofa_serializer.dumps({"user": _email_profile(user)})
         return {"requires_2fa": True, "pending_token": pending}
     profile = _email_profile(user)
-    return {"token": create_session_token(profile), "user": profile}
+    return {"token": create_session_token(profile, user.session_epoch), "user": profile}
 
 
 # --------------------------------------------------------------------------- #
@@ -1294,7 +1321,7 @@ def twofa_verify(
     if not user.totp_enabled or not user.totp_secret:
         profile = dict(profile)
         profile["is_admin"] = is_admin(profile)
-        return AuthTokenResponse(token=create_session_token(profile), user=profile)
+        return AuthTokenResponse(token=create_session_token(profile, user.session_epoch), user=profile)
 
     code = payload.code.strip()
     verified = pyotp.TOTP(user.totp_secret).verify(code, valid_window=1)
@@ -1306,7 +1333,7 @@ def twofa_verify(
 
     session_profile = dict(_email_profile(user)) if (profile.get("provider") == "email") else dict(profile)
     session_profile["is_admin"] = is_admin(session_profile)
-    return AuthTokenResponse(token=create_session_token(session_profile), user=session_profile)
+    return AuthTokenResponse(token=create_session_token(session_profile, user.session_epoch), user=session_profile)
 
 
 # --------------------------------------------------------------------------- #
@@ -1814,6 +1841,13 @@ class AdminUserUpdate(BaseModel):
     plan: str | None = Field(default=None, pattern="^(free|pro|enterprise)$")
     is_active: bool | None = None
     is_banned: bool | None = None
+    display_name: str | None = Field(default=None, min_length=1, max_length=64)
+    username: str | None = Field(default=None, min_length=1, max_length=64)
+    email: str | None = Field(default=None, max_length=255)
+    email_verified: bool | None = None
+    notes: str | None = Field(default=None, max_length=2000)
+    tags: str | None = Field(default=None, max_length=255)
+    reset_2fa: bool | None = None
 
 
 class NoticeRequest(BaseModel):
@@ -1858,6 +1892,8 @@ def _serialize_admin_user(db: Session, user: User) -> dict[str, Any]:
         "is_banned": bool(user.is_banned),
         "email_verified": bool(user.email_verified),
         "totp_enabled": bool(user.totp_enabled),
+        "notes": user.notes or "",
+        "tags": [tag.strip() for tag in (user.tags or "").split(",") if tag.strip()],
         "created_at": user.created_at.isoformat() if user.created_at else None,
         "is_founder": user.discord_id in settings.founder_ids,
         "conversations": db.query(func.count(Conversation.id))
@@ -1918,6 +1954,14 @@ def admin_users(
     return {"users": [_serialize_admin_user(db, user) for user in users]}
 
 
+def _get_admin_target(db: Session, user_id: int) -> User:
+    """Recupera el usuario objetivo garantizando que no sea un fundador."""
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+    return user
+
+
 @app.patch("/api/admin/users/{user_id}")
 def admin_update_user(
     user_id: int,
@@ -1925,29 +1969,99 @@ def admin_update_user(
     admin: dict[str, Any] = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Cambia el plan o el estado (activo/baneado) de un usuario."""
-    user = db.get(User, user_id)
-    if user is None:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado.")
-    if user.discord_id in settings.founder_ids:
-        raise HTTPException(status_code=400, detail="No puedes modificar a un fundador.")
+    """Edita el perfil, estado y datos de un usuario desde el panel."""
+    user = _get_admin_target(db, user_id)
+    is_founder = user.discord_id in settings.founder_ids
 
     changes: list[str] = []
-    if payload.plan is not None:
+    if payload.plan is not None and not is_founder:
         user.plan = payload.plan
         changes.append(f"plan={payload.plan}")
-    if payload.is_active is not None:
+    if payload.is_active is not None and not is_founder:
         user.is_active = payload.is_active
         changes.append(f"is_active={payload.is_active}")
-    if payload.is_banned is not None:
+    if payload.is_banned is not None and not is_founder:
         user.is_banned = payload.is_banned
         changes.append(f"is_banned={payload.is_banned}")
+    if payload.display_name is not None:
+        user.display_name = payload.display_name
+        changes.append("display_name")
+    if payload.username is not None:
+        user.username = payload.username
+        changes.append("username")
+    if payload.email is not None:
+        user.email = payload.email.strip().lower() or None
+        changes.append("email")
+    if payload.email_verified is not None:
+        user.email_verified = payload.email_verified
+        changes.append(f"email_verified={payload.email_verified}")
+    if payload.notes is not None:
+        user.notes = payload.notes
+        changes.append("notes")
+    if payload.tags is not None:
+        cleaned = ",".join(tag.strip() for tag in payload.tags.split(",") if tag.strip())
+        user.tags = cleaned[:255]
+        changes.append(f"tags={cleaned[:255]}")
+    if payload.reset_2fa:
+        user.totp_enabled = False
+        user.totp_secret = None
+        user.recovery_codes = None
+        changes.append("reset_2fa")
 
     db.commit()
     db.refresh(user)
     if changes:
         record_audit(db, admin, "user.update", str(user.id), ", ".join(changes))
     return {"user": _serialize_admin_user(db, user)}
+
+
+@app.post("/api/admin/users/{user_id}/reset-2fa")
+def admin_reset_2fa(
+    user_id: int,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Desactiva la 2FA de un usuario (pierde el acceso a sus códigos)."""
+    user = _get_admin_target(db, user_id)
+    user.totp_enabled = False
+    user.totp_secret = None
+    user.recovery_codes = None
+    db.commit()
+    db.refresh(user)
+    record_audit(db, admin, "user.reset_2fa", str(user.id), "")
+    return {"user": _serialize_admin_user(db, user)}
+
+
+@app.post("/api/admin/users/{user_id}/resend-verification")
+def admin_resend_verification(
+    user_id: int,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Reenvía el correo de verificación a un usuario."""
+    user = _get_admin_target(db, user_id)
+    if not user.email:
+        raise HTTPException(status_code=400, detail="El usuario no tiene correo.")
+    if user.email_verified:
+        return {"ok": True, "sent": False, "already_verified": True}
+    sent = _send_verification_email(user)
+    record_audit(db, admin, "user.resend_verification", str(user.id), f"sent={sent}")
+    return {"ok": True, "sent": sent, "already_verified": False}
+
+
+@app.post("/api/admin/users/{user_id}/logout-all")
+def admin_logout_all(
+    user_id: int,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Invalida todas las sesiones activas de un usuario."""
+    user = _get_admin_target(db, user_id)
+    user.session_epoch = int(user.session_epoch or 0) + 1
+    db.commit()
+    db.refresh(user)
+    record_audit(db, admin, "user.logout_all", str(user.id), f"epoch={user.session_epoch}")
+    return {"ok": True, "session_epoch": user.session_epoch}
 
 
 @app.delete("/api/admin/users/{user_id}")
@@ -1966,6 +2080,158 @@ def admin_delete_user(
     delete_user_data(db, user)
     record_audit(db, admin, "user.delete", target, "")
     return {"ok": True}
+
+
+def _serialize_admin_document(document: Document) -> dict[str, Any]:
+    """Representación de un documento para el panel de administración."""
+    return {
+        "id": document.id,
+        "title": document.title,
+        "chunks": len(document.chunks),
+        "created_at": document.created_at.isoformat() if document.created_at else None,
+    }
+
+
+def _usage_series(db: Session, user_id: int, days: int = 14) -> list[dict[str, Any]]:
+    """Serie diaria de consumo de un usuario (más antiguo primero)."""
+    rows = (
+        db.query(Usage)
+        .filter(Usage.user_id == user_id)
+        .order_by(Usage.day.desc())
+        .limit(days)
+        .all()
+    )
+    return [
+        {"day": row.day, "messages": int(row.messages or 0), "images": int(row.images or 0)}
+        for row in reversed(rows)
+    ]
+
+
+@app.get("/api/admin/users/{user_id}")
+def admin_user_detail(
+    user_id: int,
+    _: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Ficha completa de un usuario: datos, cuotas, conversaciones y documentos."""
+    user = _get_admin_target(db, user_id)
+    conversations = (
+        db.query(Conversation)
+        .filter(Conversation.user_id == user.id)
+        .order_by(Conversation.updated_at.desc())
+        .all()
+    )
+    documents = (
+        db.query(Document)
+        .filter(Document.user_id == user.id)
+        .order_by(Document.id.desc())
+        .all()
+    )
+    today = db.query(Usage).filter(Usage.user_id == user.id, Usage.day == today_str()).first()
+    return {
+        "user": _serialize_admin_user(db, user),
+        "limits": plans.limits_for(user.plan),
+        "usage": {
+            "today": {
+                "messages": int(today.messages or 0) if today else 0,
+                "images": int(today.images or 0) if today else 0,
+            },
+            "series": _usage_series(db, user.id),
+        },
+        "conversations": [_serialize_conversation(c) for c in conversations],
+        "documents": [_serialize_admin_document(d) for d in documents],
+    }
+
+
+@app.get("/api/admin/conversations/{conversation_id}")
+def admin_conversation_detail(
+    conversation_id: int,
+    _: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Contenido completo de una conversación para moderación."""
+    conversation = db.get(Conversation, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversación no encontrada.")
+    return {
+        "conversation": _serialize_conversation(conversation, detailed=True),
+        "user_id": conversation.user_id,
+    }
+
+
+@app.delete("/api/admin/conversations/{conversation_id}")
+def admin_delete_conversation(
+    conversation_id: int,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    """Elimina una conversación concreta (moderación)."""
+    conversation = db.get(Conversation, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversación no encontrada.")
+    target = f"conversation:{conversation_id}/user:{conversation.user_id}"
+    db.delete(conversation)
+    db.commit()
+    record_audit(db, admin, "conversation.delete", target, "")
+    return {"ok": True}
+
+
+@app.delete("/api/admin/documents/{document_id}")
+def admin_delete_document(
+    document_id: int,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    """Elimina un documento de conocimiento (moderación)."""
+    document = db.get(Document, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Documento no encontrado.")
+    target = f"document:{document_id}/user:{document.user_id}"
+    db.delete(document)
+    db.commit()
+    record_audit(db, admin, "document.delete", target, "")
+    return {"ok": True}
+
+
+@app.get("/api/admin/export/users")
+def admin_export_users(
+    _: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+    format: str = "json",
+) -> Response:
+    """Exporta la lista de usuarios en JSON o CSV."""
+    users = db.query(User).order_by(User.created_at.desc()).all()
+    fields = [
+        "id",
+        "discord_id",
+        "username",
+        "display_name",
+        "email",
+        "plan",
+        "is_active",
+        "is_banned",
+        "email_verified",
+        "totp_enabled",
+        "conversations",
+        "documents",
+        "created_at",
+    ]
+    serialized = [_serialize_admin_user(db, user) for user in users]
+    if format.lower() == "csv":
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(fields)
+        for row in serialized:
+            writer.writerow([row.get(field, "") for field in fields])
+        return Response(
+            content=buffer.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="coreia-usuarios.csv"'},
+        )
+    return JSONResponse(
+        content={"users": serialized},
+        headers={"Content-Disposition": 'attachment; filename="coreia-usuarios.json"'},
+    )
 
 
 @app.get("/api/admin/audit")

@@ -38,6 +38,9 @@ class User(Base):
     totp_secret: Mapped[str | None] = mapped_column(String(64), default=None)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     recovery_codes: Mapped[str | None] = mapped_column(Text, default=None)
+    notes: Mapped[str | None] = mapped_column(Text, default="")
+    tags: Mapped[str | None] = mapped_column(String(255), default="")
+    session_epoch: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     conversations: Mapped[list["Conversation"]] = relationship(

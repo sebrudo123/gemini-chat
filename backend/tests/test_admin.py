@@ -130,6 +130,65 @@ def test_admin_can_ban_and_suspend_user(client):
     client.delete(f"/api/admin/users/{target['id']}", headers=founder)
 
 
+def test_admin_user_drilldown_edit_and_export(client):
+    from database import SessionLocal
+    from models import Conversation, Document, Message
+
+    founder = auth(FOUNDER_ID)
+    member_id = "800000000000000009"
+    member = auth(member_id)
+    client.get("/api/auth/me", headers=member)
+
+    users = client.get("/api/admin/users", headers=founder).json()["users"]
+    target = next(user for user in users if user["discord_id"] == member_id)
+    uid = target["id"]
+
+    with SessionLocal() as db:
+        conversation = Conversation(user_id=uid, title="Prueba admin")
+        db.add(conversation)
+        db.commit()
+        db.refresh(conversation)
+        db.add(Message(conversation_id=conversation.id, role="user", content="hola"))
+        document = Document(user_id=uid, title="Doc prueba")
+        db.add(document)
+        db.commit()
+        db.refresh(document)
+        conversation_id, document_id = conversation.id, document.id
+
+    detail = client.get(f"/api/admin/users/{uid}", headers=founder).json()
+    assert detail["user"]["id"] == uid
+    assert any(c["id"] == conversation_id for c in detail["conversations"])
+    assert any(d["id"] == document_id for d in detail["documents"])
+
+    conv = client.get(f"/api/admin/conversations/{conversation_id}", headers=founder).json()
+    assert conv["conversation"]["items"][0]["content"] == "hola"
+
+    edited = client.patch(
+        f"/api/admin/users/{uid}",
+        json={"display_name": "Nuevo Nombre", "notes": "vip", "tags": "beta, vip", "email_verified": True},
+        headers=founder,
+    )
+    assert edited.status_code == 200
+    edited_user = edited.json()["user"]
+    assert edited_user["display_name"] == "Nuevo Nombre"
+    assert edited_user["notes"] == "vip"
+    assert edited_user["tags"] == ["beta", "vip"]
+    assert edited_user["email_verified"] is True
+
+    assert client.post(f"/api/admin/users/{uid}/reset-2fa", headers=founder).status_code == 200
+    assert client.post(f"/api/admin/users/{uid}/logout-all", headers=founder).status_code == 200
+    assert client.get("/api/auth/me", headers=member).status_code == 401
+
+    csv_response = client.get("/api/admin/export/users?format=csv", headers=founder)
+    assert csv_response.status_code == 200
+    assert "text/csv" in csv_response.headers["content-type"]
+    json_response = client.get("/api/admin/export/users", headers=founder)
+    assert any(user["id"] == uid for user in json_response.json()["users"])
+
+    assert client.delete(f"/api/admin/conversations/{conversation_id}", headers=founder).status_code == 200
+    assert client.delete(f"/api/admin/documents/{document_id}", headers=founder).status_code == 200
+
+
 def test_admin_audit_flags_and_notices(client):
     founder = auth(FOUNDER_ID)
 

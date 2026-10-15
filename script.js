@@ -79,6 +79,12 @@ const adminUserCount = document.getElementById("admin-user-count");
 const adminAuditSearch = document.getElementById("admin-audit-search");
 const adminAuditLimit = document.getElementById("admin-audit-limit");
 const adminChartRange = document.getElementById("admin-chart-range");
+const adminExportCsv = document.getElementById("admin-export-csv");
+const adminExportJson = document.getElementById("admin-export-json");
+const adminUserModal = document.getElementById("admin-user-modal");
+const adminUserDetail = document.getElementById("admin-user-detail");
+const adminUserTitle = document.getElementById("admin-user-title");
+const adminUserClose = document.getElementById("admin-user-close");
 const noticeBanner = document.getElementById("notice-banner");
 const noticeInput = document.getElementById("notice-input");
 const noticeLevel = document.getElementById("notice-level");
@@ -2278,10 +2284,365 @@ function adminUserRow(user) {
   } else if (user.is_active === false) {
     actions.appendChild(adminTag("Suspendido", "suspended"));
   }
+
+  const detail = document.createElement("button");
+  detail.className = "admin-mini";
+  detail.type = "button";
+  detail.textContent = "Detalle";
+  detail.addEventListener("click", () => openAdminUser(user.id));
+  actions.appendChild(detail);
+
   actions.append(suspend, ban, del);
   row.appendChild(actions);
 
   return row;
+}
+
+/* ------------------------------------------------------------------ */
+/* Admin: detalle de usuario                                           */
+/* ------------------------------------------------------------------ */
+
+function adminSection(titleText) {
+  const section = document.createElement("div");
+  section.className = "admin-detail-section";
+  if (titleText) {
+    const h = document.createElement("h3");
+    h.textContent = titleText;
+    section.appendChild(h);
+  }
+  return section;
+}
+
+function adminMiniButton(label, onClick, danger = false) {
+  const btn = document.createElement("button");
+  btn.className = danger ? "admin-mini danger" : "admin-mini";
+  btn.type = "button";
+  btn.textContent = label;
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+function adminKvRow(dl, key, value) {
+  const dt = document.createElement("dt");
+  dt.textContent = key;
+  const dd = document.createElement("dd");
+  dd.textContent = value == null || value === "" ? "—" : String(value);
+  dl.append(dt, dd);
+}
+
+function closeAdminUser() {
+  adminUserModal.classList.remove("show");
+  adminUserDetail.innerHTML = "";
+}
+
+async function openAdminUser(userId) {
+  adminUserTitle.textContent = "Cargando…";
+  adminUserDetail.innerHTML = "";
+  adminUserModal.classList.add("show");
+  try {
+    const data = await api(`/api/admin/users/${userId}`);
+    renderAdminUserDetail(data);
+  } catch (err) {
+    adminUserTitle.textContent = "Detalle de usuario";
+    const error = document.createElement("p");
+    error.className = "modal-sub";
+    error.textContent = err.message;
+    adminUserDetail.appendChild(error);
+  }
+}
+
+function syncAdminUserLocal(user) {
+  const idx = adminData.users.findIndex((item) => item.id === user.id);
+  if (idx >= 0) adminData.users[idx] = { ...adminData.users[idx], ...user };
+  applyUserFilters();
+}
+
+function renderAdminUserDetail(data) {
+  const user = data.user;
+  adminUserDetail.innerHTML = "";
+  adminUserTitle.textContent = user.display_name || user.username || `Usuario #${user.id}`;
+
+  const info = adminSection("Información");
+  const dl = document.createElement("dl");
+  dl.className = "admin-kv";
+  adminKvRow(dl, "ID", user.id);
+  adminKvRow(dl, "Usuario", user.username);
+  adminKvRow(dl, "Correo", user.email ? `${user.email}${user.email_verified ? " ✔" : ""}` : "");
+  adminKvRow(dl, "Proveedor", user.discord_id ? `Discord ${user.discord_id}` : "Correo");
+  adminKvRow(dl, "Plan", user.plan);
+  adminKvRow(dl, "Estado", user.is_banned ? "Baneado" : user.is_active === false ? "Suspendido" : "Activo");
+  adminKvRow(dl, "2FA", user.totp_enabled ? "Activada" : "Desactivada");
+  adminKvRow(dl, "Alta", user.created_at ? formatDate(user.created_at) : "");
+  adminKvRow(dl, "Fundador", user.is_founder ? "Sí" : "No");
+  info.appendChild(dl);
+  adminUserDetail.appendChild(info);
+
+  const actionsSection = adminSection("Acciones");
+  const actions = document.createElement("div");
+  actions.className = "admin-detail-actions";
+  if (!user.totp_enabled) {
+    actions.appendChild(
+      adminMiniButton("Reenviar verificación", async () => {
+        try {
+          const res = await api(`/api/admin/users/${user.id}/resend-verification`, { method: "POST" });
+          showToast(res.already_verified ? "El correo ya estaba verificado." : res.sent ? "Correo reenviado." : "No se pudo enviar el correo.");
+        } catch (err) {
+          renderError(err.message);
+        }
+      })
+    );
+  }
+  actions.appendChild(
+    adminMiniButton("Restablecer 2FA", async () => {
+      if (!window.confirm("¿Desactivar la 2FA de este usuario?")) return;
+      try {
+        const res = await api(`/api/admin/users/${user.id}/reset-2fa`, { method: "POST" });
+        user.totp_enabled = res.user.totp_enabled;
+        syncAdminUserLocal(user);
+        renderAdminUserDetail(data);
+        showToast("2FA restablecida.");
+      } catch (err) {
+        renderError(err.message);
+      }
+    })
+  );
+  actions.appendChild(
+    adminMiniButton("Cerrar sesiones", async () => {
+      if (!window.confirm("¿Cerrar todas las sesiones activas de este usuario?")) return;
+      try {
+        await api(`/api/admin/users/${user.id}/logout-all`, { method: "POST" });
+        showToast("Sesiones cerradas.");
+      } catch (err) {
+        renderError(err.message);
+      }
+    })
+  );
+  if (!user.is_founder) {
+    actions.appendChild(
+      adminMiniButton(user.is_active === false ? "Reactivar" : "Suspender", async () => {
+        try {
+          const res = await api(`/api/admin/users/${user.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ is_active: user.is_active === false }),
+          });
+          user.is_active = res.user.is_active;
+          syncAdminUserLocal(user);
+          renderAdminUserDetail(data);
+        } catch (err) {
+          renderError(err.message);
+        }
+      })
+    );
+    actions.appendChild(
+      adminMiniButton(user.is_banned ? "Quitar ban" : "Banear", async () => {
+        try {
+          const res = await api(`/api/admin/users/${user.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ is_banned: !user.is_banned }),
+          });
+          user.is_banned = res.user.is_banned;
+          syncAdminUserLocal(user);
+          renderAdminUserDetail(data);
+        } catch (err) {
+          renderError(err.message);
+        }
+      }, true)
+    );
+  }
+  actionsSection.appendChild(actions);
+  adminUserDetail.appendChild(actionsSection);
+
+  const edit = adminSection("Editar y notas internas");
+  edit.appendChild(adminFieldRow("Nombre visible", "text", user.display_name || "", (v) => (user.display_name = v)));
+  edit.appendChild(adminFieldRow("Usuario", "text", user.username || "", (v) => (user.username = v)));
+  edit.appendChild(adminFieldRow("Notas internas", "textarea", user.notes || "", (v) => (user.notes = v)));
+  edit.appendChild(adminFieldRow("Etiquetas (separadas por comas)", "text", (user.tags || []).join(", "), (v) => (user.tags = v.split(",").map((t) => t.trim()).filter(Boolean))));
+  const emailToggle = document.createElement("label");
+  emailToggle.className = "admin-field-row";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = user.email_verified;
+  checkbox.addEventListener("change", () => (user.email_verified = checkbox.checked));
+  const checkboxLabel = document.createElement("span");
+  checkboxLabel.textContent = "Correo verificado";
+  emailToggle.append(checkbox, checkboxLabel);
+  edit.appendChild(emailToggle);
+  const saveRow = document.createElement("div");
+  saveRow.className = "admin-detail-actions";
+  saveRow.appendChild(
+    adminMiniButton("Guardar cambios", async () => {
+      try {
+        const payload = {
+          display_name: user.display_name,
+          username: user.username,
+          notes: user.notes,
+          tags: (user.tags || []).join(","),
+          email_verified: user.email_verified,
+        };
+        const res = await api(`/api/admin/users/${user.id}`, {
+          method: "PATCH",
+          body: JSON.stringify(payload),
+        });
+        Object.assign(user, res.user);
+        syncAdminUserLocal(res.user);
+        renderAdminUserDetail(data);
+        showToast("Cambios guardados.");
+      } catch (err) {
+        renderError(err.message);
+      }
+    })
+  );
+  edit.appendChild(saveRow);
+  adminUserDetail.appendChild(edit);
+
+  const usage = adminSection("Uso y cuotas");
+  const limits = data.limits || {};
+  const today = (data.usage && data.usage.today) || { messages: 0, images: 0 };
+  const usageBar = document.createElement("div");
+  usageBar.className = "admin-usage-bar";
+  const addUsage = (label, used, limit) => {
+    const span = document.createElement("span");
+    span.textContent = `${label}: ${used}${limit == null ? " (ilimitado)" : ` / ${limit}`}`;
+    usageBar.appendChild(span);
+  };
+  addUsage("Mensajes hoy", today.messages, limits.messages_per_day);
+  addUsage("Imágenes hoy", today.images, limits.images_per_day);
+  usage.appendChild(usageBar);
+  adminUserDetail.appendChild(usage);
+
+  const convSection = adminSection(`Conversaciones (${(data.conversations || []).length})`);
+  const convList = document.createElement("div");
+  convList.className = "admin-list";
+  if (!(data.conversations || []).length) {
+    const empty = document.createElement("div");
+    empty.className = "modal-sub";
+    empty.textContent = "Sin conversaciones.";
+    convList.appendChild(empty);
+  } else {
+    data.conversations.forEach((conv) => {
+      const item = document.createElement("div");
+      item.className = "admin-list-item";
+      const title = document.createElement("span");
+      title.className = "admin-list-title";
+      title.textContent = conv.title || "Sin título";
+      const meta = document.createElement("span");
+      meta.className = "admin-list-meta";
+      meta.textContent = `${conv.messages} mensajes`;
+      const view = adminMiniButton("Ver", async () => {
+        if (item.nextSibling && item.nextSibling.classList && item.nextSibling.classList.contains("admin-conv-view")) {
+          item.nextSibling.remove();
+          return;
+        }
+        try {
+          const detail = await api(`/api/admin/conversations/${conv.id}`);
+          const viewBox = document.createElement("div");
+          viewBox.className = "admin-conv-view admin-list";
+          (detail.conversation.items || []).forEach((msg) => {
+            const bubble = document.createElement("div");
+            bubble.className = `admin-msg ${msg.role === "user" ? "user" : "assistant"}`;
+            const role = document.createElement("span");
+            role.className = "admin-msg-role";
+            role.textContent = msg.role === "user" ? "Usuario" : "Core IA";
+            bubble.append(role, document.createTextNode(msg.content));
+            viewBox.appendChild(bubble);
+          });
+          item.after(viewBox);
+        } catch (err) {
+          renderError(err.message);
+        }
+      });
+      const remove = adminMiniButton("Eliminar", async () => {
+        if (!window.confirm("¿Eliminar esta conversación?")) return;
+        try {
+          await api(`/api/admin/conversations/${conv.id}`, { method: "DELETE" });
+          item.remove();
+          showToast("Conversación eliminada.");
+        } catch (err) {
+          renderError(err.message);
+        }
+      }, true);
+      item.append(title, meta, view, remove);
+      convList.appendChild(item);
+    });
+  }
+  convSection.appendChild(convList);
+  adminUserDetail.appendChild(convSection);
+
+  const docSection = adminSection(`Documentos (${(data.documents || []).length})`);
+  const docList = document.createElement("div");
+  docList.className = "admin-list";
+  if (!(data.documents || []).length) {
+    const empty = document.createElement("div");
+    empty.className = "modal-sub";
+    empty.textContent = "Sin documentos.";
+    docList.appendChild(empty);
+  } else {
+    data.documents.forEach((doc) => {
+      const item = document.createElement("div");
+      item.className = "admin-list-item";
+      const title = document.createElement("span");
+      title.className = "admin-list-title";
+      title.textContent = doc.title || "Documento";
+      const meta = document.createElement("span");
+      meta.className = "admin-list-meta";
+      meta.textContent = `${doc.chunks} fragmentos`;
+      const remove = adminMiniButton("Eliminar", async () => {
+        if (!window.confirm("¿Eliminar este documento?")) return;
+        try {
+          await api(`/api/admin/documents/${doc.id}`, { method: "DELETE" });
+          item.remove();
+          showToast("Documento eliminado.");
+        } catch (err) {
+          renderError(err.message);
+        }
+      }, true);
+      item.append(title, meta, remove);
+      docList.appendChild(item);
+    });
+  }
+  docSection.appendChild(docList);
+  adminUserDetail.appendChild(docSection);
+}
+
+function adminFieldRow(labelText, kind, value, onInput) {
+  const row = document.createElement("div");
+  row.className = "admin-field-row";
+  const label = document.createElement("label");
+  label.textContent = labelText;
+  const field = document.createElement(kind === "textarea" ? "textarea" : "input");
+  if (kind !== "textarea") field.type = "text";
+  field.value = value;
+  field.addEventListener("input", () => onInput(field.value));
+  row.append(label, field);
+  return row;
+}
+
+async function exportAdminUsers(format) {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/admin/export/users?format=${format}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      let detail = `Error ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data && data.detail) detail = data.detail;
+      } catch (_) { /* sin JSON */ }
+      throw new Error(detail);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `coreia-usuarios.${format}`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    showToast("Exportación lista.");
+  } catch (err) {
+    renderError(err.message);
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -2470,6 +2831,15 @@ adminUserPlan.addEventListener("change", applyUserFilters);
 adminUserStatus.addEventListener("change", applyUserFilters);
 adminAuditSearch.addEventListener("input", applyAuditFilter);
 adminAuditLimit.addEventListener("change", refreshAudit);
+
+if (adminExportCsv) adminExportCsv.addEventListener("click", () => exportAdminUsers("csv"));
+if (adminExportJson) adminExportJson.addEventListener("click", () => exportAdminUsers("json"));
+if (adminUserClose) adminUserClose.addEventListener("click", closeAdminUser);
+if (adminUserModal) {
+  adminUserModal.addEventListener("click", (event) => {
+    if (event.target === adminUserModal) closeAdminUser();
+  });
+}
 
 noticeCreate.addEventListener("click", async () => {
   const message = noticeInput.value.trim();
