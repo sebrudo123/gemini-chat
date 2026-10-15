@@ -37,6 +37,14 @@ services:
         value: discord
       - key: FOUNDER_DISCORD_IDS
         value: "1439761085040427100"
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM

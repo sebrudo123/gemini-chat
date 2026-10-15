@@ -145,3 +145,45 @@ def test_email_verification_rejects_bad_token(client):
     )
     assert redirect.status_code in (302, 307)
     assert "email_verify_error=1" in redirect.headers["location"]
+
+
+def test_send_email_returns_false_without_transport(monkeypatch):
+    monkeypatch.setattr(main.settings, "smtp_host", "")
+    monkeypatch.setattr(main.settings, "resend_api_key", "")
+    assert main._send_email("dest@example.com", "Asunto", "<b>hola</b>") is False
+
+
+def test_send_email_uses_smtp_when_configured(monkeypatch):
+    import smtplib
+
+    calls = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=20):
+            calls["host"] = host
+            calls["port"] = port
+
+        def starttls(self):
+            calls["tls"] = True
+
+        def login(self, user, password):
+            calls["login"] = (user, password)
+
+        def send_message(self, message):
+            calls["sent"] = message["Subject"]
+
+        def quit(self):
+            calls["quit"] = True
+
+    monkeypatch.setattr(main.settings, "smtp_host", "smtp.gmail.com")
+    monkeypatch.setattr(main.settings, "smtp_port", 587)
+    monkeypatch.setattr(main.settings, "smtp_user", "yo@gmail.com")
+    monkeypatch.setattr(main.settings, "smtp_password", "app-pass")
+    monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+
+    assert main._send_email("dest@example.com", "Verifica", "<b>hola</b>") is True
+    assert calls["host"] == "smtp.gmail.com"
+    assert calls["tls"] is True
+    assert calls["login"] == ("yo@gmail.com", "app-pass")
+    assert calls["sent"] == "Verifica"
+    assert calls["quit"] is True

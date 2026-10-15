@@ -18,8 +18,10 @@ import json
 import os
 import re
 import secrets
+import smtplib
 import time
 from collections.abc import AsyncIterator
+from email.message import EmailMessage
 from pathlib import Path
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -924,9 +926,46 @@ def _totp_uri(secret: str, label: str) -> str:
 
 
 def _send_email(to: str, subject: str, html: str) -> bool:
-    """Envía un correo mediante Resend. Devuelve False si no está configurado."""
-    if not settings.resend_api_key or not to:
+    """Envía un correo por SMTP (Gmail, Brevo...) o Resend. False si no está configurado."""
+    if not to:
         return False
+    if settings.smtp_host and settings.smtp_user and settings.smtp_password:
+        return _send_email_smtp(to, subject, html)
+    if settings.resend_api_key:
+        return _send_email_resend(to, subject, html)
+    return False
+
+
+def _send_email_smtp(to: str, subject: str, html: str) -> bool:
+    """Envía el correo por SMTP (STARTTLS en 587, SSL en 465)."""
+    message = EmailMessage()
+    message["From"] = settings.email_from
+    message["To"] = to
+    message["Subject"] = subject
+    message.set_content("Este correo requiere un lector compatible con HTML.")
+    message.add_alternative(html, subtype="html")
+    server = None
+    try:
+        if settings.smtp_port == 465:
+            server = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=20)
+        else:
+            server = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=20)
+            server.starttls()
+        server.login(settings.smtp_user, settings.smtp_password)
+        server.send_message(message)
+        return True
+    except (smtplib.SMTPException, OSError):
+        return False
+    finally:
+        if server is not None:
+            try:
+                server.quit()
+            except (smtplib.SMTPException, OSError):
+                pass
+
+
+def _send_email_resend(to: str, subject: str, html: str) -> bool:
+    """Envía el correo mediante la API HTTP de Resend."""
     try:
         response = httpx.post(
             "https://api.resend.com/emails",

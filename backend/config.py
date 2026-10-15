@@ -53,6 +53,12 @@ class Settings:
         self.email_verification_max_age = int(
             os.environ.get("EMAIL_VERIFICATION_MAX_AGE", str(60 * 60 * 24))
         )
+        # --- Envío de correo por SMTP (Gmail, Brevo, Mailjet, SMTP2GO...) ---
+        # Tiene prioridad sobre Resend cuando está configurado.
+        self.smtp_host = os.environ.get("SMTP_HOST", "")
+        self.smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+        self.smtp_user = os.environ.get("SMTP_USER", "")
+        self.smtp_password = os.environ.get("SMTP_PASSWORD", "")
 
         # --- Autenticación en dos pasos (TOTP) ---
         self.totp_issuer = os.environ.get("TOTP_ISSUER", "Core IA")
