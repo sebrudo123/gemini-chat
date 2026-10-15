@@ -2,6 +2,11 @@
 
 import os
 
+# Base de datos de pruebas limpia en cada ejecución (evita conflictos 409 en local).
+_TEST_DB = "test_coreia.db"
+if os.path.exists(_TEST_DB):
+    os.remove(_TEST_DB)
+
 os.environ["SESSION_SECRET"] = "test-secret-key"
 os.environ["DISCORD_CLIENT_ID"] = "1234567890"
 os.environ["DISCORD_CLIENT_SECRET"] = "test-secret"

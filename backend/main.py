@@ -1794,6 +1794,14 @@ class NoticeRequest(BaseModel):
     level: str = Field(default="info", pattern="^(info|warning|success)$")
 
 
+class NoticeUpdate(BaseModel):
+    """Cambios que el administrador puede aplicar a un aviso."""
+
+    message: str | None = Field(default=None, min_length=1, max_length=500)
+    level: str | None = Field(default=None, pattern="^(info|warning|success)$")
+    active: bool | None = None
+
+
 class FlagUpdate(BaseModel):
     """Estado de un feature flag."""
 
@@ -2022,7 +2030,51 @@ def admin_create_notice(
     db.commit()
     db.refresh(notice)
     record_audit(db, admin, "notice.create", str(notice.id), payload.message[:120])
-    return {"notice": {"id": notice.id, "message": notice.message, "level": notice.level}}
+    return {
+        "notice": {
+            "id": notice.id,
+            "message": notice.message,
+            "level": notice.level,
+            "active": bool(notice.active),
+        }
+    }
+
+
+@app.patch("/api/admin/notices/{notice_id}")
+def admin_update_notice(
+    notice_id: int,
+    payload: NoticeUpdate,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Activa, desactiva o edita un aviso publicado."""
+    notice = db.get(Notice, notice_id)
+    if notice is None:
+        raise HTTPException(status_code=404, detail="Aviso no encontrado.")
+
+    changes: list[str] = []
+    if payload.message is not None:
+        notice.message = payload.message
+        changes.append("message")
+    if payload.level is not None:
+        notice.level = payload.level
+        changes.append(f"level={payload.level}")
+    if payload.active is not None:
+        notice.active = payload.active
+        changes.append(f"active={payload.active}")
+
+    db.commit()
+    db.refresh(notice)
+    if changes:
+        record_audit(db, admin, "notice.update", str(notice.id), ", ".join(changes))
+    return {
+        "notice": {
+            "id": notice.id,
+            "message": notice.message,
+            "level": notice.level,
+            "active": bool(notice.active),
+        }
+    }
 
 
 @app.delete("/api/admin/notices/{notice_id}")

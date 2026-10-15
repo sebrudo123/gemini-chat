@@ -148,6 +148,49 @@ def test_admin_audit_flags_and_notices(client):
     client.patch("/api/admin/flags/image_generation", json={"enabled": True}, headers=founder)
 
 
+def test_admin_can_update_and_toggle_notice(client):
+    founder = auth(FOUNDER_ID)
+
+    created = client.post(
+        "/api/admin/notices",
+        json={"message": "Aviso inicial", "level": "info"},
+        headers=founder,
+    )
+    notice_id = created.json()["notice"]["id"]
+    assert created.json()["notice"]["active"] is True
+
+    updated = client.patch(
+        f"/api/admin/notices/{notice_id}",
+        json={"level": "success", "message": "Aviso actualizado"},
+        headers=founder,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["notice"]["level"] == "success"
+    assert updated.json()["notice"]["message"] == "Aviso actualizado"
+
+    hidden = client.patch(
+        f"/api/admin/notices/{notice_id}", json={"active": False}, headers=founder
+    )
+    assert hidden.json()["notice"]["active"] is False
+    public = client.get("/api/notices").json()["notices"]
+    assert all(notice["id"] != notice_id for notice in public)
+
+    shown = client.patch(
+        f"/api/admin/notices/{notice_id}", json={"active": True}, headers=founder
+    )
+    assert shown.json()["notice"]["active"] is True
+    public = client.get("/api/notices").json()["notices"]
+    assert any(notice["id"] == notice_id for notice in public)
+
+    audit = client.get("/api/admin/audit", headers=founder).json()["logs"]
+    assert "notice.update" in {entry["action"] for entry in audit}
+
+    assert client.patch(
+        "/api/admin/notices/999999", json={"active": False}, headers=founder
+    ).status_code == 404
+    client.delete(f"/api/admin/notices/{notice_id}", headers=founder)
+
+
 def test_providers_endpoint_returns_configured(client):
     data = client.get("/api/auth/providers").json()
     assert "discord" in data["providers"]

@@ -70,6 +70,15 @@ const adminFlags = document.getElementById("admin-flags");
 const adminNotices = document.getElementById("admin-notices");
 const adminAudit = document.getElementById("admin-audit");
 const adminTabs = document.getElementById("admin-tabs");
+const adminRefresh = document.getElementById("admin-refresh");
+const adminUpdated = document.getElementById("admin-updated");
+const adminUserSearch = document.getElementById("admin-user-search");
+const adminUserPlan = document.getElementById("admin-user-plan");
+const adminUserStatus = document.getElementById("admin-user-status");
+const adminUserCount = document.getElementById("admin-user-count");
+const adminAuditSearch = document.getElementById("admin-audit-search");
+const adminAuditLimit = document.getElementById("admin-audit-limit");
+const adminChartRange = document.getElementById("admin-chart-range");
 const noticeBanner = document.getElementById("notice-banner");
 const noticeInput = document.getElementById("notice-input");
 const noticeLevel = document.getElementById("notice-level");
@@ -112,6 +121,7 @@ let providers = null;
 let flags = { chat: true, image_generation: true, rag: true };
 let twofaState = { enabled: false, pending: false, recovery_codes_remaining: 0 };
 let pendingTwofaToken = null;
+let adminData = { stats: null, users: [], notices: [], audit: [] };
 
 const splashStart = performance.now();
 let splashHidden = false;
@@ -1666,26 +1676,54 @@ async function openAdmin() {
     return;
   }
   adminModal.classList.add("show");
-  adminStats.innerHTML = "";
-  adminUsers.innerHTML = "";
-  adminChart.innerHTML = "";
-  adminFlags.innerHTML = "";
-  adminNotices.innerHTML = "";
-  adminAudit.innerHTML = "";
+  await loadAdmin();
+}
+
+function setAdminLoading(loading) {
+  if (adminRefresh) {
+    adminRefresh.disabled = loading;
+    adminRefresh.textContent = loading ? "Cargando…" : "↻ Actualizar";
+  }
+  adminModal.querySelectorAll(".admin-pane").forEach((pane) => {
+    pane.classList.toggle("loading", loading);
+  });
+}
+
+async function loadAdmin() {
+  setAdminLoading(true);
   try {
     const [statsData, usersData, flagsData, noticesData, auditData] = await Promise.all([
       api("/api/admin/stats"),
       api("/api/admin/users"),
       api("/api/admin/flags"),
       api("/api/admin/notices"),
-      api("/api/admin/audit"),
+      api(`/api/admin/audit?limit=${encodeURIComponent(adminAuditLimit.value || "50")}`),
     ]);
+    adminData.stats = statsData;
+    adminData.users = usersData.users || [];
+    adminData.notices = noticesData.notices || [];
+    adminData.audit = auditData.logs || [];
     renderAdminStats(statsData);
     renderAdminChart(statsData.series || []);
-    renderAdminUsers(usersData.users || []);
+    renderAdminUsers(adminData.users);
     renderAdminFlags(flagsData.flags || []);
-    renderAdminNotices(noticesData.notices || []);
-    renderAdminAudit(auditData.logs || []);
+    renderAdminNotices(adminData.notices);
+    renderAdminAudit(adminData.audit);
+    if (adminUpdated) {
+      const now = new Date().toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
+      adminUpdated.textContent = `Actualizado a las ${now}`;
+    }
+  } catch (err) {
+    renderError(err.message);
+  } finally {
+    setAdminLoading(false);
+  }
+}
+
+async function refreshAudit() {
+  try {
+    const data = await api(`/api/admin/audit?limit=${encodeURIComponent(adminAuditLimit.value || "50")}`);
+    renderAdminAudit(data.logs || []);
   } catch (err) {
     renderError(err.message);
   }
@@ -1707,6 +1745,7 @@ function switchAdminTab(tab) {
 
 function renderAdminChart(series) {
   adminChart.innerHTML = "";
+  if (adminChartRange) adminChartRange.textContent = "";
   if (!series.length) {
     const empty = document.createElement("div");
     empty.className = "chart-empty";
@@ -1716,18 +1755,31 @@ function renderAdminChart(series) {
   }
   const max = Math.max(...series.map((point) => point.messages + point.images), 1);
   series.forEach((point) => {
+    const total = point.messages + point.images;
     const wrap = document.createElement("div");
     wrap.className = "bar-wrap";
     const bar = document.createElement("div");
     bar.className = "bar";
-    bar.style.height = `${Math.round(((point.messages + point.images) / max) * 100)}%`;
+    bar.style.height = `${total ? Math.max((total / max) * 100, 4) : 0}%`;
     bar.title = `${point.day}: ${point.messages} mensajes, ${point.images} imágenes`;
+    if (total > 0) {
+      const images = document.createElement("div");
+      images.className = "bar-seg images";
+      images.style.height = `${(point.images / total) * 100}%`;
+      const msgs = document.createElement("div");
+      msgs.className = "bar-seg messages";
+      msgs.style.height = `${(point.messages / total) * 100}%`;
+      bar.append(images, msgs);
+    }
     const label = document.createElement("div");
     label.className = "bar-label";
     label.textContent = point.day ? point.day.slice(5) : "";
     wrap.append(bar, label);
     adminChart.appendChild(wrap);
   });
+  if (adminChartRange) {
+    adminChartRange.textContent = `${series[0].day} → ${series[series.length - 1].day}`;
+  }
 }
 
 function renderAdminFlags(list) {
@@ -1769,6 +1821,7 @@ function renderAdminFlags(list) {
         });
         flags[flag.key] = checkbox.checked;
         applyFlags();
+        showToast(`Función "${flag.key}" ${checkbox.checked ? "activada" : "desactivada"}.`);
       } catch (err) {
         checkbox.checked = !checkbox.checked;
         renderError(err.message);
@@ -1797,6 +1850,15 @@ function formatDate(value) {
   }
 }
 
+const NOTICE_LEVELS = { info: "Información", warning: "Aviso", success: "Novedad" };
+
+function adminTag(text, kind) {
+  const tag = document.createElement("span");
+  tag.className = `admin-tag ${kind || ""}`.trim();
+  tag.textContent = text;
+  return tag;
+}
+
 function renderAdminNotices(list) {
   adminNotices.innerHTML = "";
   if (!list.length) {
@@ -1806,55 +1868,178 @@ function renderAdminNotices(list) {
     adminNotices.appendChild(empty);
     return;
   }
-  list.forEach((notice) => {
-    const row = document.createElement("div");
-    row.className = "admin-notice";
-
-    const body = document.createElement("div");
-    body.className = "notice-body";
-    const message = document.createElement("div");
-    message.textContent = notice.message;
-    const meta = document.createElement("div");
-    meta.className = "notice-meta";
-    meta.textContent = `${notice.level} · ${formatDate(notice.created_at)}`;
-    body.append(message, meta);
-
-    const del = document.createElement("button");
-    del.className = "admin-mini danger";
-    del.type = "button";
-    del.textContent = "Eliminar";
-    del.addEventListener("click", async () => {
-      try {
-        await api(`/api/admin/notices/${notice.id}`, { method: "DELETE" });
-        row.remove();
-      } catch (err) {
-        renderError(err.message);
-      }
-    });
-
-    row.append(body, del);
-    adminNotices.appendChild(row);
-  });
+  list.forEach((notice) => adminNotices.appendChild(adminNoticeRow(notice)));
 }
 
+function adminNoticeRow(notice) {
+  const row = document.createElement("div");
+  row.className = "admin-notice";
+
+  const body = document.createElement("div");
+  body.className = "notice-body";
+
+  const head = document.createElement("div");
+  head.className = "notice-head";
+  head.appendChild(adminTag(NOTICE_LEVELS[notice.level] || notice.level, notice.level));
+  if (!notice.active) head.appendChild(adminTag("Oculto", "muted"));
+
+  const message = document.createElement("div");
+  message.className = "notice-message";
+  message.textContent = notice.message;
+
+  const meta = document.createElement("div");
+  meta.className = "notice-meta";
+  meta.textContent = formatDate(notice.created_at);
+  body.append(head, message, meta);
+
+  const actions = document.createElement("div");
+  actions.className = "notice-actions";
+
+  const toggle = document.createElement("label");
+  toggle.className = "switch";
+  toggle.title = notice.active ? "Visible para todos" : "Oculto";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = notice.active !== false;
+  const slider = document.createElement("span");
+  slider.className = "slider";
+  checkbox.addEventListener("change", async () => {
+    checkbox.disabled = true;
+    try {
+      const data = await api(`/api/admin/notices/${notice.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ active: checkbox.checked }),
+      });
+      notice.active = data.notice.active;
+      row.replaceWith(adminNoticeRow(notice));
+      showToast(notice.active ? "Aviso visible para todos." : "Aviso oculto.");
+    } catch (err) {
+      checkbox.checked = !checkbox.checked;
+      renderError(err.message);
+    } finally {
+      checkbox.disabled = false;
+    }
+  });
+  toggle.append(checkbox, slider);
+
+  const edit = document.createElement("button");
+  edit.className = "admin-mini";
+  edit.type = "button";
+  edit.textContent = "Editar";
+  edit.addEventListener("click", () => startNoticeEdit(row, notice, message, actions));
+
+  const del = document.createElement("button");
+  del.className = "admin-mini danger";
+  del.type = "button";
+  del.textContent = "Eliminar";
+  del.addEventListener("click", async () => {
+    if (!window.confirm("¿Eliminar este aviso?")) return;
+    try {
+      await api(`/api/admin/notices/${notice.id}`, { method: "DELETE" });
+      row.remove();
+      showToast("Aviso eliminado.");
+    } catch (err) {
+      renderError(err.message);
+    }
+  });
+
+  actions.append(toggle, edit, del);
+  row.append(body, actions);
+  return row;
+}
+
+function startNoticeEdit(row, notice, messageEl, actions) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.maxLength = 500;
+  input.value = notice.message;
+  input.className = "notice-edit-input";
+  messageEl.replaceWith(input);
+  input.focus();
+
+  const save = document.createElement("button");
+  save.className = "admin-mini";
+  save.type = "button";
+  save.textContent = "Guardar";
+  const cancel = document.createElement("button");
+  cancel.className = "admin-mini";
+  cancel.type = "button";
+  cancel.textContent = "Cancelar";
+  cancel.addEventListener("click", () => row.replaceWith(adminNoticeRow(notice)));
+  save.addEventListener("click", async () => {
+    const value = input.value.trim();
+    if (!value) {
+      renderError("El aviso no puede estar vacío.");
+      return;
+    }
+    save.disabled = true;
+    try {
+      const data = await api(`/api/admin/notices/${notice.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ message: value }),
+      });
+      notice.message = data.notice.message;
+      row.replaceWith(adminNoticeRow(notice));
+      showToast("Aviso actualizado.");
+    } catch (err) {
+      save.disabled = false;
+      renderError(err.message);
+    }
+  });
+  actions.replaceChildren(save, cancel);
+}
+
+const AUDIT_LABELS = {
+  "user.update": "Usuario modificado",
+  "user.delete": "Usuario eliminado",
+  "flag.update": "Función actualizada",
+  "notice.create": "Aviso publicado",
+  "notice.update": "Aviso actualizado",
+  "notice.delete": "Aviso eliminado",
+};
+const AUDIT_KINDS = {
+  "user.update": "warn",
+  "user.delete": "danger",
+  "flag.update": "info",
+  "notice.create": "ok",
+  "notice.update": "info",
+  "notice.delete": "danger",
+};
+
 function renderAdminAudit(list) {
+  adminData.audit = list;
+  applyAuditFilter();
+}
+
+function applyAuditFilter() {
+  const term = (adminAuditSearch.value || "").trim().toLowerCase();
+  const rows = adminData.audit.filter((entry) => {
+    if (!term) return true;
+    const hay = [entry.action, AUDIT_LABELS[entry.action] || "", entry.actor, entry.detail, entry.target]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return hay.includes(term);
+  });
   adminAudit.innerHTML = "";
-  if (!list.length) {
+  if (!rows.length) {
     const empty = document.createElement("div");
     empty.className = "modal-sub";
-    empty.textContent = "Sin actividad registrada.";
+    empty.textContent = adminData.audit.length ? "Ningún registro coincide." : "Sin actividad registrada.";
     adminAudit.appendChild(empty);
     return;
   }
-  list.forEach((entry) => {
+  rows.forEach((entry) => {
     const row = document.createElement("div");
     row.className = "admin-audit-row";
     const action = document.createElement("span");
-    action.className = "audit-action";
-    action.textContent = entry.action;
+    action.className = `audit-action ${AUDIT_KINDS[entry.action] || ""}`.trim();
+    action.textContent = AUDIT_LABELS[entry.action] || entry.action;
     const detail = document.createElement("span");
     detail.className = "audit-detail";
-    detail.textContent = [entry.actor, entry.detail].filter(Boolean).join(" · ");
+    detail.textContent = [entry.actor, entry.detail, entry.target ? `#${entry.target}` : ""]
+      .filter(Boolean)
+      .join(" · ");
     const time = document.createElement("span");
     time.className = "audit-time";
     time.textContent = formatDate(entry.created_at);
@@ -1884,20 +2069,56 @@ function renderAdminStats(stats) {
   adminStats.appendChild(adminStat(stats.documents, "Documentos"));
   adminStats.appendChild(adminStat(stats.active_today, "Activos hoy"));
   adminStats.appendChild(adminStat(stats.messages_today, "Mensajes hoy"));
+  adminStats.appendChild(adminStat(stats.images_today ?? 0, "Imágenes hoy"));
   adminStats.appendChild(adminStat(stats.banned || 0, "Baneados"));
   adminStats.appendChild(adminStat(stats.suspended || 0, "Suspendidos"));
+  const plans = stats.plan_breakdown || {};
+  const summary = ["free", "pro", "enterprise"]
+    .filter((plan) => plans[plan])
+    .map((plan) => `${plans[plan]} ${plan}`)
+    .join(" · ");
+  adminStats.appendChild(adminStat(summary || "—", "Planes"));
 }
 
 function renderAdminUsers(users) {
+  adminData.users = users;
+  applyUserFilters();
+}
+
+function applyUserFilters() {
+  const term = (adminUserSearch.value || "").trim().toLowerCase();
+  const plan = adminUserPlan.value;
+  const status = adminUserStatus.value;
+  const filtered = adminData.users.filter((user) => {
+    if (plan && (user.plan || "free") !== plan) return false;
+    if (status === "active" && (user.is_banned || user.is_active === false)) return false;
+    if (status === "suspended" && user.is_active !== false) return false;
+    if (status === "banned" && !user.is_banned) return false;
+    if (status === "unverified" && user.email_verified) return false;
+    if (status === "twofa" && !user.totp_enabled) return false;
+    if (term) {
+      const hay = [user.display_name, user.username, user.email, user.discord_id, user.id]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      if (!hay.includes(term)) return false;
+    }
+    return true;
+  });
   adminUsers.innerHTML = "";
-  if (!users.length) {
+  if (!filtered.length) {
     const empty = document.createElement("div");
     empty.className = "modal-sub";
-    empty.textContent = "Todavía no hay usuarios.";
+    empty.textContent = adminData.users.length
+      ? "Ningún usuario coincide con el filtro."
+      : "Todavía no hay usuarios.";
     adminUsers.appendChild(empty);
-    return;
+  } else {
+    filtered.forEach((user) => adminUsers.appendChild(adminUserRow(user)));
   }
-  users.forEach((user) => adminUsers.appendChild(adminUserRow(user)));
+  if (adminUserCount) {
+    adminUserCount.textContent = `${filtered.length} de ${adminData.users.length}`;
+  }
 }
 
 function adminUserRow(user) {
@@ -1924,33 +2145,48 @@ function adminUserRow(user) {
   const name = document.createElement("div");
   name.className = "admin-user-name";
   name.textContent = user.display_name || user.username || "Usuario";
-  if (user.is_founder) {
-    const tag = document.createElement("span");
-    tag.className = "admin-tag";
-    tag.textContent = "Fundador";
-    name.appendChild(tag);
-  }
+
+  const tags = document.createElement("span");
+  tags.className = "admin-tags";
+  if (user.is_founder) tags.appendChild(adminTag("Fundador", "founder"));
+  if (user.plan && user.plan !== "free") tags.appendChild(adminTag(user.plan, `plan-${user.plan}`));
+  if (user.is_banned) tags.appendChild(adminTag("Baneado", "banned"));
+  else if (user.is_active === false) tags.appendChild(adminTag("Suspendido", "suspended"));
+  if (user.email && !user.email_verified) tags.appendChild(adminTag("Correo sin verificar", "warn"));
+  if (user.totp_enabled) tags.appendChild(adminTag("2FA", "ok"));
+  name.appendChild(tags);
+
   const sub = document.createElement("div");
   sub.className = "admin-user-sub";
-  sub.textContent = `${user.conversations} chats · ${user.documents} docs · ${user.discord_id || ""}`;
+  const bits = [];
+  if (user.email) bits.push(user.email);
+  else if (user.discord_id) bits.push(`Discord ${user.discord_id}`);
+  bits.push(`${user.conversations} chats`, `${user.documents} docs`);
+  if (user.created_at) bits.push(`alta ${formatDate(user.created_at)}`);
+  sub.textContent = bits.join(" · ");
   info.append(name, sub);
   row.appendChild(info);
 
   const select = document.createElement("select");
+  select.className = "plan-select";
+  select.title = "Plan del usuario";
   ["free", "pro", "enterprise"].forEach((plan) => {
     const opt = document.createElement("option");
     opt.value = plan;
     opt.textContent = plan;
-    if (user.plan === plan) opt.selected = true;
+    if ((user.plan || "free") === plan) opt.selected = true;
     select.appendChild(opt);
   });
   select.addEventListener("change", async () => {
     select.disabled = true;
     try {
-      await api(`/api/admin/users/${user.id}`, {
+      const data = await api(`/api/admin/users/${user.id}`, {
         method: "PATCH",
         body: JSON.stringify({ plan: select.value }),
       });
+      user.plan = data.user.plan;
+      showToast(`Plan actualizado a ${select.value}.`);
+      applyUserFilters();
     } catch (err) {
       renderError(err.message);
     } finally {
@@ -1974,7 +2210,8 @@ function adminUserRow(user) {
         body: JSON.stringify({ is_active: user.is_active === false }),
       });
       user.is_active = data.user.is_active;
-      row.replaceWith(adminUserRow(user));
+      showToast(user.is_active === false ? "Usuario suspendido." : "Usuario reactivado.");
+      applyUserFilters();
     } catch (err) {
       renderError(err.message);
     }
@@ -1992,7 +2229,8 @@ function adminUserRow(user) {
         body: JSON.stringify({ is_banned: !user.is_banned }),
       });
       user.is_banned = data.user.is_banned;
-      row.replaceWith(adminUserRow(user));
+      showToast(user.is_banned ? "Usuario baneado." : "Ban retirado.");
+      applyUserFilters();
     } catch (err) {
       renderError(err.message);
     }
@@ -2008,22 +2246,18 @@ function adminUserRow(user) {
     if (!window.confirm(`¿Eliminar a ${user.display_name || user.username} y todos sus datos?`)) return;
     try {
       await api(`/api/admin/users/${user.id}`, { method: "DELETE" });
-      row.remove();
+      adminData.users = adminData.users.filter((item) => item.id !== user.id);
+      showToast("Usuario eliminado.");
+      applyUserFilters();
     } catch (err) {
       renderError(err.message);
     }
   });
 
   if (user.is_banned) {
-    const badge = document.createElement("span");
-    badge.className = "admin-badge banned";
-    badge.textContent = "Baneado";
-    actions.appendChild(badge);
+    actions.appendChild(adminTag("Baneado", "banned"));
   } else if (user.is_active === false) {
-    const badge = document.createElement("span");
-    badge.className = "admin-badge suspended";
-    badge.textContent = "Suspendido";
-    actions.appendChild(badge);
+    actions.appendChild(adminTag("Suspendido", "suspended"));
   }
   actions.append(suspend, ban, del);
   row.appendChild(actions);
@@ -2211,6 +2445,13 @@ adminTabs.addEventListener("click", (event) => {
   if (btn) switchAdminTab(btn.dataset.tab);
 });
 
+adminRefresh.addEventListener("click", () => loadAdmin());
+adminUserSearch.addEventListener("input", applyUserFilters);
+adminUserPlan.addEventListener("change", applyUserFilters);
+adminUserStatus.addEventListener("change", applyUserFilters);
+adminAuditSearch.addEventListener("input", applyAuditFilter);
+adminAuditLimit.addEventListener("change", refreshAudit);
+
 noticeCreate.addEventListener("click", async () => {
   const message = noticeInput.value.trim();
   if (!message) return;
@@ -2224,6 +2465,7 @@ noticeCreate.addEventListener("click", async () => {
     const data = await api("/api/admin/notices");
     renderAdminNotices(data.notices || []);
     loadNotices();
+    showToast("Aviso publicado.");
   } catch (err) {
     renderError(err.message);
   } finally {
