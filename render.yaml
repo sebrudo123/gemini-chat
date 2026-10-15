@@ -50,7 +50,7 @@ services:
       - key: EMAIL_FROM
         value: "Core IA <sebasruades0@gmail.com>"
       - key: EMAIL_VERIFICATION_REQUIRED
-        value: "false"
+        value: "true"
       - key: TOTP_ISSUER
         value: "Core IA"
       - key: FRONTEND_URL

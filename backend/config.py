@@ -54,7 +54,7 @@ class Settings:
         self.resend_api_key = os.environ.get("RESEND_API_KEY", "")
         self.email_from = os.environ.get("EMAIL_FROM", "Core IA <onboarding@resend.dev>")
         self.email_verification_required = os.environ.get(
-            "EMAIL_VERIFICATION_REQUIRED", "false"
+            "EMAIL_VERIFICATION_REQUIRED", "true"
         ).lower() in ("1", "true", "yes")
         self.email_verification_max_age = int(
             os.environ.get("EMAIL_VERIFICATION_MAX_AGE", str(60 * 60 * 24))

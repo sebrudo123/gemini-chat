@@ -313,6 +313,22 @@ def get_current_user(
     return user
 
 
+def require_email_verified(
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Exige que el usuario tenga el correo verificado cuando la plataforma lo requiere."""
+    if not settings.email_verification_required:
+        return profile
+    user = upsert_user(db, profile)
+    if not user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Debes verificar tu correo electrónico para continuar.",
+        )
+    return profile
+
+
 def is_admin(profile: dict[str, Any] | None) -> bool:
     """Indica si el perfil pertenece a un fundador/administrador.
 
@@ -1469,6 +1485,7 @@ def chat(
     request: Request,
     payload: ChatRequest,
     profile: dict[str, Any] = Depends(require_founder_2fa),
+    _: dict[str, Any] = Depends(require_email_verified),
     db: Session = Depends(get_db),
 ) -> ChatResponse:
     """Genera una respuesta de Gemini y persiste la conversación."""
@@ -1564,6 +1581,7 @@ def generate_image(
     request: Request,
     payload: ImageRequest,
     profile: dict[str, Any] = Depends(get_current_user),
+    _: dict[str, Any] = Depends(require_email_verified),
     db: Session = Depends(get_db),
 ) -> ImageResponse:
     """Genera una imagen a partir de un prompt (requiere IMAGE_MODEL configurado)."""
@@ -1635,6 +1653,7 @@ def create_document(
     request: Request,
     payload: DocumentRequest,
     profile: dict[str, Any] = Depends(get_current_user),
+    _: dict[str, Any] = Depends(require_email_verified),
     db: Session = Depends(get_db),
 ) -> DocumentResponse:
     """Divide, vectoriza y almacena un documento de conocimiento."""
@@ -1924,6 +1943,7 @@ class AdminUserUpdate(BaseModel):
     username: str | None = Field(default=None, min_length=1, max_length=64)
     email: str | None = Field(default=None, max_length=255)
     email_verified: bool | None = None
+    role: str | None = Field(default=None, pattern="^(user|moderator|support)$")
     notes: str | None = Field(default=None, max_length=2000)
     tags: str | None = Field(default=None, max_length=255)
     reset_2fa: bool | None = None
@@ -1980,6 +2000,7 @@ def _serialize_admin_user(db: Session, user: User) -> dict[str, Any]:
         "is_banned": bool(user.is_banned),
         "email_verified": bool(user.email_verified),
         "totp_enabled": bool(user.totp_enabled),
+        "role": user.role or "user",
         "notes": user.notes or "",
         "tags": [tag.strip() for tag in (user.tags or "").split(",") if tag.strip()],
         "created_at": user.created_at.isoformat() if user.created_at else None,
@@ -2132,6 +2153,9 @@ def admin_update_user(
     if payload.email_verified is not None:
         user.email_verified = payload.email_verified
         changes.append(f"email_verified={payload.email_verified}")
+    if payload.role is not None and not is_founder:
+        user.role = payload.role
+        changes.append(f"role={payload.role}")
     if payload.notes is not None:
         user.notes = payload.notes
         changes.append("notes")
