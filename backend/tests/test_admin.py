@@ -37,6 +37,25 @@ def test_auth_me_reports_admin_flag(client):
     assert normal["is_admin"] is False
 
 
+def test_founder_2fa_required_blocks_actions(client, monkeypatch):
+    monkeypatch.setattr(main.settings, "founder_2fa_required", True)
+    founder = auth(FOUNDER_ID)
+
+    response = client.post("/api/chat", json={"message": "hola"}, headers=founder)
+    assert response.status_code == 403
+    assert "dos pasos" in response.json()["detail"]
+
+    me = client.get("/api/auth/me", headers=founder).json()["user"]
+    assert me["must_enable_2fa"] is True
+
+    disabled = client.post("/api/auth/2fa/disable", json={"code": "000000"}, headers=founder)
+    assert disabled.status_code == 403
+
+    normal = auth("800000000000000002")
+    assert client.get("/api/auth/me", headers=normal).json()["user"]["must_enable_2fa"] is False
+    assert client.post("/api/auth/2fa/disable", json={"code": "000000"}, headers=normal).status_code == 200
+
+
 def test_admin_endpoints_require_auth(client):
     assert client.get("/api/admin/stats").status_code == 401
     assert client.get("/api/admin/users").status_code == 401

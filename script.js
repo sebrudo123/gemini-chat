@@ -323,6 +323,10 @@ async function loadSession() {
       renderChat();
     }
     renderProfile();
+    if (currentUser.must_enable_2fa) {
+      showToast("Activa la verificación en dos pasos para continuar usando Core IA.");
+      openSettings();
+    }
   } catch (err) {
     clearSession();
     renderChat();
@@ -350,7 +354,10 @@ function applyFlags() {
     inputEl.placeholder = "El chat está desactivado temporalmente.";
     inputEl.disabled = true;
   } else if (inputEl) {
-    inputEl.disabled = false;
+    inputEl.disabled = founder2faBlocked();
+    inputEl.placeholder = founder2faBlocked()
+      ? "Activa la verificación en dos pasos para continuar."
+      : "Escribe un mensaje a Core IA...";
   }
   updateSendState();
 }
@@ -994,8 +1001,13 @@ function showToast(message) {
 /* Composer / UI                                                       */
 /* ------------------------------------------------------------------ */
 
+function founder2faBlocked() {
+  return Boolean(currentUser && currentUser.must_enable_2fa);
+}
+
 function updateSendState() {
-  sendEl.disabled = sending || inputEl.disabled || inputEl.value.trim().length === 0;
+  sendEl.disabled =
+    sending || inputEl.disabled || founder2faBlocked() || inputEl.value.trim().length === 0;
 }
 
 function autoResize() {
@@ -1007,6 +1019,11 @@ formEl.addEventListener("submit", (e) => {
   e.preventDefault();
   if (flags.chat === false) {
     renderError("El chat está desactivado temporalmente por el administrador.");
+    return;
+  }
+  if (founder2faBlocked()) {
+    renderError("Activa la verificación en dos pasos para continuar.");
+    openSettings();
     return;
   }
   const text = inputEl.value.trim();
@@ -1432,9 +1449,11 @@ async function enableTwofa() {
     });
     const codes = data.recovery_codes || [];
     twofaState = { enabled: true, pending: false, recovery_codes_remaining: codes.length };
+    if (currentUser) currentUser.must_enable_2fa = false;
     renderTwofaStatus();
     twofaSetup.classList.add("hidden");
     showRecoveryCodes(codes);
+    applyFlags();
     showToast("Autenticación en dos pasos activada.");
   } catch (err) {
     twofaSetupError.textContent = err.message;

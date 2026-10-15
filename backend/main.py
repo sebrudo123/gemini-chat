@@ -304,6 +304,27 @@ def require_admin(profile: dict[str, Any] = Depends(get_current_user)) -> dict[s
     return profile
 
 
+def founder_needs_2fa(profile: dict[str, Any] | None, db: Session) -> bool:
+    """Indica si el fundador debe activar la 2FA antes de usar la plataforma."""
+    if not settings.founder_2fa_required or not is_admin(profile):
+        return False
+    user = upsert_user(db, profile)
+    return not user.totp_enabled
+
+
+def require_founder_2fa(
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Exige 2FA al fundador cuando `FOUNDER_2FA_REQUIRED` está activo."""
+    if founder_needs_2fa(profile, db):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Debes activar la verificación en dos pasos antes de continuar.",
+        )
+    return profile
+
+
 def delete_user_data(db: Session, user: User) -> None:
     """Elimina todos los datos asociados a un usuario (y el propio usuario)."""
     conv_ids = [row[0] for row in db.query(Conversation.id).filter(Conversation.user_id == user.id)]
@@ -1080,7 +1101,7 @@ def _ensure_email_verified(user: User) -> None:
 
 
 @app.post("/api/auth/register", response_model=AuthTokenResponse)
-@limiter.limit(settings.rate_limit)
+@limiter.limit(settings.auth_rate_limit)
 def email_register(
     request: Request,
     payload: RegisterRequest,
@@ -1111,7 +1132,7 @@ def email_register(
 
 
 @app.post("/api/auth/login")
-@limiter.limit(settings.rate_limit)
+@limiter.limit(settings.auth_rate_limit)
 def email_login(
     request: Request,
     payload: LoginRequest,
@@ -1229,6 +1250,11 @@ def twofa_disable(
 ) -> dict[str, Any]:
     """Desactiva la 2FA validando un código TOTP, uno de respaldo o la contraseña."""
     user = upsert_user(db, profile)
+    if settings.founder_2fa_required and is_admin(profile):
+        raise HTTPException(
+            status_code=403,
+            detail="La verificación en dos pasos es obligatoria para el fundador.",
+        )
     if not user.totp_enabled:
         return {"enabled": False}
 
@@ -1254,7 +1280,7 @@ def twofa_disable(
 
 
 @app.post("/api/auth/2fa/verify", response_model=AuthTokenResponse)
-@limiter.limit(settings.rate_limit)
+@limiter.limit(settings.auth_rate_limit)
 def twofa_verify(
     request: Request,
     payload: TwoFAVerifyRequest,
@@ -1335,6 +1361,9 @@ def auth_me(
     profile["is_active"] = db_user.is_active
     profile["email_verified"] = bool(db_user.email_verified)
     profile["totp_enabled"] = bool(db_user.totp_enabled)
+    profile["must_enable_2fa"] = bool(
+        settings.founder_2fa_required and is_admin(user) and not db_user.totp_enabled
+    )
     return UserResponse(user=profile)
 
 
@@ -1353,7 +1382,7 @@ def auth_logout(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, b
 def chat(
     request: Request,
     payload: ChatRequest,
-    profile: dict[str, Any] = Depends(get_current_user),
+    profile: dict[str, Any] = Depends(require_founder_2fa),
     db: Session = Depends(get_db),
 ) -> ChatResponse:
     """Genera una respuesta de Gemini y persiste la conversación."""

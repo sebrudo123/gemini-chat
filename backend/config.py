@@ -79,6 +79,11 @@ class Settings:
             ).split(",")
             if founder.strip()
         ]
+        self.founder_2fa_required = os.environ.get("FOUNDER_2FA_REQUIRED", "true").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
 
         # --- Sesión / frontend ---
         self.session_secret = os.environ.get("SESSION_SECRET", "")
@@ -97,6 +102,7 @@ class Settings:
         self.sentry_dsn = os.environ.get("SENTRY_DSN", "")
         self.environment = os.environ.get("ENVIRONMENT", "production")
         self.rate_limit = os.environ.get("RATE_LIMIT", "30/minute")
+        self.auth_rate_limit = os.environ.get("AUTH_RATE_LIMIT", "10/minute")
         self.metrics_ip_allowlist = [
             ip.strip() for ip in os.environ.get("METRICS_IP_ALLOWLIST", "").split(",") if ip.strip()
         ]

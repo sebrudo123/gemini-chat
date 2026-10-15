@@ -37,6 +37,8 @@ services:
         value: discord
       - key: FOUNDER_DISCORD_IDS
         value: "1439761085040427100"
+      - key: FOUNDER_2FA_REQUIRED
+        value: "true"
       - key: EMAIL_RELAY_URL
         sync: false
       - key: EMAIL_RELAY_TOKEN
@@ -65,6 +67,8 @@ services:
         value: production
       - key: RATE_LIMIT
         value: 30/minute
+      - key: AUTH_RATE_LIMIT
+        value: 10/minute
       - key: BACKEND_URL
         value: https://gemini-chat-backend-vyrz.onrender.com
       - key: METRICS_REQUIRE_ADMIN
