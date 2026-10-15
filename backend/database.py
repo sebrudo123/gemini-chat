@@ -89,6 +89,9 @@ def migrate_schema() -> None:
     if "session_epoch" not in columns:
         statements.append("ALTER TABLE users ADD COLUMN session_epoch INTEGER DEFAULT 0")
         statements.append("UPDATE users SET session_epoch = 0 WHERE session_epoch IS NULL")
+    if "role" not in columns:
+        statements.append("ALTER TABLE users ADD COLUMN role VARCHAR(32)")
+        statements.append("UPDATE users SET role = 'user' WHERE role IS NULL")
     if dialect == "postgresql" and not columns.get("discord_id", {}).get("nullable", True):
         statements.append("ALTER TABLE users ALTER COLUMN discord_id DROP NOT NULL")
 

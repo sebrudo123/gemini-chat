@@ -40,6 +40,7 @@ class User(Base):
     recovery_codes: Mapped[str | None] = mapped_column(Text, default=None)
     notes: Mapped[str | None] = mapped_column(Text, default="")
     tags: Mapped[str | None] = mapped_column(String(255), default="")
+    role: Mapped[str | None] = mapped_column(String(32), default="user")
     session_epoch: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
