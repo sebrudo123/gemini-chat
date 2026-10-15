@@ -28,7 +28,7 @@ def auth(user_id: str) -> dict[str, str]:
 
 def test_conversations_lifecycle(client, monkeypatch):
     monkeypatch.setattr(
-        main, "generate_reply", lambda message, preferred_model=None: "ok"
+        main, "generate_reply", lambda message, preferred_model=None, **_: "ok"
     )
     headers = auth("600000000000000001")
 
@@ -101,7 +101,7 @@ def test_message_quota_enforced(client, monkeypatch):
         lambda plan: {"messages_per_day": 1, "images_per_day": 0, "documents": 0},
     )
     monkeypatch.setattr(
-        main, "generate_reply", lambda message, preferred_model=None: "ok"
+        main, "generate_reply", lambda message, preferred_model=None, **_: "ok"
     )
     headers = auth("600000000000000005")
 
@@ -124,7 +124,7 @@ def test_document_quota_enforced(client, monkeypatch):
 
 def test_delete_account(client, monkeypatch):
     monkeypatch.setattr(
-        main, "generate_reply", lambda message, preferred_model=None: "ok"
+        main, "generate_reply", lambda message, preferred_model=None, **_: "ok"
     )
     headers = auth("600000000000000007")
 

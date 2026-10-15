@@ -26,7 +26,7 @@ from collections.abc import AsyncIterator
 from email.message import EmailMessage
 from pathlib import Path
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode, urlparse
 
@@ -58,6 +58,7 @@ from cache import is_enabled as cache_is_enabled
 from config import settings
 from database import SessionLocal, get_db, init_db
 from models import (
+    AppSetting,
     AuditLog,
     Conversation,
     Document,
@@ -143,12 +144,14 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     db = SessionLocal()
     try:
         seed_flags(db)
+        seed_app_settings(db)
     finally:
         db.close()
     yield
 
 
 app = FastAPI(title="Core IA API", version="2.1.0", lifespan=lifespan)
+START_TIME = time.time()
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -484,6 +487,51 @@ def seed_flags(db: Session) -> None:
     db.commit()
 
 
+DEFAULT_APP_SETTINGS = {
+    "system_prompt": "",
+    "default_model": "",
+    "temperature": "",
+    "banned_words": "",
+}
+
+
+def get_setting(db: Session, key: str, default: str = "") -> str:
+    """Devuelve el valor de una configuración global (o el valor por defecto)."""
+    row = db.get(AppSetting, key)
+    if row is None:
+        return DEFAULT_APP_SETTINGS.get(key, default)
+    return row.value or ""
+
+
+def set_setting(db: Session, key: str, value: str) -> None:
+    """Guarda el valor de una configuración global."""
+    row = db.get(AppSetting, key)
+    if row is None:
+        row = AppSetting(key=key, value=value)
+        db.add(row)
+    else:
+        row.value = value
+    db.commit()
+
+
+def seed_app_settings(db: Session) -> None:
+    """Crea la configuración global por defecto si no existe."""
+    existing = {row[0] for row in db.query(AppSetting.key)}
+    for key, value in DEFAULT_APP_SETTINGS.items():
+        if key not in existing:
+            db.add(AppSetting(key=key, value=value))
+    db.commit()
+
+
+def banned_words_hit(text: str, banned: str) -> str | None:
+    """Devuelve la primera palabra prohibida encontrada en el texto (o None)."""
+    lowered = text.lower()
+    for word in (item.strip().lower() for item in banned.split(",")):
+        if word and word in lowered:
+            return word
+    return None
+
+
 def check_quota(db: Session, user: User, kind: str) -> Usage:
     """Valida la cuota diaria del plan; lanza 429 si se ha superado.
 
@@ -521,12 +569,18 @@ def is_transient_error(exc: Exception) -> bool:
     return any(marker in text for marker in TRANSIENT_MARKERS)
 
 
-def generate_reply(message: str, preferred_model: str | None = None) -> str:
+def generate_reply(
+    message: str,
+    preferred_model: str | None = None,
+    system_instruction: str | None = None,
+    temperature: float | None = None,
+) -> str:
     """Genera una respuesta probando varios modelos, con herramientas y reintentos.
 
     Primero intenta el *automatic function calling* (fecha/hora, cálculos).
     Si el modelo rechaza las herramientas, reintenta sin ellas para no
-    degradar la experiencia.
+    degradar la experiencia. `system_instruction` y `temperature` provienen de
+    la configuración del panel de administración.
     """
     primary = preferred_model or settings.ai_model
     models = [primary] + [
@@ -539,9 +593,14 @@ def generate_reply(message: str, preferred_model: str | None = None) -> str:
         use_tools = True
         for attempt in range(attempts):
             try:
-                config = (
-                    types.GenerateContentConfig(tools=AVAILABLE_TOOLS) if use_tools else None
-                )
+                config_kwargs: dict[str, Any] = {}
+                if system_instruction:
+                    config_kwargs["system_instruction"] = system_instruction
+                if temperature is not None:
+                    config_kwargs["temperature"] = temperature
+                if use_tools:
+                    config_kwargs["tools"] = AVAILABLE_TOOLS
+                config = types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
                 response = genai_client.models.generate_content(
                     model=model, contents=message, config=config
                 )
@@ -1427,6 +1486,14 @@ def chat(
             detail="El servidor no tiene configurada AI_API_KEY.",
         )
 
+    banned = get_setting(db, "banned_words", "")
+    hit = banned_words_hit(message, banned) if banned else None
+    if hit:
+        raise HTTPException(
+            status_code=400,
+            detail="Tu mensaje contiene contenido no permitido.",
+        )
+
     user = upsert_user(db, profile)
     _ensure_email_verified(user)
     user_settings = get_settings_row(db, user)
@@ -1462,7 +1529,19 @@ def chat(
             f"Contexto:\n{context}\n\nPregunta: {message}"
         )
 
-    reply = generate_reply(prompt, preferred_model=user_settings.preferred_model)
+    system_prompt = get_setting(db, "system_prompt", "").strip() or None
+    default_model = get_setting(db, "default_model", "").strip() or None
+    temperature_raw = get_setting(db, "temperature", "").strip()
+    try:
+        temperature = float(temperature_raw) if temperature_raw else None
+    except ValueError:
+        temperature = None
+    reply = generate_reply(
+        prompt,
+        preferred_model=user_settings.preferred_model or default_model,
+        system_instruction=system_prompt,
+        temperature=temperature,
+    )
 
     db.add(Message(conversation_id=conversation.id, role="assistant", content=reply))
     conversation.updated_at = datetime.now(timezone.utc)
@@ -1871,6 +1950,15 @@ class FlagUpdate(BaseModel):
     enabled: bool
 
 
+class AdminSettingsUpdate(BaseModel):
+    """Configuración global de la IA y moderación."""
+
+    system_prompt: str | None = Field(default=None, max_length=4000)
+    default_model: str | None = Field(default=None, max_length=64)
+    temperature: str | None = Field(default=None, max_length=8)
+    banned_words: str | None = Field(default=None, max_length=2000)
+
+
 def record_audit(db: Session, actor: dict[str, Any], action: str, target: str, detail: str = "") -> None:
     """Registra una acción administrativa en el log de auditoría."""
     actor_name = actor.get("display_name") or actor.get("username") or str(actor.get("id"))
@@ -1911,8 +1999,10 @@ def _serialize_admin_user(db: Session, user: User) -> dict[str, Any]:
 def admin_stats(
     _: dict[str, Any] = Depends(require_admin),
     db: Session = Depends(get_db),
+    range: int = 14,
 ) -> dict[str, Any]:
-    """Métricas globales de la plataforma."""
+    """Métricas globales de la plataforma (rango configurable de 7 a 90 días)."""
+    days = range if range in (7, 14, 30, 90) else 14
     day = today_str()
     today_rows = db.query(Usage).filter(Usage.day == day).all()
     plan_rows = db.query(User.plan, func.count(User.id)).group_by(User.plan).all()
@@ -1920,13 +2010,55 @@ def admin_stats(
         db.query(Usage.day, func.sum(Usage.messages), func.sum(Usage.images))
         .group_by(Usage.day)
         .order_by(Usage.day.desc())
-        .limit(14)
+        .limit(days)
         .all()
     )
     series = [
         {"day": row[0], "messages": int(row[1] or 0), "images": int(row[2] or 0)}
         for row in reversed(daily)
     ]
+
+    month_cutoff = (datetime.now(timezone.utc).date() - timedelta(days=29)).isoformat()
+    window_cutoff = (datetime.now(timezone.utc).date() - timedelta(days=days - 1)).isoformat()
+    dau = (
+        db.query(func.count(func.distinct(Usage.user_id)))
+        .filter(Usage.day == day, (Usage.messages > 0) | (Usage.images > 0))
+        .scalar()
+        or 0
+    )
+    mau = (
+        db.query(func.count(func.distinct(Usage.user_id)))
+        .filter(Usage.day >= month_cutoff)
+        .scalar()
+        or 0
+    )
+    top_rows = (
+        db.query(User, func.sum(Usage.messages).label("total"))
+        .join(Usage, Usage.user_id == User.id)
+        .filter(Usage.day >= window_cutoff)
+        .group_by(User.id)
+        .order_by(func.sum(Usage.messages).desc())
+        .limit(5)
+        .all()
+    )
+    top_users = [
+        {
+            "id": user.id,
+            "name": user.display_name or user.username or f"Usuario #{user.id}",
+            "messages": int(total or 0),
+        }
+        for user, total in top_rows
+        if (total or 0) > 0
+    ]
+    model_rows = (
+        db.query(UserSettings.preferred_model, func.count(UserSettings.user_id))
+        .group_by(UserSettings.preferred_model)
+        .all()
+    )
+    model_breakdown = {
+        (model or "predeterminado"): count for model, count in model_rows if count
+    }
+
     return {
         "users": db.query(func.count(User.id)).scalar() or 0,
         "conversations": db.query(func.count(Conversation.id)).scalar() or 0,
@@ -1937,8 +2069,13 @@ def admin_stats(
         "messages_today": sum(row.messages for row in today_rows),
         "images_today": sum(row.images for row in today_rows),
         "active_today": sum(1 for row in today_rows if row.messages or row.images),
+        "dau": int(dau),
+        "mau": int(mau),
         "plan_breakdown": {plan or "free": count for plan, count in plan_rows},
+        "model_breakdown": model_breakdown,
+        "top_users": top_users,
         "series": series,
+        "range": days,
         "founders": settings.founder_ids,
         "day": day,
     }
@@ -2290,6 +2427,94 @@ def admin_update_flag(
     db.refresh(flag)
     record_audit(db, admin, "flag.update", key, f"enabled={payload.enabled}")
     return {"flag": {"key": flag.key, "enabled": bool(flag.enabled), "description": flag.description}}
+
+
+@app.get("/api/admin/settings")
+def admin_get_settings(
+    _: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Configuración global de la IA (prompt, modelo, temperatura) y moderación."""
+    return {
+        "settings": {
+            key: get_setting(db, key, DEFAULT_APP_SETTINGS.get(key, ""))
+            for key in DEFAULT_APP_SETTINGS
+        }
+    }
+
+
+@app.patch("/api/admin/settings")
+def admin_update_settings(
+    payload: AdminSettingsUpdate,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Actualiza la configuración global de la IA."""
+    changes: list[str] = []
+    for field in ("system_prompt", "default_model", "temperature", "banned_words"):
+        value = getattr(payload, field)
+        if value is not None:
+            set_setting(db, field, value.strip())
+            changes.append(field)
+    if changes:
+        record_audit(db, admin, "settings.update", "app", ", ".join(changes))
+    return {
+        "settings": {
+            key: get_setting(db, key, DEFAULT_APP_SETTINGS.get(key, ""))
+            for key in DEFAULT_APP_SETTINGS
+        }
+    }
+
+
+@app.get("/api/admin/health")
+def admin_health(
+    _: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Estado del backend: versión, uptime y dependencias."""
+    database_ok = True
+    try:
+        db.execute(sa_text("SELECT 1"))
+    except Exception:  # noqa: BLE001 - se reporta como no disponible
+        database_ok = False
+    return {
+        "version": app.version,
+        "environment": settings.environment,
+        "uptime_seconds": int(time.time() - START_TIME),
+        "database": "ok" if database_ok else "error",
+        "redis": cache_is_enabled(),
+        "gemini": genai_client is not None,
+        "email_relay": bool(settings.email_relay_url and settings.email_relay_token),
+        "founder_2fa_required": settings.founder_2fa_required,
+    }
+
+
+@app.get("/api/admin/documents")
+def admin_documents(
+    _: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Lista todos los documentos de conocimiento con su propietario."""
+    rows = (
+        db.query(Document, User)
+        .outerjoin(User, User.id == Document.user_id)
+        .order_by(Document.id.desc())
+        .limit(500)
+        .all()
+    )
+    return {
+        "documents": [
+            {
+                "id": doc.id,
+                "title": doc.title,
+                "chunks": len(doc.chunks),
+                "user_id": doc.user_id,
+                "owner": (user.display_name or user.username or f"Usuario #{user.id}") if user else "—",
+                "created_at": doc.created_at.isoformat() if doc.created_at else None,
+            }
+            for doc, user in rows
+        ]
+    }
 
 
 @app.get("/api/admin/notices")

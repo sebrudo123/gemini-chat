@@ -245,6 +245,13 @@ pruebas en cada push y pull request.
 - `POST /api/admin/users/{id}/logout-all`: cierra todas las sesiones activas
   (incrementa `User.session_epoch`, invalidando los tokens anteriores).
 - `GET /api/admin/export/users?format=csv|json`: exporta la lista de usuarios.
+- `GET /api/admin/stats?range=7|14|30|90`: métricas con rango, DAU/MAU, top de
+  usuarios por mensajes y uso por modelo preferido.
+- `GET /api/admin/health`: versión, entorno, uptime y estado de la base de datos,
+  caché, Gemini y relevo de correo.
+- `GET|PATCH /api/admin/settings`: system prompt, modelo predeterminado,
+  temperatura y palabras prohibidas (moderación del chat).
+- `GET /api/admin/documents`: todos los documentos de la base RAG con su dueño.
 - `GET|DELETE /api/admin/conversations/{id}`: consulta o elimina conversaciones.
 - `DELETE /api/admin/documents/{id}`: elimina documentos de conocimiento.
 - `DELETE /api/admin/users/{id}`: elimina un usuario y todos sus datos (los

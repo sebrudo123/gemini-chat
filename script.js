@@ -79,6 +79,17 @@ const adminUserCount = document.getElementById("admin-user-count");
 const adminAuditSearch = document.getElementById("admin-audit-search");
 const adminAuditLimit = document.getElementById("admin-audit-limit");
 const adminChartRange = document.getElementById("admin-chart-range");
+const adminChartRangeSelect = document.getElementById("admin-chart-range-select");
+const adminExportChart = document.getElementById("admin-export-chart");
+const adminTopList = document.getElementById("admin-top-list");
+const adminModelList = document.getElementById("admin-model-list");
+const adminHealth = document.getElementById("admin-health");
+const adminDocs = document.getElementById("admin-docs");
+const aiSystemPrompt = document.getElementById("ai-system-prompt");
+const aiDefaultModel = document.getElementById("ai-default-model");
+const aiTemperature = document.getElementById("ai-temperature");
+const aiBannedWords = document.getElementById("ai-banned-words");
+const aiSave = document.getElementById("ai-save");
 const adminExportCsv = document.getElementById("admin-export-csv");
 const adminExportJson = document.getElementById("admin-export-json");
 const adminUserModal = document.getElementById("admin-user-modal");
@@ -1693,7 +1704,7 @@ function renderPlans() {
 /* Administración                                                      */
 /* ------------------------------------------------------------------ */
 
-const ADMIN_TABS = ["overview", "users", "flags", "notices", "audit"];
+const ADMIN_TABS = ["overview", "users", "ai", "flags", "notices", "audit"];
 
 async function openAdmin() {
   if (!currentUser || !currentUser.is_admin) {
@@ -1714,26 +1725,39 @@ function setAdminLoading(loading) {
   });
 }
 
+function adminStatsRange() {
+  return adminChartRangeSelect ? adminChartRangeSelect.value : "14";
+}
+
 async function loadAdmin() {
   setAdminLoading(true);
   try {
-    const [statsData, usersData, flagsData, noticesData, auditData] = await Promise.all([
-      api("/api/admin/stats"),
-      api("/api/admin/users"),
-      api("/api/admin/flags"),
-      api("/api/admin/notices"),
-      api(`/api/admin/audit?limit=${encodeURIComponent(adminAuditLimit.value || "50")}`),
-    ]);
+    const [statsData, usersData, flagsData, noticesData, auditData, healthData, settingsData, docsData] =
+      await Promise.all([
+        api(`/api/admin/stats?range=${encodeURIComponent(adminStatsRange())}`),
+        api("/api/admin/users"),
+        api("/api/admin/flags"),
+        api("/api/admin/notices"),
+        api(`/api/admin/audit?limit=${encodeURIComponent(adminAuditLimit.value || "50")}`),
+        api("/api/admin/health"),
+        api("/api/admin/settings"),
+        api("/api/admin/documents"),
+      ]);
     adminData.stats = statsData;
     adminData.users = usersData.users || [];
     adminData.notices = noticesData.notices || [];
     adminData.audit = auditData.logs || [];
     renderAdminStats(statsData);
     renderAdminChart(statsData.series || []);
+    renderAdminTopUsers(statsData.top_users || []);
+    renderAdminModels(statsData.model_breakdown || {});
     renderAdminUsers(adminData.users);
     renderAdminFlags(flagsData.flags || []);
     renderAdminNotices(adminData.notices);
     renderAdminAudit(adminData.audit);
+    renderAdminHealth(healthData);
+    renderAdminSettings(settingsData.settings || {});
+    renderAdminDocs(docsData.documents || []);
     if (adminUpdated) {
       const now = new Date().toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
       adminUpdated.textContent = `Actualizado a las ${now}`;
@@ -2093,6 +2117,8 @@ function renderAdminStats(stats) {
   adminStats.appendChild(adminStat(stats.messages, "Mensajes"));
   adminStats.appendChild(adminStat(stats.documents, "Documentos"));
   adminStats.appendChild(adminStat(stats.active_today, "Activos hoy"));
+  adminStats.appendChild(adminStat(stats.dau ?? stats.active_today ?? 0, "DAU"));
+  adminStats.appendChild(adminStat(stats.mau ?? 0, "MAU (30d)"));
   adminStats.appendChild(adminStat(stats.messages_today, "Mensajes hoy"));
   adminStats.appendChild(adminStat(stats.images_today ?? 0, "Imágenes hoy"));
   adminStats.appendChild(adminStat(stats.banned || 0, "Baneados"));
@@ -2103,6 +2129,180 @@ function renderAdminStats(stats) {
     .map((plan) => `${plans[plan]} ${plan}`)
     .join(" · ");
   adminStats.appendChild(adminStat(summary || "—", "Planes"));
+}
+
+function adminListEmpty(container, text) {
+  container.innerHTML = "";
+  const empty = document.createElement("div");
+  empty.className = "modal-sub";
+  empty.textContent = text;
+  container.appendChild(empty);
+}
+
+function renderAdminTopUsers(top) {
+  if (!adminTopList) return;
+  if (!top.length) {
+    adminListEmpty(adminTopList, "Sin actividad en el periodo.");
+    return;
+  }
+  adminTopList.innerHTML = "";
+  top.forEach((user) => {
+    const item = document.createElement("div");
+    item.className = "admin-list-item";
+    const title = document.createElement("span");
+    title.className = "admin-list-title";
+    title.textContent = user.name;
+    title.style.cursor = "pointer";
+    title.addEventListener("click", () => openAdminUser(user.id));
+    const meta = document.createElement("span");
+    meta.className = "admin-list-meta";
+    meta.textContent = `${user.messages} mensajes`;
+    item.append(title, meta);
+    adminTopList.appendChild(item);
+  });
+}
+
+function renderAdminModels(breakdown) {
+  if (!adminModelList) return;
+  const entries = Object.entries(breakdown || {});
+  if (!entries.length) {
+    adminListEmpty(adminModelList, "Sin preferencias registradas.");
+    return;
+  }
+  adminModelList.innerHTML = "";
+  entries
+    .sort((a, b) => b[1] - a[1])
+    .forEach(([model, count]) => {
+      const item = document.createElement("div");
+      item.className = "admin-list-item";
+      const title = document.createElement("span");
+      title.className = "admin-list-title";
+      title.textContent = model;
+      const meta = document.createElement("span");
+      meta.className = "admin-list-meta";
+      meta.textContent = `${count} usuarios`;
+      item.append(title, meta);
+      adminModelList.appendChild(item);
+    });
+}
+
+function renderAdminHealth(health) {
+  if (!adminHealth) return;
+  adminHealth.innerHTML = "";
+  const rows = [
+    ["Versión", health.version],
+    ["Entorno", health.environment],
+    ["Uptime", `${Math.round((health.uptime_seconds || 0) / 60)} min`],
+    ["Base de datos", health.database === "ok" ? "OK" : "Error"],
+    ["Caché/Redis", health.redis ? "Activa" : "No"],
+    ["Gemini", health.gemini ? "Configurado" : "Sin configurar"],
+    ["Relevo de correo", health.email_relay ? "Configurado" : "No"],
+    ["2FA fundador", health.founder_2fa_required ? "Obligatoria" : "Opcional"],
+  ];
+  rows.forEach(([key, value]) => adminKvRow(adminHealth, key, value));
+}
+
+function renderAdminSettings(settings) {
+  if (aiSystemPrompt) aiSystemPrompt.value = settings.system_prompt || "";
+  if (aiDefaultModel) aiDefaultModel.value = settings.default_model || "";
+  if (aiTemperature) aiTemperature.value = settings.temperature || "";
+  if (aiBannedWords) aiBannedWords.value = settings.banned_words || "";
+}
+
+function renderAdminDocs(documents) {
+  if (!adminDocs) return;
+  if (!documents.length) {
+    adminListEmpty(adminDocs, "No hay documentos en la base RAG.");
+    return;
+  }
+  adminDocs.innerHTML = "";
+  documents.forEach((doc) => {
+    const item = document.createElement("div");
+    item.className = "admin-list-item";
+    const title = document.createElement("span");
+    title.className = "admin-list-title";
+    title.textContent = doc.title || "Documento";
+    const meta = document.createElement("span");
+    meta.className = "admin-list-meta";
+    meta.textContent = `${doc.owner} · ${doc.chunks} frag.`;
+    const remove = adminMiniButton("Eliminar", async () => {
+      if (!window.confirm("¿Eliminar este documento de la base RAG?")) return;
+      try {
+        await api(`/api/admin/documents/${doc.id}`, { method: "DELETE" });
+        item.remove();
+        showToast("Documento eliminado.");
+      } catch (err) {
+        renderError(err.message);
+      }
+    }, true);
+    item.append(title, meta, remove);
+    adminDocs.appendChild(item);
+  });
+}
+
+async function refreshAdminStats() {
+  try {
+    const stats = await api(`/api/admin/stats?range=${encodeURIComponent(adminStatsRange())}`);
+    adminData.stats = stats;
+    renderAdminStats(stats);
+    renderAdminChart(stats.series || []);
+    renderAdminTopUsers(stats.top_users || []);
+    renderAdminModels(stats.model_breakdown || {});
+  } catch (err) {
+    renderError(err.message);
+  }
+}
+
+function exportAdminChartImage() {
+  const series = (adminData.stats && adminData.stats.series) || [];
+  if (!series.length) {
+    renderError("No hay datos para exportar.");
+    return;
+  }
+  const width = 760;
+  const height = 380;
+  const pad = 44;
+  const axisH = 34;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#1e1e1e";
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = "#e8e8e8";
+  ctx.font = "600 16px sans-serif";
+  ctx.fillText("Core IA · actividad diaria", pad, 28);
+  const max = Math.max(...series.map((s) => (s.messages || 0) + (s.images || 0)), 1);
+  const chartH = height - pad - axisH;
+  const slot = (width - pad * 2) / series.length;
+  const barW = Math.min(slot * 0.7, 34);
+  series.forEach((s, i) => {
+    const x = pad + i * slot + (slot - barW) / 2;
+    const hMessages = ((s.messages || 0) / max) * chartH;
+    const hImages = ((s.images || 0) / max) * chartH;
+    const baseY = height - axisH;
+    ctx.fillStyle = "#8ab4f8";
+    ctx.fillRect(x, baseY - hMessages, barW, hMessages);
+    ctx.fillStyle = "#f59e0b";
+    ctx.fillRect(x, baseY - hMessages - hImages, barW, hImages);
+  });
+  ctx.fillStyle = "#8e8e8e";
+  ctx.font = "12px sans-serif";
+  ctx.fillText(series[0].day, pad, height - 12);
+  const lastDay = series[series.length - 1].day;
+  ctx.fillText(lastDay, width - pad - ctx.measureText(lastDay).width, height - 12);
+  ctx.fillText(String(max), 6, pad);
+  canvas.toBlob((blob) => {
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "coreia-actividad.png";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }, "image/png");
 }
 
 function renderAdminUsers(users) {
@@ -2832,6 +3032,30 @@ adminUserStatus.addEventListener("change", applyUserFilters);
 adminAuditSearch.addEventListener("input", applyAuditFilter);
 adminAuditLimit.addEventListener("change", refreshAudit);
 
+if (adminChartRangeSelect) adminChartRangeSelect.addEventListener("change", refreshAdminStats);
+if (adminExportChart) adminExportChart.addEventListener("click", exportAdminChartImage);
+if (aiSave) {
+  aiSave.addEventListener("click", async () => {
+    aiSave.disabled = true;
+    try {
+      const data = await api("/api/admin/settings", {
+        method: "PATCH",
+        body: JSON.stringify({
+          system_prompt: aiSystemPrompt ? aiSystemPrompt.value : "",
+          default_model: aiDefaultModel ? aiDefaultModel.value : "",
+          temperature: aiTemperature ? aiTemperature.value : "",
+          banned_words: aiBannedWords ? aiBannedWords.value : "",
+        }),
+      });
+      renderAdminSettings(data.settings || {});
+      showToast("Configuración de IA guardada.");
+    } catch (err) {
+      renderError(err.message);
+    } finally {
+      aiSave.disabled = false;
+    }
+  });
+}
 if (adminExportCsv) adminExportCsv.addEventListener("click", () => exportAdminUsers("csv"));
 if (adminExportJson) adminExportJson.addEventListener("click", () => exportAdminUsers("json"));
 if (adminUserClose) adminUserClose.addEventListener("click", closeAdminUser);

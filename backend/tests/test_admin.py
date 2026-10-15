@@ -68,7 +68,7 @@ def test_admin_endpoints_forbidden_for_normal_user(client):
 
 
 def test_admin_stats_and_user_management(client, monkeypatch):
-    monkeypatch.setattr(main, "generate_reply", lambda message, preferred_model=None: "ok")
+    monkeypatch.setattr(main, "generate_reply", lambda message, preferred_model=None, **_: "ok")
     founder = auth(FOUNDER_ID)
     member_id = "800000000000000003"
     member = auth(member_id)
@@ -187,6 +187,39 @@ def test_admin_user_drilldown_edit_and_export(client):
 
     assert client.delete(f"/api/admin/conversations/{conversation_id}", headers=founder).status_code == 200
     assert client.delete(f"/api/admin/documents/{document_id}", headers=founder).status_code == 200
+
+
+def test_admin_ai_settings_health_and_moderation(client, monkeypatch):
+    monkeypatch.setattr(main, "generate_reply", lambda message, preferred_model=None, **_: "ok")
+    founder = auth(FOUNDER_ID)
+
+    health = client.get("/api/admin/health", headers=founder)
+    assert health.status_code == 200
+    assert health.json()["database"] == "ok"
+
+    settings = client.get("/api/admin/settings", headers=founder).json()["settings"]
+    assert "system_prompt" in settings and "banned_words" in settings
+
+    updated = client.patch(
+        "/api/admin/settings",
+        json={"system_prompt": "Sé breve.", "temperature": "0.3", "banned_words": "prohibido"},
+        headers=founder,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["settings"]["banned_words"] == "prohibido"
+
+    member = auth("800000000000000010")
+    blocked = client.post("/api/chat", json={"message": "esto es prohibido"}, headers=member)
+    assert blocked.status_code == 400
+    assert client.post("/api/chat", json={"message": "mensaje limpio"}, headers=member).status_code == 200
+
+    assert client.get("/api/admin/documents", headers=founder).status_code == 200
+
+    stats = client.get("/api/admin/stats?range=30", headers=founder).json()
+    assert stats["range"] == 30
+    assert {"dau", "mau", "top_users", "model_breakdown"} <= set(stats)
+
+    client.patch("/api/admin/settings", json={"banned_words": ""}, headers=founder)
 
 
 def test_admin_audit_flags_and_notices(client):

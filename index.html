@@ -1320,6 +1320,12 @@
     .admin-audit-row .audit-action.danger { color: var(--danger); }
 
     .admin-detail { display: flex; flex-direction: column; gap: 14px; max-height: 70vh; overflow-y: auto; }
+    .admin-chart-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .admin-chart-tools select {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+      color: var(--text); font-family: inherit; font-size: 12px; padding: 5px 8px; outline: none;
+    }
+    .admin-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .admin-detail h3 {
       font-size: 12px; text-transform: uppercase; letter-spacing: .5px;
       color: var(--faint); margin: 0 0 8px;
@@ -1687,6 +1693,7 @@
       <div class="admin-tabs" id="admin-tabs">
         <button class="admin-tab active" data-tab="overview" type="button">Resumen</button>
         <button class="admin-tab" data-tab="users" type="button">Usuarios</button>
+        <button class="admin-tab" data-tab="ai" type="button">IA</button>
         <button class="admin-tab" data-tab="flags" type="button">Funciones</button>
         <button class="admin-tab" data-tab="notices" type="button">Avisos</button>
         <button class="admin-tab" data-tab="audit" type="button">Auditoría</button>
@@ -1699,9 +1706,28 @@
             <i class="dot messages"></i> Mensajes
             <i class="dot images"></i> Imágenes
           </span>
-          <span class="chart-range" id="admin-chart-range"></span>
+          <span class="admin-chart-tools">
+            <select id="admin-chart-range-select">
+              <option value="7">7 días</option>
+              <option value="14" selected>14 días</option>
+              <option value="30">30 días</option>
+              <option value="90">90 días</option>
+            </select>
+            <button class="admin-mini" id="admin-export-chart" type="button" title="Guardar gráfico como imagen">Guardar imagen</button>
+            <span class="chart-range" id="admin-chart-range"></span>
+          </span>
         </div>
         <div class="admin-chart" id="admin-chart"></div>
+        <div class="admin-two-col">
+          <div class="admin-detail-section">
+            <h3>Top usuarios (mensajes)</h3>
+            <div class="admin-list" id="admin-top-list"></div>
+          </div>
+          <div class="admin-detail-section">
+            <h3>Uso por modelo preferido</h3>
+            <div class="admin-list" id="admin-model-list"></div>
+          </div>
+        </div>
       </div>
 
       <div class="admin-pane" data-pane="users">
@@ -1728,11 +1754,47 @@
         <div class="admin-users" id="admin-users"></div>
       </div>
 
+      <div class="admin-pane" data-pane="ai">
+        <p class="modal-sub">Modelo, prompt, moderación y estado del backend y de la base RAG.</p>
+
+        <div class="admin-detail-section">
+          <h3>Estado del backend</h3>
+          <dl class="admin-kv" id="admin-health"></dl>
+        </div>
+
+        <div class="admin-detail-section">
+          <h3>Configuración de la IA</h3>
+          <div class="admin-field-row">
+            <label for="ai-system-prompt">System prompt</label>
+            <textarea id="ai-system-prompt" maxlength="4000" placeholder="Instrucciones base para Core IA (vacío = por defecto)."></textarea>
+          </div>
+          <div class="admin-field-row">
+            <label for="ai-default-model">Modelo predeterminado</label>
+            <input type="text" id="ai-default-model" maxlength="64" placeholder="vacío = modelo del servidor" />
+          </div>
+          <div class="admin-field-row">
+            <label for="ai-temperature">Temperatura (0 - 2)</label>
+            <input type="text" id="ai-temperature" maxlength="8" placeholder="vacío = por defecto" />
+          </div>
+          <div class="admin-field-row">
+            <label for="ai-banned-words">Palabras prohibidas (separadas por comas)</label>
+            <textarea id="ai-banned-words" maxlength="2000" placeholder="ej: spam, ofensivo"></textarea>
+          </div>
+          <div class="admin-detail-actions">
+            <button class="admin-mini" id="ai-save" type="button">Guardar configuración</button>
+          </div>
+        </div>
+
+        <div class="admin-detail-section">
+          <h3>Base de conocimiento (RAG)</h3>
+          <div class="admin-list" id="admin-docs"></div>
+        </div>
+      </div>
+
       <div class="admin-pane" data-pane="flags">
         <p class="modal-sub">Activa o desactiva funciones de la plataforma.</p>
         <div class="admin-flags" id="admin-flags"></div>
       </div>
-
       <div class="admin-pane" data-pane="notices">
         <p class="modal-sub">Publica un aviso visible para todos los usuarios.</p>
         <div class="admin-notice-form">
