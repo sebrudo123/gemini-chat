@@ -69,6 +69,10 @@ REDIS_URL=                # opcional (caché + rate limiting distribuido)
 SENTRY_DSN=               # opcional (observabilidad)
 ENVIRONMENT=production
 RATE_LIMIT=30/minute
+RESEND_API_KEY=           # opcional: habilita los correos de confirmación (https://resend.com)
+EMAIL_FROM=Core IA <onboarding@resend.dev>
+EMAIL_VERIFICATION_REQUIRED=false
+TOTP_ISSUER=Core IA
 ```
 
 ## 3. Local
@@ -185,6 +189,23 @@ pruebas en cada push y pull request.
   `password_hash`/email. Las cuentas con el mismo correo se enlazan.
 - **Migración**: al arrancar, `init_db()` añade las columnas nuevas de identidad y
   permite `discord_id` nulo en bases de datos ya existentes.
+
+## Verificación de correo y 2FA
+
+- **Verificación de correo**: al registrarse con correo se envía un enlace firmado
+  (Resend) a `GET /api/auth/email/verify`. El estado se ve en *Ajustes → Correo* y
+  puede reenviarse con `POST /api/auth/email/resend`. Si `EMAIL_VERIFICATION_REQUIRED=true`,
+  los usuarios con correo sin verificar no podrán chatear. Las cuentas de Discord se
+  consideran verificadas.
+- **Autenticación en dos pasos (TOTP)**: activable desde *Ajustes → Seguridad*.
+  - `POST /api/auth/2fa/setup`: genera el secreto y el código QR (SVG).
+  - `POST /api/auth/2fa/enable`: valida el primer código y devuelve 10 códigos de
+    respaldo de un solo uso (mostrados una sola vez).
+  - `POST /api/auth/2fa/verify`: completa el login pendiente (`{ requires_2fa, pending_token }`
+    en el login por correo o `#pending2fa=` en el callback de Discord) aceptando TOTP
+    o un código de respaldo.
+  - `POST /api/auth/2fa/disable`: desactiva validando TOTP, código de respaldo o contraseña.
+  - Requiere la dependencia `pyotp` (y `qrcode` para el QR).
 
 ## Panel de administración
 

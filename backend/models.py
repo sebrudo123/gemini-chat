@@ -34,6 +34,10 @@ class User(Base):
     plan: Mapped[str] = mapped_column(String(16), default="free")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False)
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    totp_secret: Mapped[str | None] = mapped_column(String(64), default=None)
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    recovery_codes: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     conversations: Mapped[list["Conversation"]] = relationship(

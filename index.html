@@ -534,8 +534,8 @@
       padding: 16px;
       overflow-y: auto;
     }
-    .modal.show { display: grid; place-items: center; }
-    .modal.show .modal-card { animation: popIn .22s cubic-bezier(.22, 1, .36, 1) both; }
+    .modal.show { display: flex; align-items: flex-start; justify-content: center; }
+    .modal.show .modal-card { margin: auto; animation: popIn .22s cubic-bezier(.22, 1, .36, 1) both; }
     @keyframes popIn {
       from { opacity: 0; transform: translateY(10px) scale(.98); }
       to   { opacity: 1; transform: translateY(0) scale(1); }
@@ -644,6 +644,88 @@
       cursor: pointer;
     }
     .field.checkbox input { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; }
+
+    .hidden { display: none !important; }
+    #twofa-modal { z-index: 95; }
+    .toast {
+      position: fixed; left: 50%; bottom: 26px;
+      transform: translate(-50%, 14px);
+      max-width: min(92vw, 400px);
+      padding: 11px 16px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      color: var(--text);
+      font-size: 13.5px;
+      line-height: 1.45;
+      opacity: 0;
+      pointer-events: none;
+      z-index: 200;
+      transition: opacity .2s, transform .2s;
+    }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    .settings-sections { display: flex; flex-direction: column; gap: 18px; }
+    .settings-section { display: flex; flex-direction: column; gap: 10px; }
+    .settings-section h3 {
+      font-size: 12px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .6px; color: var(--muted);
+      padding-bottom: 6px; border-bottom: 1px solid var(--border);
+    }
+    .settings-section.danger-zone h3 { color: var(--danger); border-color: rgba(248, 113, 113, .35); }
+    .account-summary { display: flex; align-items: center; gap: 12px; }
+    .account-summary img, .account-summary .fallback-avatar {
+      width: 42px; height: 42px; border-radius: 50%; flex-shrink: 0;
+    }
+    .account-summary .fallback-avatar {
+      display: grid; place-items: center; background: var(--grad);
+      color: #fff; font-weight: 700; font-size: 17px;
+    }
+    .account-name { font-size: 14px; font-weight: 600; }
+    .account-mail { font-size: 12.5px; color: var(--muted); word-break: break-all; }
+    .settings-row {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; flex-wrap: wrap;
+    }
+    .settings-row-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+    .settings-row-info strong { font-size: 13.5px; }
+    .settings-hint { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+    .badge-pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px;
+      background: var(--surface-hover); color: var(--muted); white-space: nowrap;
+    }
+    .badge-pill.ok { color: #22c55e; background: rgba(34, 197, 94, .14); }
+    .badge-pill.warn { color: #f59e0b; background: rgba(245, 158, 11, .14); }
+    .primary-btn.small, .admin-mini.small { padding: 8px 13px; font-size: 13px; border-radius: 9px; }
+    .twofa-setup, .twofa-recovery {
+      display: flex; flex-direction: column; gap: 10px;
+      padding: 13px; border: 1px solid var(--border);
+      border-radius: 12px; background: var(--bg);
+    }
+    .twofa-qr { display: flex; justify-content: center; }
+    .twofa-qr svg { border-radius: 10px; background: #fff; }
+    .twofa-secret { font-size: 12.5px; color: var(--muted); text-align: center; }
+    .twofa-secret code {
+      display: inline-block; margin-top: 4px; padding: 5px 9px;
+      background: var(--surface-hover); border-radius: 7px;
+      font-size: 12.5px; letter-spacing: 1px; color: var(--text);
+      word-break: break-all;
+    }
+    .twofa-confirm { display: flex; gap: 8px; }
+    .twofa-confirm input {
+      flex: 1; min-width: 0; background: var(--surface-2);
+      border: 1px solid var(--border); border-radius: 9px;
+      color: var(--text); font-family: inherit; font-size: 15px;
+      letter-spacing: 3px; text-align: center; padding: 10px; outline: none;
+    }
+    .twofa-confirm input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    .twofa-recovery ul { list-style: none; display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; }
+    .twofa-recovery li {
+      font-family: ui-monospace, monospace; font-size: 13px;
+      background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 7px 9px; text-align: center; letter-spacing: 1px;
+    }
 
     /* ================= Uso ================= */
     .usage-list {
@@ -1206,6 +1288,45 @@
       .plan-badge::after { content: "★"; }
     }
 
+    @media (max-width: 640px) {
+      .modal { padding: 0; }
+      .modal.show .modal-card {
+        margin: 0;
+        border-radius: 0;
+        border-left: 0;
+        border-right: 0;
+        min-height: 100dvh;
+        padding: 18px 15px calc(20px + env(safe-area-inset-bottom));
+      }
+      .modal-card.modal-wide {
+        max-width: none;
+      }
+      #admin-modal .modal-card {
+        height: 100dvh;
+      }
+      .admin-tabs {
+        flex-shrink: 0;
+        position: sticky;
+        top: 0;
+        background: var(--surface-2);
+        padding: 6px 0;
+        z-index: 2;
+      }
+      .admin-pane.active {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        padding-bottom: 12px;
+      }
+      .admin-users, .admin-notices, .admin-audit { max-height: none; overflow: visible; }
+      .admin-user { flex-wrap: wrap; }
+      .admin-user-info { flex-basis: 100%; }
+      .admin-user select { flex: 1; }
+      .admin-actions { flex: 1; justify-content: flex-end; }
+      .admin-notice-form { flex-direction: column; align-items: stretch; }
+      .admin-notice-form input, .admin-notice-form select, .admin-notice-form button { width: 100%; }
+    }
+
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation: none !important; transition: none !important; }
     }
@@ -1342,35 +1463,112 @@
   </div>
 
   <div class="modal" id="settings-modal">
-    <div class="modal-card">
+    <div class="modal-card modal-wide">
       <div class="modal-head">
         <h2>Ajustes</h2>
         <button class="icon-btn" id="settings-close" type="button" aria-label="Cerrar">✕</button>
       </div>
-      <p class="modal-sub">Personaliza tu experiencia en Core IA.</p>
-      <label class="field">
-        <span>Tema</span>
-        <select id="settings-theme">
-          <option value="dark">Oscuro</option>
-          <option value="light">Claro</option>
-        </select>
-      </label>
-      <label class="field">
-        <span>Modelo preferido</span>
-        <select id="settings-model">
-          <option value="">Predeterminado</option>
-          <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
-          <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
-          <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash Lite</option>
-        </select>
-      </label>
-      <label class="field checkbox">
-        <input type="checkbox" id="settings-rag" />
-        <span>Usar mi base de conocimiento (RAG) al responder</span>
-      </label>
-      <button class="admin-mini" id="settings-notify" type="button">Activar notificaciones de respuesta</button>
+      <p class="modal-sub">Personaliza tu cuenta y tu experiencia en Core IA.</p>
+
+      <div class="settings-sections">
+        <section class="settings-section">
+          <h3>Cuenta</h3>
+          <div class="account-summary" id="account-summary"></div>
+        </section>
+
+        <section class="settings-section">
+          <h3>Correo electrónico</h3>
+          <div class="settings-row">
+            <div class="settings-row-info">
+              <strong>Estado del correo</strong>
+              <span class="settings-hint" id="email-status-text">—</span>
+            </div>
+            <button class="admin-mini small hidden" id="email-resend" type="button">Reenviar correo</button>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <h3>Seguridad</h3>
+          <div class="settings-row">
+            <div class="settings-row-info">
+              <strong>Autenticación en dos pasos</strong>
+              <span class="settings-hint" id="twofa-status-text">Cargando…</span>
+            </div>
+            <button class="primary-btn small" id="twofa-start" type="button">Activar</button>
+            <button class="admin-mini small hidden" id="twofa-disable" type="button">Desactivar</button>
+          </div>
+          <div class="twofa-setup hidden" id="twofa-setup">
+            <p class="settings-hint">Escanea el código QR con tu app de autenticación (Google Authenticator, Authy, 1Password…).</p>
+            <div class="twofa-qr" id="twofa-qr"></div>
+            <div class="twofa-secret">Clave manual: <br><code id="twofa-secret"></code></div>
+            <div class="twofa-confirm">
+              <input id="twofa-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" />
+              <button class="primary-btn small" id="twofa-enable" type="button">Confirmar</button>
+            </div>
+            <p class="settings-hint" id="twofa-setup-error"></p>
+          </div>
+          <div class="twofa-recovery hidden" id="twofa-recovery">
+            <p class="settings-hint">Guarda estos códigos de respaldo en un lugar seguro. No se volverán a mostrar.</p>
+            <ul id="twofa-recovery-list"></ul>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <h3>Apariencia</h3>
+          <label class="field">
+            <span>Tema</span>
+            <select id="settings-theme">
+              <option value="dark">Oscuro</option>
+              <option value="light">Claro</option>
+            </select>
+          </label>
+        </section>
+
+        <section class="settings-section">
+          <h3>Inteligencia artificial</h3>
+          <label class="field">
+            <span>Modelo preferido</span>
+            <select id="settings-model">
+              <option value="">Predeterminado</option>
+              <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
+              <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+              <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash Lite</option>
+            </select>
+          </label>
+          <label class="field checkbox">
+            <input type="checkbox" id="settings-rag" />
+            <span>Usar mi base de conocimiento (RAG) al responder</span>
+          </label>
+        </section>
+
+        <section class="settings-section">
+          <h3>Notificaciones</h3>
+          <button class="admin-mini" id="settings-notify" type="button">Activar notificaciones de respuesta</button>
+        </section>
+
+        <section class="settings-section danger-zone">
+          <h3>Zona peligrosa</h3>
+          <button class="danger-btn" id="delete-account" type="button">Eliminar mi cuenta</button>
+        </section>
+      </div>
+
       <button class="primary-btn" id="settings-save" type="button">Guardar cambios</button>
-      <button class="danger-btn" id="delete-account" type="button">Eliminar mi cuenta</button>
+    </div>
+  </div>
+
+  <div class="modal" id="twofa-modal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>Verificación en dos pasos</h2>
+        <button class="icon-btn" id="twofa-modal-close" type="button" aria-label="Cerrar">✕</button>
+      </div>
+      <p class="modal-sub" id="twofa-modal-sub">Introduce el código de 6 dígitos de tu app de autenticación.</p>
+      <div class="twofa-confirm">
+        <input id="twofa-login-code" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="000000" />
+      </div>
+      <p class="settings-hint" id="twofa-login-error"></p>
+      <button class="primary-btn" id="twofa-login-submit" type="button">Verificar</button>
+      <button class="admin-mini" id="twofa-login-recovery" type="button">Usar un código de respaldo</button>
     </div>
   </div>
 

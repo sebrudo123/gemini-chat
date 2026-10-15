@@ -14,6 +14,7 @@ Consulta el README para las variables de entorno.
 import base64
 import hashlib
 import hmac
+import json
 import os
 import re
 import secrets
@@ -26,6 +27,7 @@ from typing import Any
 from urllib.parse import urlencode, urlparse
 
 import httpx
+import pyotp
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
@@ -92,6 +94,8 @@ DISCORD_TOKEN_URL = f"{DISCORD_API}/oauth2/token"
 DISCORD_USER_URL = f"{DISCORD_API}/users/@me"
 
 SESSION_SALT = "core-ia.session.v1"
+TWOFA_PENDING_SALT = "core-ia.2fa.pending.v1"
+EMAIL_VERIFY_SALT = "core-ia.email.verify.v1"
 
 PROVIDER_COLUMNS = {
     "discord": "discord_id",
@@ -109,6 +113,8 @@ TRANSIENT_MARKERS = (
 )
 
 serializer = URLSafeTimedSerializer(settings.session_secret, salt=SESSION_SALT)
+twofa_serializer = URLSafeTimedSerializer(settings.session_secret, salt=TWOFA_PENDING_SALT)
+email_serializer = URLSafeTimedSerializer(settings.session_secret, salt=EMAIL_VERIFY_SALT)
 genai_client = genai.Client(api_key=settings.ai_api_key) if settings.ai_api_key else None
 
 
@@ -351,6 +357,8 @@ def upsert_user(db: Session, profile: dict[str, Any]) -> User:
     user.display_name = profile.get("display_name") or user.display_name
     user.email = profile.get("email") or user.email
     user.avatar_url = profile.get("avatar_url") or user.avatar_url
+    if profile.get("email_verified"):
+        user.email_verified = True
     db.commit()
     db.refresh(user)
     _ensure_user_allowed(user)
@@ -746,9 +754,12 @@ async def _fetch_profile(url: str, access_token: str) -> dict[str, Any]:
 
 def _finish_login(db: Session, profile: dict[str, Any], state_data: dict[str, Any]) -> RedirectResponse:
     """Crea/actualiza el usuario, genera la sesión y redirige al frontend."""
-    upsert_user(db, profile)
-    token = create_session_token(profile)
+    user = upsert_user(db, profile)
     return_url = allowed_return_url(state_data.get("return_to"))
+    if user.totp_enabled:
+        pending = twofa_serializer.dumps({"user": profile})
+        return RedirectResponse(f"{return_url}#pending2fa={pending}")
+    token = create_session_token(profile)
     return RedirectResponse(f"{return_url}#token={token}")
 
 
@@ -807,6 +818,7 @@ async def discord_callback(
         "display_name": raw.get("global_name") or raw.get("username"),
         "email": raw.get("email"),
         "avatar_url": build_avatar_url(raw),
+        "email_verified": bool(raw.get("verified")),
     }
     return _finish_login(db, profile, state_data)
 
@@ -839,7 +851,128 @@ def _email_profile(user: User) -> dict[str, Any]:
         "display_name": user.display_name,
         "email": user.email,
         "avatar_url": user.avatar_url,
+        "email_verified": bool(user.email_verified),
     }
+
+
+# --------------------------------------------------------------------------- #
+# Autenticación en dos pasos (TOTP) y verificación de correo
+# --------------------------------------------------------------------------- #
+
+
+def _generate_recovery_codes(count: int) -> list[str]:
+    """Genera códigos de respaldo de un solo uso (formato XXXXX-XXXXX)."""
+    codes: list[str] = []
+    for _ in range(max(1, count)):
+        raw = secrets.token_hex(5).upper()
+        codes.append(f"{raw[:5]}-{raw[5:]}")
+    return codes
+
+
+def _hash_recovery_codes(codes: list[str]) -> str:
+    """Serializa la lista de códigos hasheados para guardarla en la base."""
+    return json.dumps([hash_password(code) for code in codes])
+
+
+def _consume_recovery_code(user: User, code: str) -> bool:
+    """Verifica y consume un código de respaldo (de un solo uso)."""
+    if not user.recovery_codes:
+        return False
+    try:
+        hashes = json.loads(user.recovery_codes)
+    except (ValueError, TypeError):
+        return False
+    normalized = (code or "").strip().upper()
+    for index, stored in enumerate(hashes):
+        if verify_password(normalized, stored):
+            hashes.pop(index)
+            user.recovery_codes = json.dumps(hashes)
+            return True
+    return False
+
+
+def _qrcode_svg(data: str, size: int = 220) -> str:
+    """Genera un SVG con el código QR de `data` (sin dependencias de imagen)."""
+    try:
+        import qrcode
+    except ImportError:  # pragma: no cover - dependencia opcional
+        return ""
+    qr = qrcode.QRCode(border=2, box_size=1)
+    qr.add_data(data)
+    qr.make(fit=True)
+    matrix = qr.get_matrix()
+    modules = len(matrix)
+    cells: list[str] = []
+    for y, row in enumerate(matrix):
+        for x, value in enumerate(row):
+            if value:
+                cells.append(f"M{x} {y}h1v1H{x}z")
+    path = "".join(cells)
+    if not path:
+        return ""
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {modules} {modules}" '
+        f'width="{size}" height="{size}" shape-rendering="crispEdges">'
+        f'<rect width="{modules}" height="{modules}" fill="#ffffff"/>'
+        f'<path d="{path}" fill="#000000"/></svg>'
+    )
+
+
+def _totp_uri(secret: str, label: str) -> str:
+    """URI otpauth:// para añadir la cuenta a una app de autenticación."""
+    return pyotp.TOTP(secret).provisioning_uri(name=label, issuer_name=settings.totp_issuer)
+
+
+def _send_email(to: str, subject: str, html: str) -> bool:
+    """Envía un correo mediante Resend. Devuelve False si no está configurado."""
+    if not settings.resend_api_key or not to:
+        return False
+    try:
+        response = httpx.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {settings.resend_api_key}"},
+            json={
+                "from": settings.email_from,
+                "to": [to],
+                "subject": subject,
+                "html": html,
+            },
+            timeout=15,
+        )
+        return response.status_code < 300
+    except httpx.HTTPError:
+        return False
+
+
+def _send_verification_email(user: User) -> bool:
+    """Envía el correo de confirmación con un enlace firmado."""
+    if not user.email or user.email_verified:
+        return False
+    token = email_serializer.dumps({"uid": user.id, "email": user.email})
+    link = f"{settings.backend_url}/api/auth/email/verify?token={token}"
+    name = user.display_name or user.username or user.email
+    html = (
+        "<div style='font-family:sans-serif;max-width:520px;margin:auto'>"
+        "<h2>Confirma tu correo</h2>"
+        f"<p>Hola {name},</p>"
+        "<p>Confirma tu cuenta de Core IA pulsando el siguiente botón:</p>"
+        f"<p><a href='{link}' style='display:inline-block;padding:11px 20px;"
+        "background:#6366f1;color:#fff;border-radius:9px;text-decoration:none'>"
+        "Verificar mi correo</a></p>"
+        f"<p>O copia este enlace: <br><a href='{link}'>{link}</a></p>"
+        "<p style='color:#888;font-size:12px'>Si no creaste esta cuenta, ignora este mensaje.</p>"
+        "</div>"
+    )
+    return _send_email(user.email, "Confirma tu correo — Core IA", html)
+
+
+def _ensure_email_verified(user: User) -> None:
+    """Bloquea el uso de funciones si el correo es obligatorio y no está verificado."""
+    if settings.email_verification_required and not user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Confirma tu correo electrónico para continuar. Revisa tu bandeja de entrada.",
+        )
 
 
 @app.post("/api/auth/register", response_model=AuthTokenResponse)
@@ -869,25 +1002,220 @@ def email_register(
     db.refresh(user)
 
     profile = _email_profile(user)
+    _send_verification_email(user)
     return AuthTokenResponse(token=create_session_token(profile), user=profile)
 
 
-@app.post("/api/auth/login", response_model=AuthTokenResponse)
+@app.post("/api/auth/login")
 @limiter.limit(settings.rate_limit)
 def email_login(
     request: Request,
     payload: LoginRequest,
     db: Session = Depends(get_db),
-) -> AuthTokenResponse:
-    """Inicia sesión con correo y contraseña."""
+) -> dict[str, Any]:
+    """Inicia sesión con correo y contraseña; pide el código 2FA si está activo."""
     email = payload.email.strip().lower()
     user = db.query(User).filter(User.email == email).first()
     if user is None or not user.password_hash or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos.")
 
     _ensure_user_allowed(user)
+    if user.totp_enabled:
+        pending = twofa_serializer.dumps({"user": _email_profile(user)})
+        return {"requires_2fa": True, "pending_token": pending}
     profile = _email_profile(user)
-    return AuthTokenResponse(token=create_session_token(profile), user=profile)
+    return {"token": create_session_token(profile), "user": profile}
+
+
+# --------------------------------------------------------------------------- #
+# Autenticación en dos pasos (TOTP): configuración y verificación
+# --------------------------------------------------------------------------- #
+
+
+class TwoFACodeRequest(BaseModel):
+    code: str = Field(..., min_length=6, max_length=16)
+
+
+class TwoFADisableRequest(BaseModel):
+    code: str | None = Field(default=None, max_length=16)
+    password: str | None = Field(default=None, max_length=128)
+
+
+class TwoFAVerifyRequest(BaseModel):
+    pending_token: str = Field(..., max_length=4096)
+    code: str = Field(..., min_length=6, max_length=16)
+
+
+def _pending_profile(token: str) -> dict[str, Any]:
+    """Recupera el perfil de un token de verificación 2FA pendiente."""
+    try:
+        data = twofa_serializer.loads(token, max_age=300)
+    except SignatureExpired as exc:
+        raise HTTPException(status_code=401, detail="La verificación expiró. Inicia sesión de nuevo.") from exc
+    except BadSignature as exc:
+        raise HTTPException(status_code=401, detail="Solicitud de verificación inválida.") from exc
+    profile = data.get("user")
+    if not profile:
+        raise HTTPException(status_code=401, detail="Solicitud de verificación inválida.")
+    return profile
+
+
+@app.get("/api/auth/2fa/status")
+def twofa_status(
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Estado de la autenticación en dos pasos del usuario."""
+    user = upsert_user(db, profile)
+    try:
+        remaining = len(json.loads(user.recovery_codes or "[]"))
+    except (ValueError, TypeError):
+        remaining = 0
+    return {
+        "enabled": bool(user.totp_enabled),
+        "pending": bool(user.totp_secret and not user.totp_enabled),
+        "recovery_codes_remaining": remaining,
+    }
+
+
+@app.post("/api/auth/2fa/setup")
+def twofa_setup(
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Genera un secreto TOTP (aún no activado) y su código QR."""
+    user = upsert_user(db, profile)
+    if user.totp_enabled:
+        raise HTTPException(status_code=400, detail="La autenticación en dos pasos ya está activada.")
+    secret = pyotp.random_base32()
+    user.totp_secret = secret
+    db.commit()
+    label = user.email or user.username or f"usuario-{user.id}"
+    uri = _totp_uri(secret, label)
+    return {"secret": secret, "otpauth_uri": uri, "qr_svg": _qrcode_svg(uri)}
+
+
+@app.post("/api/auth/2fa/enable")
+def twofa_enable(
+    payload: TwoFACodeRequest,
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Activa la 2FA tras validar el código y devuelve los códigos de respaldo."""
+    user = upsert_user(db, profile)
+    if user.totp_enabled:
+        raise HTTPException(status_code=400, detail="La autenticación en dos pasos ya está activada.")
+    if not user.totp_secret:
+        raise HTTPException(status_code=400, detail="Primero inicia la configuración de la 2FA.")
+    if not pyotp.TOTP(user.totp_secret).verify(payload.code.strip(), valid_window=1):
+        raise HTTPException(status_code=400, detail="Código incorrecto. Inténtalo de nuevo.")
+
+    user.totp_enabled = True
+    codes = _generate_recovery_codes(settings.twofa_recovery_codes)
+    user.recovery_codes = _hash_recovery_codes(codes)
+    db.commit()
+    return {"enabled": True, "recovery_codes": codes}
+
+
+@app.post("/api/auth/2fa/disable")
+def twofa_disable(
+    payload: TwoFADisableRequest,
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Desactiva la 2FA validando un código TOTP, uno de respaldo o la contraseña."""
+    user = upsert_user(db, profile)
+    if not user.totp_enabled:
+        return {"enabled": False}
+
+    code = (payload.code or "").strip()
+    verified = False
+    if code and user.totp_secret and pyotp.TOTP(user.totp_secret).verify(code, valid_window=1):
+        verified = True
+    elif code and _consume_recovery_code(user, code):
+        verified = True
+    elif payload.password and user.password_hash and verify_password(
+        payload.password, user.password_hash
+    ):
+        verified = True
+
+    if not verified:
+        raise HTTPException(status_code=400, detail="Código o contraseña incorrectos.")
+
+    user.totp_enabled = False
+    user.totp_secret = None
+    user.recovery_codes = None
+    db.commit()
+    return {"enabled": False}
+
+
+@app.post("/api/auth/2fa/verify", response_model=AuthTokenResponse)
+@limiter.limit(settings.rate_limit)
+def twofa_verify(
+    request: Request,
+    payload: TwoFAVerifyRequest,
+    db: Session = Depends(get_db),
+) -> AuthTokenResponse:
+    """Completa el inicio de sesión validando el código 2FA pendiente."""
+    profile = _pending_profile(payload.pending_token)
+    user = upsert_user(db, profile)
+    _ensure_user_allowed(user)
+
+    if not user.totp_enabled or not user.totp_secret:
+        profile = dict(profile)
+        profile["is_admin"] = is_admin(profile)
+        return AuthTokenResponse(token=create_session_token(profile), user=profile)
+
+    code = payload.code.strip()
+    verified = pyotp.TOTP(user.totp_secret).verify(code, valid_window=1)
+    if not verified and _consume_recovery_code(user, code):
+        db.commit()
+        verified = True
+    if not verified:
+        raise HTTPException(status_code=400, detail="Código incorrecto.")
+
+    session_profile = dict(_email_profile(user)) if (profile.get("provider") == "email") else dict(profile)
+    session_profile["is_admin"] = is_admin(session_profile)
+    return AuthTokenResponse(token=create_session_token(session_profile), user=session_profile)
+
+
+# --------------------------------------------------------------------------- #
+# Verificación de correo
+# --------------------------------------------------------------------------- #
+
+
+@app.post("/api/auth/email/resend")
+@limiter.limit(settings.rate_limit)
+def email_resend(
+    request: Request,
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Reenvía el correo de confirmación al usuario autenticado."""
+    user = upsert_user(db, profile)
+    if user.email_verified:
+        return {"ok": True, "sent": False, "already_verified": True}
+    sent = _send_verification_email(user)
+    return {"ok": True, "sent": sent, "already_verified": False}
+
+
+@app.get("/api/auth/email/verify")
+def email_verify(token: str | None = None, db: Session = Depends(get_db)) -> RedirectResponse:
+    """Confirma el correo a partir del enlace firmado y vuelve al frontend."""
+    target = f"{settings.frontend_url}/"
+    if not token:
+        return RedirectResponse(f"{target}#email_verify_error=1")
+    try:
+        data = email_serializer.loads(token, max_age=settings.email_verification_max_age)
+    except (BadSignature, SignatureExpired):
+        return RedirectResponse(f"{target}#email_verify_error=1")
+
+    user = db.get(User, data.get("uid"))
+    if user is None or user.email != data.get("email"):
+        return RedirectResponse(f"{target}#email_verify_error=1")
+    user.email_verified = True
+    db.commit()
+    return RedirectResponse(f"{target}#email_verified=1")
 
 
 @app.get("/api/auth/me", response_model=UserResponse)
@@ -901,6 +1229,8 @@ def auth_me(
     profile["is_admin"] = is_admin(user)
     profile["is_banned"] = db_user.is_banned
     profile["is_active"] = db_user.is_active
+    profile["email_verified"] = bool(db_user.email_verified)
+    profile["totp_enabled"] = bool(db_user.totp_enabled)
     return UserResponse(user=profile)
 
 
@@ -938,6 +1268,7 @@ def chat(
         )
 
     user = upsert_user(db, profile)
+    _ensure_email_verified(user)
     user_settings = get_settings_row(db, user)
     check_quota(db, user, "message")
 
@@ -1019,6 +1350,7 @@ def generate_image(
         raise HTTPException(status_code=400, detail="El prompt no puede estar vacío.")
 
     user = upsert_user(db, profile)
+    _ensure_email_verified(user)
     check_quota(db, user, "image")
 
     try:
@@ -1383,6 +1715,8 @@ def _serialize_admin_user(db: Session, user: User) -> dict[str, Any]:
         "plan": user.plan,
         "is_active": user.is_active is not False,
         "is_banned": bool(user.is_banned),
+        "email_verified": bool(user.email_verified),
+        "totp_enabled": bool(user.totp_enabled),
         "created_at": user.created_at.isoformat() if user.created_at else None,
         "is_founder": user.discord_id in settings.founder_ids,
         "conversations": db.query(func.count(Conversation.id))

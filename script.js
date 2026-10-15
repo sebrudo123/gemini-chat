@@ -75,6 +75,28 @@ const noticeInput = document.getElementById("notice-input");
 const noticeLevel = document.getElementById("notice-level");
 const noticeCreate = document.getElementById("notice-create");
 
+const accountSummary = document.getElementById("account-summary");
+const emailStatusText = document.getElementById("email-status-text");
+const emailResend = document.getElementById("email-resend");
+const twofaStatusText = document.getElementById("twofa-status-text");
+const twofaStart = document.getElementById("twofa-start");
+const twofaDisable = document.getElementById("twofa-disable");
+const twofaSetup = document.getElementById("twofa-setup");
+const twofaQr = document.getElementById("twofa-qr");
+const twofaSecret = document.getElementById("twofa-secret");
+const twofaCode = document.getElementById("twofa-code");
+const twofaEnable = document.getElementById("twofa-enable");
+const twofaSetupError = document.getElementById("twofa-setup-error");
+const twofaRecovery = document.getElementById("twofa-recovery");
+const twofaRecoveryList = document.getElementById("twofa-recovery-list");
+const twofaModal = document.getElementById("twofa-modal");
+const twofaModalClose = document.getElementById("twofa-modal-close");
+const twofaModalSub = document.getElementById("twofa-modal-sub");
+const twofaLoginCode = document.getElementById("twofa-login-code");
+const twofaLoginError = document.getElementById("twofa-login-error");
+const twofaLoginSubmit = document.getElementById("twofa-login-submit");
+const twofaLoginRecovery = document.getElementById("twofa-login-recovery");
+
 let token = localStorage.getItem(TOKEN_KEY) || null;
 let currentUser = null;
 let conversations = [];
@@ -88,6 +110,8 @@ let usage = null;
 let catalog = null;
 let providers = null;
 let flags = { chat: true, image_generation: true, rag: true };
+let twofaState = { enabled: false, pending: false, recovery_codes_remaining: 0 };
+let pendingTwofaToken = null;
 
 const splashStart = performance.now();
 let splashHidden = false;
@@ -220,6 +244,12 @@ async function submitEmailAuth(event) {
     if (!res.ok) {
       throw new Error(data.detail || "No se pudo completar la operación.");
     }
+    if (data.requires_2fa && data.pending_token) {
+      authPasswordEl.value = "";
+      hideAuthGate();
+      openTwofaModal(data.pending_token);
+      return;
+    }
     token = data.token;
     localStorage.setItem(TOKEN_KEY, token);
     authPasswordEl.value = "";
@@ -250,6 +280,13 @@ function clearSession() {
 
 function captureTokenFromUrl() {
   const hash = window.location.hash || "";
+  const pending = hash.match(/pending2fa=([^&]+)/);
+  if (pending) {
+    history.replaceState(null, "", window.location.pathname + window.location.search);
+    showAuthGate();
+    openTwofaModal(decodeURIComponent(pending[1]));
+    return;
+  }
   const match = hash.match(/token=([^&]+)/);
   if (match) {
     token = decodeURIComponent(match[1]);
@@ -931,6 +968,18 @@ function renderError(message) {
   scrollToBottom();
 }
 
+function showToast(message) {
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.textContent = message;
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add("show"));
+  setTimeout(() => {
+    el.classList.remove("show");
+    setTimeout(() => el.remove(), 250);
+  }, 3400);
+}
+
 /* ------------------------------------------------------------------ */
 /* Composer / UI                                                       */
 /* ------------------------------------------------------------------ */
@@ -1209,7 +1258,11 @@ function openSettings() {
   settingsTheme.value = settings.theme || "dark";
   settingsModel.value = settings.preferred_model || "";
   settingsRag.checked = settings.use_rag !== false;
+  renderAccountSummary();
+  renderEmailStatus();
+  renderTwofaStatus();
   settingsModal.classList.add("show");
+  loadTwofaStatus();
 }
 
 function closeSettings() {
@@ -1240,13 +1293,250 @@ async function saveSettings() {
 }
 
 async function deleteAccount() {
-  if (!window.confirm("Esto borrará tu cuenta y todos tus datos. ¿Continuar?")) return;
+  if (!window.confirm("Esto borrará tu cuenta y todos los datos. ¿Continuar?")) return;
   try {
     await api("/api/account", { method: "DELETE" });
     closeSettings();
     clearSession();
   } catch (err) {
     renderError(err.message);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Seguridad: verificación de correo y 2FA                             */
+/* ------------------------------------------------------------------ */
+
+function accountFallbackAvatar() {
+  const fb = document.createElement("div");
+  fb.className = "fallback-avatar";
+  const label = currentUser.display_name || currentUser.username || "?";
+  fb.textContent = label.charAt(0).toUpperCase();
+  return fb;
+}
+
+function renderAccountSummary() {
+  if (!accountSummary || !currentUser) return;
+  accountSummary.innerHTML = "";
+  if (currentUser.avatar_url) {
+    const img = document.createElement("img");
+    img.src = currentUser.avatar_url;
+    img.alt = "";
+    img.addEventListener("error", () => img.replaceWith(accountFallbackAvatar()));
+    accountSummary.appendChild(img);
+  } else {
+    accountSummary.appendChild(accountFallbackAvatar());
+  }
+  const info = document.createElement("div");
+  const name = document.createElement("div");
+  name.className = "account-name";
+  name.textContent = currentUser.display_name || currentUser.username || "Usuario";
+  const mail = document.createElement("div");
+  mail.className = "account-mail";
+  mail.textContent = currentUser.email || "Sin correo asociado";
+  info.append(name, mail);
+  accountSummary.appendChild(info);
+}
+
+function renderEmailStatus() {
+  if (!emailStatusText || !currentUser) return;
+  const verified = currentUser.provider === "discord" || currentUser.email_verified === true;
+  if (verified) {
+    emailStatusText.textContent = currentUser.email
+      ? `${currentUser.email} · Verificado`
+      : "Correo verificado";
+    if (emailResend) emailResend.classList.add("hidden");
+    return;
+  }
+  emailStatusText.textContent = currentUser.email
+    ? `${currentUser.email} · Sin verificar`
+    : "Sin correo asociado";
+  if (emailResend) emailResend.classList.toggle("hidden", !currentUser.email);
+}
+
+function renderTwofaStatus() {
+  if (!twofaStatusText) return;
+  if (twofaState.enabled) {
+    const remaining = twofaState.recovery_codes_remaining || 0;
+    twofaStatusText.textContent = `Activada. Se pedirá un código al iniciar sesión (${remaining} códigos de respaldo).`;
+    if (twofaStart) twofaStart.classList.add("hidden");
+    if (twofaDisable) twofaDisable.classList.remove("hidden");
+  } else {
+    twofaStatusText.textContent = "Desactivada. Añade una capa extra de seguridad a tu cuenta.";
+    if (twofaStart) twofaStart.classList.remove("hidden");
+    if (twofaDisable) twofaDisable.classList.add("hidden");
+  }
+}
+
+async function loadTwofaStatus() {
+  if (!currentUser) return;
+  try {
+    twofaState = await api("/api/auth/2fa/status");
+  } catch (_) {
+    twofaState = { enabled: false, pending: false, recovery_codes_remaining: 0 };
+  }
+  renderTwofaStatus();
+}
+
+async function startTwofaSetup() {
+  if (!currentUser) return;
+  twofaStart.disabled = true;
+  try {
+    const data = await api("/api/auth/2fa/setup", { method: "POST" });
+    twofaQr.innerHTML = data.qr_svg || "";
+    twofaSecret.textContent = data.secret || "";
+    twofaCode.value = "";
+    twofaSetupError.textContent = "";
+    twofaRecovery.classList.add("hidden");
+    twofaSetup.classList.remove("hidden");
+    twofaCode.focus();
+  } catch (err) {
+    showToast(err.message);
+  } finally {
+    twofaStart.disabled = false;
+  }
+}
+
+function showRecoveryCodes(codes) {
+  twofaRecoveryList.innerHTML = "";
+  codes.forEach((code) => {
+    const li = document.createElement("li");
+    li.textContent = code;
+    twofaRecoveryList.appendChild(li);
+  });
+  twofaRecovery.classList.remove("hidden");
+}
+
+async function enableTwofa() {
+  const code = twofaCode.value.trim();
+  if (code.length < 6) {
+    twofaSetupError.textContent = "Introduce el código de 6 dígitos.";
+    return;
+  }
+  twofaEnable.disabled = true;
+  twofaEnable.textContent = "Verificando...";
+  try {
+    const data = await api("/api/auth/2fa/enable", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    });
+    const codes = data.recovery_codes || [];
+    twofaState = { enabled: true, pending: false, recovery_codes_remaining: codes.length };
+    renderTwofaStatus();
+    twofaSetup.classList.add("hidden");
+    showRecoveryCodes(codes);
+    showToast("Autenticación en dos pasos activada.");
+  } catch (err) {
+    twofaSetupError.textContent = err.message;
+  } finally {
+    twofaEnable.disabled = false;
+    twofaEnable.textContent = "Confirmar";
+  }
+}
+
+async function disableTwofa() {
+  const code = window.prompt(
+    "Introduce un código de tu app de autenticación (o un código de respaldo) para desactivar la 2FA:"
+  );
+  if (code === null) return;
+  try {
+    await api("/api/auth/2fa/disable", {
+      method: "POST",
+      body: JSON.stringify({ code: code.trim() }),
+    });
+    twofaState = { enabled: false, pending: false, recovery_codes_remaining: 0 };
+    renderTwofaStatus();
+    twofaSetup.classList.add("hidden");
+    twofaRecovery.classList.add("hidden");
+    showToast("Autenticación en dos pasos desactivada.");
+  } catch (err) {
+    showToast(err.message);
+  }
+}
+
+async function resendEmailVerification() {
+  if (!emailResend) return;
+  emailResend.disabled = true;
+  const previous = emailResend.textContent;
+  emailResend.textContent = "Enviando...";
+  try {
+    const data = await api("/api/auth/email/resend", { method: "POST" });
+    showToast(
+      data.sent
+        ? "Te enviamos un correo de confirmación. Revisa tu bandeja de entrada."
+        : "No se pudo enviar el correo (el servidor no tiene configurado el envío de correos)."
+    );
+  } catch (err) {
+    showToast(err.message);
+  } finally {
+    emailResend.disabled = false;
+    emailResend.textContent = previous;
+  }
+}
+
+function openTwofaModal(pendingToken) {
+  pendingTwofaToken = pendingToken;
+  twofaLoginCode.value = "";
+  twofaLoginCode.dataset.mode = "totp";
+  twofaLoginCode.maxLength = 6;
+  twofaLoginError.textContent = "";
+  twofaModalSub.textContent = "Introduce el código de 6 dígitos de tu app de autenticación.";
+  twofaModal.classList.add("show");
+  setTimeout(() => twofaLoginCode.focus(), 60);
+}
+
+function closeTwofaModal() {
+  twofaModal.classList.remove("show");
+  pendingTwofaToken = null;
+  showAuthGate();
+}
+
+function toggleTwofaRecoveryMode() {
+  const recovery = twofaLoginCode.dataset.mode !== "recovery";
+  twofaLoginCode.dataset.mode = recovery ? "recovery" : "totp";
+  twofaLoginCode.value = "";
+  twofaLoginError.textContent = "";
+  if (recovery) {
+    twofaLoginCode.maxLength = 11;
+    twofaModalSub.textContent = "Introduce uno de tus códigos de respaldo (formato XXXXX-XXXXX).";
+  } else {
+    twofaLoginCode.maxLength = 6;
+    twofaModalSub.textContent = "Introduce el código de 6 dígitos de tu app de autenticación.";
+  }
+  twofaLoginCode.focus();
+}
+
+async function submitTwofaCode() {
+  if (!pendingTwofaToken) {
+    closeTwofaModal();
+    return;
+  }
+  const code = twofaLoginCode.value.trim();
+  if (code.length < 6) {
+    twofaLoginError.textContent = "Escribe el código completo.";
+    return;
+  }
+  twofaLoginSubmit.disabled = true;
+  twofaLoginSubmit.textContent = "Verificando...";
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/auth/2fa/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pending_token: pendingTwofaToken, code }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || "No se pudo verificar el código.");
+    token = data.token;
+    localStorage.setItem(TOKEN_KEY, token);
+    pendingTwofaToken = null;
+    twofaModal.classList.remove("show");
+    hideAuthGate();
+    await loadSession();
+  } catch (err) {
+    twofaLoginError.textContent = err.message;
+  } finally {
+    twofaLoginSubmit.disabled = false;
+    twofaLoginSubmit.textContent = "Verificar";
   }
 }
 
@@ -1888,6 +2178,22 @@ document.getElementById("settings-notify").addEventListener("click", requestNoti
 settingsModal.addEventListener("click", (event) => {
   if (event.target === settingsModal) closeSettings();
 });
+emailResend.addEventListener("click", resendEmailVerification);
+twofaStart.addEventListener("click", startTwofaSetup);
+twofaDisable.addEventListener("click", disableTwofa);
+twofaEnable.addEventListener("click", enableTwofa);
+twofaCode.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") enableTwofa();
+});
+twofaModalClose.addEventListener("click", closeTwofaModal);
+twofaLoginSubmit.addEventListener("click", submitTwofaCode);
+twofaLoginRecovery.addEventListener("click", toggleTwofaRecoveryMode);
+twofaLoginCode.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") submitTwofaCode();
+});
+twofaModal.addEventListener("click", (event) => {
+  if (event.target === twofaModal) closeTwofaModal();
+});
 
 plansBtn.addEventListener("click", openPlans);
 plansClose.addEventListener("click", closePlans);
@@ -1940,7 +2246,15 @@ authSwitchBtn.addEventListener("click", () => {
   const params = new URLSearchParams(window.location.search);
   if (params.get("auth") === "error") {
     window.history.replaceState(null, "", window.location.pathname);
-    setTimeout(() => renderError("El inicio de sesión fue cancelado."), 300);
+    setTimeout(() => showToast("El inicio de sesión fue cancelado."), 300);
+  }
+  const hash = window.location.hash || "";
+  if (hash.includes("email_verified=1")) {
+    window.history.replaceState(null, "", window.location.pathname);
+    setTimeout(() => showToast("¡Correo confirmado! Gracias por verificar tu cuenta."), 600);
+  } else if (hash.includes("email_verify_error=1")) {
+    window.history.replaceState(null, "", window.location.pathname);
+    setTimeout(() => showToast("No pudimos verificar tu correo. El enlace pudo haber expirado."), 600);
   }
   applyTtsState();
   updateSendState();

@@ -12,3 +12,5 @@ slowapi
 sentry-sdk[fastapi]
 alembic
 prometheus-client
+pyotp
+qrcode

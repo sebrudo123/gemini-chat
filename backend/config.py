@@ -44,6 +44,21 @@ class Settings:
             if provider.strip()
         ]
 
+        # --- Correo transaccional (Resend) ---
+        self.resend_api_key = os.environ.get("RESEND_API_KEY", "")
+        self.email_from = os.environ.get("EMAIL_FROM", "Core IA <onboarding@resend.dev>")
+        self.email_verification_required = os.environ.get(
+            "EMAIL_VERIFICATION_REQUIRED", "false"
+        ).lower() in ("1", "true", "yes")
+        self.email_verification_max_age = int(
+            os.environ.get("EMAIL_VERIFICATION_MAX_AGE", str(60 * 60 * 24))
+        )
+
+        # --- Autenticación en dos pasos (TOTP) ---
+        self.totp_issuer = os.environ.get("TOTP_ISSUER", "Core IA")
+        self.require_2fa = os.environ.get("REQUIRE_2FA", "false").lower() in ("1", "true", "yes")
+        self.twofa_recovery_codes = int(os.environ.get("TWOFA_RECOVERY_CODES", "10"))
+
         # --- Administración ---
         self.founder_ids = [
             founder.strip()

@@ -1,0 +1,147 @@
+"""Pruebas de la verificación de correo y la autenticación en dos pasos (TOTP)."""
+
+import pyotp
+import pytest
+from fastapi.testclient import TestClient
+
+import main
+from main import app
+
+
+@pytest.fixture(scope="module")
+def client():
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+def _register(client, email: str, password: str = "supersecret") -> str:
+    response = client.post(
+        "/api/auth/register",
+        json={"email": email, "password": password, "name": "Seguridad"},
+    )
+    assert response.status_code == 200
+    return response.json()["token"]
+
+
+def _auth(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _enable_twofa(client, token: str) -> list[str]:
+    setup = client.post("/api/auth/2fa/setup", headers=_auth(token))
+    assert setup.status_code == 200
+    body = setup.json()
+    assert body["secret"]
+    assert body["otpauth_uri"].startswith("otpauth://totp/")
+
+    code = pyotp.TOTP(body["secret"]).now()
+    enable = client.post("/api/auth/2fa/enable", headers=_auth(token), json={"code": code})
+    assert enable.status_code == 200
+    assert enable.json()["enabled"] is True
+    codes = enable.json()["recovery_codes"]
+    assert len(codes) == 10
+    return codes
+
+
+def test_twofa_status_requires_auth(client):
+    assert client.get("/api/auth/2fa/status").status_code == 401
+
+
+def test_twofa_setup_enable_and_totp_login(client):
+    email = "twofa-flow@example.com"
+    token = _register(client, email)
+
+    setup = client.post("/api/auth/2fa/setup", headers=_auth(token)).json()
+    assert setup["secret"]
+    assert setup["otpauth_uri"].startswith("otpauth://totp/")
+    totp = pyotp.TOTP(setup["secret"])
+
+    enable = client.post(
+        "/api/auth/2fa/enable", headers=_auth(token), json={"code": totp.now()}
+    )
+    assert enable.status_code == 200
+    assert len(enable.json()["recovery_codes"]) == 10
+
+    status = client.get("/api/auth/2fa/status", headers=_auth(token)).json()
+    assert status["enabled"] is True
+    assert status["recovery_codes_remaining"] == 10
+
+    login = client.post("/api/auth/login", json={"email": email, "password": "supersecret"})
+    assert login.status_code == 200
+    assert login.json().get("requires_2fa") is True
+    assert "token" not in login.json()
+    pending = login.json()["pending_token"]
+
+    bad = client.post("/api/auth/2fa/verify", json={"pending_token": pending, "code": "000000"})
+    assert bad.status_code == 400
+
+    forged = client.post(
+        "/api/auth/2fa/verify", json={"pending_token": "no-es-un-token", "code": "123456"}
+    )
+    assert forged.status_code == 401
+
+    verify = client.post(
+        "/api/auth/2fa/verify", json={"pending_token": pending, "code": totp.now()}
+    )
+    assert verify.status_code == 200
+    assert verify.json()["token"]
+    assert verify.json()["user"]["email"] == email
+
+
+def test_twofa_recovery_code_consumed(client):
+    email = "twofa-recovery@example.com"
+    token = _register(client, email)
+    codes = _enable_twofa(client, token)
+
+    login = client.post("/api/auth/login", json={"email": email, "password": "supersecret"})
+    pending = login.json()["pending_token"]
+
+    verify = client.post(
+        "/api/auth/2fa/verify", json={"pending_token": pending, "code": codes[0]}
+    )
+    assert verify.status_code == 200
+    assert verify.json()["token"]
+
+    status = client.get("/api/auth/2fa/status", headers=_auth(token)).json()
+    assert status["recovery_codes_remaining"] == 9
+
+
+def test_twofa_disable_with_password(client):
+    email = "twofa-disable@example.com"
+    token = _register(client, email)
+    _enable_twofa(client, token)
+
+    disabled = client.post(
+        "/api/auth/2fa/disable",
+        headers=_auth(token),
+        json={"password": "supersecret"},
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["enabled"] is False
+
+    login = client.post("/api/auth/login", json={"email": email, "password": "supersecret"})
+    assert login.status_code == 200
+    assert login.json().get("token")
+
+
+def test_email_verification_flow(client):
+    email = "verifica-correo@example.com"
+    token = _register(client, email)
+    profile = main.serializer.loads(token)["user"]
+    assert profile["email_verified"] is False
+
+    verify_token = main.email_serializer.dumps({"uid": profile["id"], "email": email})
+    redirect = client.get(f"/api/auth/email/verify?token={verify_token}", follow_redirects=False)
+    assert redirect.status_code in (302, 307)
+    assert "email_verified=1" in redirect.headers["location"]
+
+    me = client.get("/api/auth/me", headers=_auth(token)).json()["user"]
+    assert me["email_verified"] is True
+
+
+def test_email_verification_rejects_bad_token(client):
+    redirect = client.get(
+        "/api/auth/email/verify?token=invalido", follow_redirects=False
+    )
+    assert redirect.status_code in (302, 307)
+    assert "email_verify_error=1" in redirect.headers["location"]

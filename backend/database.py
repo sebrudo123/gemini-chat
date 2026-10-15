@@ -72,6 +72,16 @@ def migrate_schema() -> None:
     if "is_banned" not in columns:
         statements.append("ALTER TABLE users ADD COLUMN is_banned BOOLEAN DEFAULT false")
         statements.append("UPDATE users SET is_banned = false WHERE is_banned IS NULL")
+    if "email_verified" not in columns:
+        statements.append("ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT false")
+        statements.append("UPDATE users SET email_verified = false WHERE email_verified IS NULL")
+    if "totp_secret" not in columns:
+        statements.append("ALTER TABLE users ADD COLUMN totp_secret VARCHAR(64)")
+    if "totp_enabled" not in columns:
+        statements.append("ALTER TABLE users ADD COLUMN totp_enabled BOOLEAN DEFAULT false")
+        statements.append("UPDATE users SET totp_enabled = false WHERE totp_enabled IS NULL")
+    if "recovery_codes" not in columns:
+        statements.append("ALTER TABLE users ADD COLUMN recovery_codes TEXT")
     if dialect == "postgresql" and not columns.get("discord_id", {}).get("nullable", True):
         statements.append("ALTER TABLE users ALTER COLUMN discord_id DROP NOT NULL")
 
