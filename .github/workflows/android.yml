@@ -22,6 +22,8 @@ jobs:
         working-directory: android
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-java@v4
         with:
@@ -92,17 +94,57 @@ jobs:
           path: android/coreia.apk
           if-no-files-found: error
 
+      - name: Generate changelog
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import subprocess
+
+          def run(*args):
+              return subprocess.run(args, capture_output=True, text=True).stdout.strip()
+
+          prev = run("git", "describe", "--tags", "--abbrev=0") or ""
+          rng = f"{prev}..HEAD" if prev else "HEAD"
+          commits = [c.strip() for c in run("git", "log", rng, "--pretty=format:%s").splitlines() if c.strip()]
+
+          novedades, correcciones, internos = [], [], []
+          for line in commits:
+              low = line.lower()
+              if low.startswith("feat"):
+                  novedades.append(line)
+              elif low.startswith("fix"):
+                  correcciones.append(line)
+              else:
+                  internos.append(line)
+
+          parts = [f"Nueva versión automática generada desde GitHub Actions.",
+                   f"VersionCode: {os.environ['VERSION_CODE']}",
+                   f"VersionName: 1.0.{os.environ['VERSION_CODE']}",
+                   "Descarga: coreia.apk"]
+          if novedades:
+              parts.append("## ✨ Novedades\n" + "\n".join(f"- {x}" for x in novedades))
+          if correcciones:
+              parts.append("## 🐛 Correcciones\n" + "\n".join(f"- {x}" for x in correcciones))
+          if internos:
+              parts.append("## 🔧 Interno y otros\n" + "\n".join(f"- {x}" for x in internos))
+          tag = f"v1.0.{os.environ['VERSION_CODE']}"
+          base = prev if prev else "main"
+          parts.append(f"**Full Changelog**: https://github.com/{os.environ['REPO']}/compare/{base}...{tag}")
+
+          with open("CHANGELOG_BODY.md", "w") as fh:
+              fh.write("\n\n".join(parts) + "\n")
+          PY
+
       - name: Publish APK to a Release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}
           name: Core IA v1.0.${{ github.run_number }}
-          body: |
-            Nueva versión automática generada desde GitHub Actions.
-            VersionCode: ${{ github.run_number }}
-            VersionName: 1.0.${{ github.run_number }}
-            Descarga: coreia.apk
+          body_path: android/CHANGELOG_BODY.md
           files: android/coreia.apk
           make_latest: true
-          generate_release_notes: true
