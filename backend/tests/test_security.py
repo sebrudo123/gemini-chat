@@ -147,10 +147,40 @@ def test_email_verification_rejects_bad_token(client):
     assert "email_verify_error=1" in redirect.headers["location"]
 
 
+def test_parse_from():
+    assert main._parse_from("Core IA <a@b.com>") == ("Core IA", "a@b.com")
+    assert main._parse_from("a@b.com") == ("Core IA", "a@b.com")
+
+
 def test_send_email_returns_false_without_transport(monkeypatch):
+    monkeypatch.setattr(main.settings, "brevo_api_key", "")
     monkeypatch.setattr(main.settings, "smtp_host", "")
     monkeypatch.setattr(main.settings, "resend_api_key", "")
     assert main._send_email("dest@example.com", "Asunto", "<b>hola</b>") is False
+
+
+def test_send_email_uses_brevo_when_configured(monkeypatch):
+    calls = {}
+
+    class FakeResponse:
+        status_code = 201
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls["url"] = url
+        calls["headers"] = headers
+        calls["json"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr(main.settings, "brevo_api_key", "brevo-key")
+    monkeypatch.setattr(main.settings, "email_from", "Core IA <yo@gmail.com>")
+    monkeypatch.setattr(main.httpx, "post", fake_post)
+
+    assert main._send_email("dest@example.com", "Verifica", "<b>hola</b>") is True
+    assert calls["url"] == "https://api.brevo.com/v3/smtp/email"
+    assert calls["headers"]["api-key"] == "brevo-key"
+    assert calls["json"]["sender"] == {"name": "Core IA", "email": "yo@gmail.com"}
+    assert calls["json"]["to"] == [{"email": "dest@example.com"}]
+    assert calls["json"]["htmlContent"] == "<b>hola</b>"
 
 
 def test_send_email_uses_smtp_when_configured(monkeypatch):

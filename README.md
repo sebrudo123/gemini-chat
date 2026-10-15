@@ -69,12 +69,13 @@ REDIS_URL=                # opcional (caché + rate limiting distribuido)
 SENTRY_DSN=               # opcional (observabilidad)
 ENVIRONMENT=production
 RATE_LIMIT=30/minute
-SMTP_HOST=                # opcional (recomendado): envío de correo por SMTP
-SMTP_PORT=587             # Gmail: smtp.gmail.com + 587 (STARTTLS)
-SMTP_USER=                # tu correo remitente (p. ej. tu@gmail.com)
-SMTP_PASSWORD=            # contraseña de aplicación (no la normal)
-RESEND_API_KEY=           # alternativa a SMTP (https://resend.com)
-EMAIL_FROM=Core IA <onboarding@resend.dev>   # con Gmail usa "Core IA <tu@gmail.com>"
+BREVO_API_KEY=            # recomendado: API HTTPS (https://app.brevo.com), sin dominio
+RESEND_API_KEY=           # alternativa (requiere dominio verificado)
+SMTP_HOST=                # solo si el host permite SMTP saliente (Render gratis lo bloquea)
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASSWORD=
+EMAIL_FROM=Core IA <tu@gmail.com>
 EMAIL_VERIFICATION_REQUIRED=false
 TOTP_ISSUER=Core IA
 ```
@@ -197,17 +198,18 @@ pruebas en cada push y pull request.
 ## Verificación de correo y 2FA
 
 - **Verificación de correo**: al registrarse con correo se envía un enlace firmado
-  por **SMTP** (p. ej. Gmail, sin dominio propio) o **Resend**, según cuál esté
+  por **Brevo**, **Resend** o **SMTP** (se prueban en ese orden), según cuál esté
   configurado, a `GET /api/auth/email/verify`. El estado se ve en *Ajustes → Correo* y
   puede reenviarse con `POST /api/auth/email/resend`. Si `EMAIL_VERIFICATION_REQUIRED=true`,
   los usuarios con correo sin verificar no podrán chatear. Las cuentas de Discord se
   consideran verificadas.
-  - **SMTP (recomendado si no tienes dominio)**: define `SMTP_HOST`, `SMTP_PORT`,
-    `SMTP_USER`, `SMTP_PASSWORD` y `EMAIL_FROM` igual al `SMTP_USER`. Para Gmail:
-    `smtp.gmail.com`, puerto `587` y una **contraseña de aplicación** (requiere 2FA
-    activado en tu cuenta de Google). Tiene prioridad sobre Resend.
-  - **Resend**: alternativa a SMTP. Para enviar a terceros necesita un **dominio
-    verificado**; con `onboarding@resend.dev` solo entrega a tu propio correo.
+  - **Brevo (recomendado sin dominio)**: define `BREVO_API_KEY` y `EMAIL_FROM` con el
+    remitente verificado. Usa su API HTTPS, así que funciona aunque el host bloquee
+    SMTP (como el plan gratis de Render). Brevo puede reescribir remitentes de correos
+    gratuitos (Gmail/Yahoo) a un dominio suyo por las reglas DMARC.
+  - **Resend**: alternativa; para enviar a terceros requiere un **dominio verificado**.
+  - **SMTP**: solo si el host **no** bloquea SMTP saliente (Gmail con contraseña de
+    aplicación). Render gratis lo bloquea.
 - **Autenticación en dos pasos (TOTP)**: activable desde *Ajustes → Seguridad*.
   - `POST /api/auth/2fa/setup`: genera el secreto y el código QR (SVG).
   - `POST /api/auth/2fa/enable`: valida el primer código y devuelve 10 códigos de

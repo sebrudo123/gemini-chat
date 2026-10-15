@@ -925,15 +925,52 @@ def _totp_uri(secret: str, label: str) -> str:
     return pyotp.TOTP(secret).provisioning_uri(name=label, issuer_name=settings.totp_issuer)
 
 
+def _parse_from(value: str) -> tuple[str, str]:
+    """Separa un remitente tipo 'Nombre <correo>' en (nombre, correo)."""
+    match = re.match(r"^\s*(?P<name>.*?)\s*<(?P<email>[^>]+)>\s*$", value or "")
+    if match:
+        return match.group("name").strip(), match.group("email").strip()
+    return "Core IA", (value or "").strip()
+
+
 def _send_email(to: str, subject: str, html: str) -> bool:
-    """Envía un correo por SMTP (Gmail, Brevo...) o Resend. False si no está configurado."""
+    """Envía un correo probando los transportes configurados (Brevo, Resend, SMTP)."""
     if not to:
         return False
-    if settings.smtp_host and settings.smtp_user and settings.smtp_password:
-        return _send_email_smtp(to, subject, html)
-    if settings.resend_api_key:
-        return _send_email_resend(to, subject, html)
+    if settings.brevo_api_key and _send_email_brevo(to, subject, html):
+        return True
+    if settings.resend_api_key and _send_email_resend(to, subject, html):
+        return True
+    if (
+        settings.smtp_host
+        and settings.smtp_user
+        and settings.smtp_password
+        and _send_email_smtp(to, subject, html)
+    ):
+        return True
     return False
+
+
+def _send_email_brevo(to: str, subject: str, html: str) -> bool:
+    """Envía el correo mediante la API HTTP de Brevo (funciona donde SMTP está bloqueado)."""
+    name, sender = _parse_from(settings.email_from)
+    if not sender:
+        return False
+    try:
+        response = httpx.post(
+            "https://api.brevo.com/v3/smtp/email",
+            headers={"api-key": settings.brevo_api_key, "accept": "application/json"},
+            json={
+                "sender": {"name": name, "email": sender},
+                "to": [{"email": to}],
+                "subject": subject,
+                "htmlContent": html,
+            },
+            timeout=15,
+        )
+        return response.status_code < 300
+    except httpx.HTTPError:
+        return False
 
 
 def _send_email_smtp(to: str, subject: str, html: str) -> bool:

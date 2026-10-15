@@ -44,7 +44,10 @@ class Settings:
             if provider.strip()
         ]
 
-        # --- Correo transaccional (Resend) ---
+        # --- Correo transaccional ---
+        # Brevo (API HTTPS; funciona en hosts que bloquean SMTP, como Render free).
+        self.brevo_api_key = os.environ.get("BREVO_API_KEY", "")
+        # Resend (API HTTPS; alternativa).
         self.resend_api_key = os.environ.get("RESEND_API_KEY", "")
         self.email_from = os.environ.get("EMAIL_FROM", "Core IA <onboarding@resend.dev>")
         self.email_verification_required = os.environ.get(
