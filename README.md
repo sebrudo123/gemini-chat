@@ -69,9 +69,11 @@ REDIS_URL=                # opcional (caché + rate limiting distribuido)
 SENTRY_DSN=               # opcional (observabilidad)
 ENVIRONMENT=production
 RATE_LIMIT=30/minute
-BREVO_API_KEY=            # recomendado: API HTTPS (https://app.brevo.com), sin dominio
-RESEND_API_KEY=           # alternativa (requiere dominio verificado)
-SMTP_HOST=                # solo si el host permite SMTP saliente (Render gratis lo bloquea)
+EMAIL_RELAY_URL=          # opción A) relevo HTTPS propio (Google Apps Script -> tu Gmail)
+EMAIL_RELAY_TOKEN=        # token compartido con el relevo
+BREVO_API_KEY=            # opción B) API HTTPS (https://app.brevo.com), sin dominio
+RESEND_API_KEY=           # opción C) alternativa (requiere dominio verificado)
+SMTP_HOST=                # opción D) solo si el host permite SMTP saliente (Render gratis lo bloquea)
 SMTP_PORT=587
 SMTP_USER=
 SMTP_PASSWORD=
@@ -198,15 +200,17 @@ pruebas en cada push y pull request.
 ## Verificación de correo y 2FA
 
 - **Verificación de correo**: al registrarse con correo se envía un enlace firmado
-  por **Brevo**, **Resend** o **SMTP** (se prueban en ese orden), según cuál esté
-  configurado, a `GET /api/auth/email/verify`. El estado se ve en *Ajustes → Correo* y
+  por **relevo HTTPS**, **Brevo**, **Resend** o **SMTP** (se prueban en ese orden), según
+  cuál esté configurado, a `GET /api/auth/email/verify`. El estado se ve en *Ajustes → Correo* y
   puede reenviarse con `POST /api/auth/email/resend`. Si `EMAIL_VERIFICATION_REQUIRED=true`,
   los usuarios con correo sin verificar no podrán chatear. Las cuentas de Discord se
   consideran verificadas.
-  - **Brevo (recomendado sin dominio)**: define `BREVO_API_KEY` y `EMAIL_FROM` con el
-    remitente verificado. Usa su API HTTPS, así que funciona aunque el host bloquee
-    SMTP (como el plan gratis de Render). Brevo puede reescribir remitentes de correos
-    gratuitos (Gmail/Yahoo) a un dominio suyo por las reglas DMARC.
+  - **Relevo HTTPS (recomendado sin dominio)**: define `EMAIL_RELAY_URL` (un Google
+    Apps Script publicado como *web app*) y `EMAIL_RELAY_TOKEN`. El script recibe
+    `{token, to, subject, html}` y envía con `MailApp.sendEmail` desde tu Gmail; así
+    funciona donde SMTP está bloqueado (como el plan gratis de Render). ~100 correos/día.
+  - **Brevo (sin dominio)**: define `BREVO_API_KEY`. Usa su API HTTPS. Brevo puede
+    reescribir remitentes de correos gratuitos (Gmail/Yahoo) a un dominio suyo por DMARC.
   - **Resend**: alternativa; para enviar a terceros requiere un **dominio verificado**.
   - **SMTP**: solo si el host **no** bloquea SMTP saliente (Gmail con contraseña de
     aplicación). Render gratis lo bloquea.

@@ -45,6 +45,9 @@ class Settings:
         ]
 
         # --- Correo transaccional ---
+        # Relevo HTTPS propio (p. ej. Google Apps Script que envía desde un Gmail).
+        self.email_relay_url = os.environ.get("EMAIL_RELAY_URL", "")
+        self.email_relay_token = os.environ.get("EMAIL_RELAY_TOKEN", "")
         # Brevo (API HTTPS; funciona en hosts que bloquean SMTP, como Render free).
         self.brevo_api_key = os.environ.get("BREVO_API_KEY", "")
         # Resend (API HTTPS; alternativa).

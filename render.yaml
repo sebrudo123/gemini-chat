@@ -37,6 +37,10 @@ services:
         value: discord
       - key: FOUNDER_DISCORD_IDS
         value: "1439761085040427100"
+      - key: EMAIL_RELAY_URL
+        sync: false
+      - key: EMAIL_RELAY_TOKEN
+        sync: false
       - key: BREVO_API_KEY
         sync: false
       - key: RESEND_API_KEY

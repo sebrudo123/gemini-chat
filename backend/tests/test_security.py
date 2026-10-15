@@ -153,9 +153,59 @@ def test_parse_from():
 
 
 def test_send_email_returns_false_without_transport(monkeypatch):
+    monkeypatch.setattr(main.settings, "email_relay_url", "")
     monkeypatch.setattr(main.settings, "brevo_api_key", "")
     monkeypatch.setattr(main.settings, "smtp_host", "")
     monkeypatch.setattr(main.settings, "resend_api_key", "")
+    assert main._send_email("dest@example.com", "Asunto", "<b>hola</b>") is False
+
+
+def test_send_email_uses_relay_when_configured(monkeypatch):
+    calls = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True}
+
+    def fake_post(url, json=None, follow_redirects=None, timeout=None):
+        calls["url"] = url
+        calls["json"] = json
+        calls["follow_redirects"] = follow_redirects
+        return FakeResponse()
+
+    monkeypatch.setattr(main.settings, "email_relay_url", "https://script.google.com/macros/s/x/exec")
+    monkeypatch.setattr(main.settings, "email_relay_token", "secreto")
+    monkeypatch.setattr(main.settings, "email_from", "Core IA <yo@gmail.com>")
+    monkeypatch.setattr(main.httpx, "post", fake_post)
+
+    assert main._send_email("dest@example.com", "Verifica", "<b>hola</b>") is True
+    assert calls["url"] == "https://script.google.com/macros/s/x/exec"
+    assert calls["json"]["token"] == "secreto"
+    assert calls["json"]["to"] == "dest@example.com"
+    assert calls["json"]["subject"] == "Verifica"
+    assert calls["json"]["html"] == "<b>hola</b>"
+    assert calls["json"]["replyTo"] == "yo@gmail.com"
+    assert calls["follow_redirects"] is True
+
+
+def test_send_email_relay_reports_failure(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": False}
+
+    monkeypatch.setattr(main.settings, "email_relay_url", "https://script.google.com/macros/s/x/exec")
+    monkeypatch.setattr(main.settings, "email_relay_token", "secreto")
+    monkeypatch.setattr(main.settings, "brevo_api_key", "")
+    monkeypatch.setattr(main.settings, "resend_api_key", "")
+    monkeypatch.setattr(main.settings, "smtp_host", "")
+    monkeypatch.setattr(main.httpx, "post", lambda *a, **k: FakeResponse())
+
     assert main._send_email("dest@example.com", "Asunto", "<b>hola</b>") is False
 
 
@@ -171,6 +221,7 @@ def test_send_email_uses_brevo_when_configured(monkeypatch):
         calls["json"] = json
         return FakeResponse()
 
+    monkeypatch.setattr(main.settings, "email_relay_url", "")
     monkeypatch.setattr(main.settings, "brevo_api_key", "brevo-key")
     monkeypatch.setattr(main.settings, "email_from", "Core IA <yo@gmail.com>")
     monkeypatch.setattr(main.httpx, "post", fake_post)

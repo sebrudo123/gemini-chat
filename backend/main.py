@@ -934,9 +934,11 @@ def _parse_from(value: str) -> tuple[str, str]:
 
 
 def _send_email(to: str, subject: str, html: str) -> bool:
-    """Envía un correo probando los transportes configurados (Brevo, Resend, SMTP)."""
+    """Envía un correo probando los transportes configurados (relevo, Brevo, Resend, SMTP)."""
     if not to:
         return False
+    if settings.email_relay_url and _send_email_relay(to, subject, html):
+        return True
     if settings.brevo_api_key and _send_email_brevo(to, subject, html):
         return True
     if settings.resend_api_key and _send_email_resend(to, subject, html):
@@ -949,6 +951,32 @@ def _send_email(to: str, subject: str, html: str) -> bool:
     ):
         return True
     return False
+
+
+def _send_email_relay(to: str, subject: str, html: str) -> bool:
+    """Envía el correo mediante un relevo HTTPS (p. ej. un Google Apps Script)."""
+    _, reply_to = _parse_from(settings.email_from)
+    try:
+        response = httpx.post(
+            settings.email_relay_url,
+            json={
+                "token": settings.email_relay_token,
+                "to": to,
+                "subject": subject,
+                "html": html,
+                "replyTo": reply_to,
+            },
+            follow_redirects=True,
+            timeout=30,
+        )
+        if response.status_code >= 300:
+            return False
+        try:
+            return bool(response.json().get("ok"))
+        except ValueError:
+            return True
+    except httpx.HTTPError:
+        return False
 
 
 def _send_email_brevo(to: str, subject: str, html: str) -> bool:
