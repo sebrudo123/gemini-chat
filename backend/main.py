@@ -317,8 +317,15 @@ def require_email_verified(
     profile: dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Exige que el usuario tenga el correo verificado cuando la plataforma lo requiere."""
+    """Exige que el usuario tenga el correo verificado cuando la plataforma lo requiere.
+
+    Los usuarios de Discord ya están verificados por OAuth y no tienen correo,
+    por lo que quedan exentos.
+    """
     if not settings.email_verification_required:
+        return profile
+    provider = (profile.get("provider") or "discord").lower()
+    if provider == "discord" or not profile.get("email"):
         return profile
     user = upsert_user(db, profile)
     if not user.email_verified:
@@ -1194,8 +1201,16 @@ def _send_verification_email(user: User) -> bool:
 
 
 def _ensure_email_verified(user: User) -> None:
-    """Bloquea el uso de funciones si el correo es obligatorio y no está verificado."""
-    if settings.email_verification_required and not user.email_verified:
+    """Bloquea el uso de funciones si el correo es obligatorio y no está verificado.
+
+    Los usuarios de Discord (sin correo propio) ya están verificados por OAuth,
+    por lo que quedan exentos.
+    """
+    if not settings.email_verification_required:
+        return
+    if not user.email:
+        return
+    if not user.email_verified:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Confirma tu correo electrónico para continuar. Revisa tu bandeja de entrada.",

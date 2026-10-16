@@ -19,6 +19,8 @@ os.environ["SENTRY_DSN"] = ""
 # Sin límites agresivos ni 2FA obligatorio en las pruebas.
 os.environ["AUTH_RATE_LIMIT"] = "1000/minute"
 os.environ["FOUNDER_2FA_REQUIRED"] = "false"
+# Verificación de correo obligatoria (los usuarios de Discord quedan exentos).
+os.environ["EMAIL_VERIFICATION_REQUIRED"] = "true"
 # Neutralizar transportes de correo para que las pruebas no hagan llamadas de red
 # (config.py llama a load_dotenv(), que no sobrescribe variables ya definidas).
 os.environ["EMAIL_RELAY_URL"] = ""

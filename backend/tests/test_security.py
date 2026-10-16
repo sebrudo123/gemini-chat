@@ -47,6 +47,13 @@ def test_twofa_status_requires_auth(client):
     assert client.get("/api/auth/2fa/status").status_code == 401
 
 
+def test_unverified_email_user_blocked_from_chat(client):
+    token = _register(client, "blocked-chat@example.com")
+    response = client.post("/api/chat", json={"message": "hola"}, headers=_auth(token))
+    assert response.status_code == 403
+    assert "verificar" in response.json()["detail"].lower()
+
+
 def test_twofa_setup_enable_and_totp_login(client):
     email = "twofa-flow@example.com"
     token = _register(client, email)
