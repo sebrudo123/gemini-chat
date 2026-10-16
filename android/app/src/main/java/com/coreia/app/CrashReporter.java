@@ -1,6 +1,7 @@
 package com.coreia.app;
 
 import android.app.ActivityManager;
+import android.app.ApplicationExitInfo;
 import android.content.Context;
 import android.os.Build;
 
@@ -59,13 +60,13 @@ public final class CrashReporter {
             try {
                 ActivityManager manager = context.getSystemService(ActivityManager.class);
                 if (manager != null) {
-                    List<ActivityManager.ApplicationExitInfo> infos =
+                    List<ApplicationExitInfo> infos =
                             manager.getHistoricalProcessExitReasons(context.getPackageName(), 0, 6);
-                    for (ActivityManager.ApplicationExitInfo info : infos) {
+                    for (ApplicationExitInfo info : infos) {
                         int reason = info.getReason();
-                        boolean interesting = reason == ActivityManager.ApplicationExitInfo.REASON_CRASH_NATIVE
-                                || reason == ActivityManager.ApplicationExitInfo.REASON_CRASH
-                                || reason == ActivityManager.ApplicationExitInfo.REASON_ANR;
+                        boolean interesting = reason == ApplicationExitInfo.REASON_CRASH_NATIVE
+                                || reason == ApplicationExitInfo.REASON_CRASH
+                                || reason == ApplicationExitInfo.REASON_ANR;
                         if (!interesting) {
                             continue;
                         }
@@ -108,11 +109,11 @@ public final class CrashReporter {
             return String.valueOf(reason);
         }
         switch (reason) {
-            case ActivityManager.ApplicationExitInfo.REASON_CRASH:
+            case ApplicationExitInfo.REASON_CRASH:
                 return "crash Java";
-            case ActivityManager.ApplicationExitInfo.REASON_CRASH_NATIVE:
+            case ApplicationExitInfo.REASON_CRASH_NATIVE:
                 return "crash nativo";
-            case ActivityManager.ApplicationExitInfo.REASON_ANR:
+            case ApplicationExitInfo.REASON_ANR:
                 return "ANR";
             default:
                 return String.valueOf(reason);
@@ -124,10 +125,37 @@ public final class CrashReporter {
         byte[] chunk = new byte[8192];
         int read;
         int total = 0;
-        while ((read = stream.read(chunk)) != -1 && total < 200000) {
+        while ((read = stream.read(chunk)) != -1 && total < 400000) {
             buffer.write(chunk, 0, read);
             total += read;
         }
-        return buffer.toString("UTF-8");
+        return sanitize(buffer.toByteArray());
+    }
+
+    /**
+     * Las trazas de caídas nativas llegan como protobuf binario. Aquí se
+     * conservan solo los tramos de texto legible para poder mostrarlos.
+     */
+    private static String sanitize(byte[] data) {
+        StringBuilder builder = new StringBuilder(data.length / 4);
+        boolean pendingSpace = false;
+        for (byte value : data) {
+            char character = (char) (value & 0xFF);
+            boolean printable = (character >= 32 && character < 127) || character == '\n' || character == '\t';
+            if (printable) {
+                if (pendingSpace) {
+                    builder.append(' ');
+                    pendingSpace = false;
+                }
+                builder.append(character);
+            } else {
+                pendingSpace = true;
+            }
+        }
+        String text = builder.toString().trim();
+        if (text.length() > 12000) {
+            text = text.substring(0, 12000) + "\n[...recortado...]";
+        }
+        return text;
     }
 }
