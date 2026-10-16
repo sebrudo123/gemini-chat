@@ -16,6 +16,7 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.webkit.WebViewAssetLoader;
+import android.webkit.JavascriptInterface;
 
 /**
  * Contenedor WebView de Core IA.
@@ -99,6 +100,7 @@ public class MainActivity extends AppCompatActivity {
                 request.grant(request.getResources());
             }
         });
+        webView.addJavascriptInterface(new DiscordBridge(), "DiscordRPC");
 
         if (savedInstanceState == null) {
             webView.loadUrl(LIVE_URL);
@@ -106,6 +108,7 @@ public class MainActivity extends AppCompatActivity {
             webView.restoreState(savedInstanceState);
         }
 
+        DiscordRpc.init(this);
         updateChecker = new UpdateChecker(this);
         updateChecker.checkForUpdate(true);
     }
@@ -114,6 +117,12 @@ public class MainActivity extends AppCompatActivity {
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
         webView.saveState(outState);
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        DiscordRpc.shutdown();
     }
 
     @Override
