@@ -1,6 +1,9 @@
 package com.coreia.app;
 
 import android.annotation.SuppressLint;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.graphics.Bitmap;
 import android.os.Build;
 import android.os.Bundle;
@@ -16,6 +19,7 @@ import android.webkit.WebViewClient;
 import android.webkit.JavascriptInterface;
 import android.widget.Toast;
 
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.webkit.WebViewAssetLoader;
@@ -63,6 +67,9 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        CrashReporter.install(this);
+        showLastCrashIfAny();
 
         assetLoader = new WebViewAssetLoader.Builder()
                 .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
@@ -177,6 +184,12 @@ public class MainActivity extends AppCompatActivity {
             return DiscordRpc.isAvailable();
         }
 
+        /** Indica si la presencia se apagó por un cierre anterior. */
+        @JavascriptInterface
+        public boolean autoDisabled() {
+            return DiscordRpc.isAutoDisabled();
+        }
+
         /** Estado legible de la presencia (para Ajustes). */
         @JavascriptInterface
         public String getStatus() {
@@ -195,6 +208,29 @@ public class MainActivity extends AppCompatActivity {
             DiscordRpc.shutdown();
             DiscordPresenceService.stop(MainActivity.this);
         }
+    }
+
+    private void showLastCrashIfAny() {
+        final String report = CrashReporter.lastReport(this);
+        if (report == null) {
+            return;
+        }
+        CrashReporter.clear(this);
+        // Evita que la presencia se active sola y vuelva a cerrar la app.
+        DiscordRpc.markAutoDisabled();
+        new AlertDialog.Builder(this)
+                .setTitle("Diagnóstico: la app se cerró")
+                .setMessage(report)
+                .setPositiveButton("Copiar", (dialog, which) -> {
+                    ClipboardManager clipboard =
+                            (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                    if (clipboard != null) {
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Core IA diagnóstico", report));
+                        Toast.makeText(this, "Diagnóstico copiado", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton("Cerrar", null)
+                .show();
     }
 
     private void requestNotificationPermission() {

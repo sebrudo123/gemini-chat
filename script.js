@@ -1421,7 +1421,14 @@ function saveDiscordRpcSettings() {
     if (settingsRpcFounderDetails.value.trim()) custom.founderDetails = settingsRpcFounderDetails.value.trim();
     if (settingsRpcFounderState.value.trim()) custom.founderState = settingsRpcFounderState.value.trim();
   }
-  window.coreiaPresence.setAppId(settingsDiscordAppId.value.trim());
+  const appIdValue = settingsDiscordAppId.value.trim();
+  const activeAppId =
+    window.coreiaPresence.appId && typeof window.coreiaPresence.appId === "function"
+      ? window.coreiaPresence.appId()
+      : "";
+  if (appIdValue !== activeAppId) {
+    window.coreiaPresence.setAppId(appIdValue);
+  }
   window.coreiaPresence.setCustom(Object.keys(custom).length ? custom : null);
 }
 
@@ -3129,11 +3136,11 @@ if (settingsRpcToggle) {
     if (typeof window.coreiaPresence.enabled === "function" && window.coreiaPresence.enabled()) {
       window.coreiaPresence.disable();
     } else {
-      if (settingsDiscordAppId && settingsDiscordAppId.value.trim()) {
-        window.coreiaPresence.setAppId(settingsDiscordAppId.value.trim());
-      } else {
-        window.coreiaPresence.enable();
+      const value = settingsDiscordAppId ? settingsDiscordAppId.value.trim() : "";
+      if (value) {
+        window.coreiaPresence.setAppId(value);
       }
+      window.coreiaPresence.enable();
     }
     renderDiscordRpcSettings();
   });

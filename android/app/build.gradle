@@ -84,5 +84,9 @@ dependencies {
     implementation "androidx.appcompat:appcompat:1.7.0"
     implementation "androidx.webkit:webkit:1.11.0"
     implementation "androidx.core:core:1.13.1"
+    // SDK oficial de Discord (Social SDK). `libwebrtc.jar` es obligatorio:
+    // la librería nativa registra sus clases (com.discord.org.webrtc.*) al
+    // cargarse y sin ellas el proceso se cae.
     implementation files("libs/discord_partner_sdk.jar")
+    implementation files("libs/libwebrtc.jar")
 }

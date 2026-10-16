@@ -2,6 +2,7 @@ package com.coreia.app;
 
 import android.app.Activity;
 import android.content.Context;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -23,35 +24,54 @@ public final class DiscordRpc {
     private static final long PUMP_INTERVAL_MS = 500L;
 
     private static boolean libraryLoaded = false;
+    private static boolean autoDisabled = false;
     private static boolean initialized = false;
     private static String currentAppId = null;
     private static String statusMessage = "sin inicializar";
     private static Handler pumpHandler;
     private static Runnable pumpRunnable;
 
-    static {
+    private DiscordRpc() {
+    }
+
+    /** Carga la librería nativa solo cuando se va a usar (nunca al abrir la app). */
+    private static synchronized boolean loadLibrary() {
+        if (libraryLoaded) {
+            return true;
+        }
         try {
             System.loadLibrary("coreia_rpc");
             libraryLoaded = true;
         } catch (Throwable error) {
             Log.w(TAG, "Librería nativa de Discord no disponible: " + error);
             libraryLoaded = false;
+            statusMessage = "SDK nativo no disponible";
         }
-    }
-
-    private DiscordRpc() {
-    }
-
-    /** Indica si la presencia puede usarse en este dispositivo/compilación. */
-    public static boolean isAvailable() {
         return libraryLoaded;
+    }
+
+    /** Indica si la presencia puede usarse en este dispositivo (según la ABI). */
+    public static boolean isAvailable() {
+        for (String abi : Build.SUPPORTED_ABIS) {
+            if ("arm64-v8a".equals(abi) || "armeabi-v7a".equals(abi)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Marca que el arranque anterior de la app terminó de forma inesperada. */
+    public static void markAutoDisabled() {
+        autoDisabled = true;
+    }
+
+    /** Indica si la presencia debe evitar activarse sola por un cierre anterior. */
+    public static boolean isAutoDisabled() {
+        return autoDisabled;
     }
 
     /** Estado legible para mostrar en Ajustes. */
     public static synchronized String getStatus() {
-        if (!libraryLoaded) {
-            return "no disponible";
-        }
         if (initialized) {
             try {
                 String nativeMessage = nativeStatus();
@@ -71,7 +91,7 @@ public final class DiscordRpc {
      * @return {@code true} si el RPC quedó operativo.
      */
     public static synchronized boolean init(Activity activity, String appId) {
-        if (!libraryLoaded) {
+        if (!loadLibrary()) {
             statusMessage = "SDK nativo no disponible";
             return false;
         }

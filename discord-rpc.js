@@ -65,7 +65,9 @@
   }
 
   function isEnabled() {
-    return storageGet(ENABLED_KEY) !== "0";
+    // La presencia se activa explícitamente desde Ajustes (o al pulsar
+    // «Activar presencia»). Así, si algo falla, la app siempre abre.
+    return storageGet(ENABLED_KEY) === "1";
   }
 
   function getAppId() {
@@ -120,12 +122,17 @@
     }
   }
 
-  function initRpc() {
-    if (!isEnabled()) {
+  function initRpc(force) {
+    if (!isEnabled() && !force) {
       return false;
     }
     var native = window.DiscordRPC;
     if (!native || typeof native.initRpc !== "function") {
+      return false;
+    }
+    if (!force && typeof native.autoDisabled === "function" && native.autoDisabled()) {
+      // Un arranque anterior terminó de forma inesperada: no reactivar solo.
+      storageSet(ENABLED_KEY, "0");
       return false;
     }
     var appId = getAppId();
@@ -186,9 +193,11 @@
     enable: function () {
       storageSet(ENABLED_KEY, "1");
       last = null;
-      var ok = initRpc();
+      var ok = initRpc(true);
       if (ok) {
         tick();
+      } else {
+        storageSet(ENABLED_KEY, "0");
       }
       refreshStatusUi();
       return ok;
@@ -207,11 +216,14 @@
     },
     setAppId: function (appId) {
       storageSet(APP_ID_KEY, String(appId || "").trim());
-      storageSet(ENABLED_KEY, "1");
       last = null;
-      var ok = initRpc();
-      if (ok) {
-        tick();
+      var ok = true;
+      // Cambiar el ID no altera si la presencia está activada o no.
+      if (isEnabled()) {
+        ok = initRpc(true);
+        if (ok) {
+          tick();
+        }
       }
       refreshStatusUi();
       return ok;
