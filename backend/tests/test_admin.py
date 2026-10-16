@@ -32,9 +32,13 @@ def auth(user_id: str, provider: str = "discord") -> dict[str, str]:
 def test_auth_me_reports_admin_flag(client):
     founder = client.get("/api/auth/me", headers=auth(FOUNDER_ID)).json()["user"]
     assert founder["is_admin"] is True
+    # El fundador también debe reportarse como fundador (lo usa la presencia en
+    # Discord para mostrar sus textos propios, no los de administrador).
+    assert founder["is_founder"] is True
 
     normal = client.get("/api/auth/me", headers=auth("800000000000000001")).json()["user"]
     assert normal["is_admin"] is False
+    assert normal["is_founder"] is False
 
 
 def test_founder_2fa_required_blocks_actions(client, monkeypatch):

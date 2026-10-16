@@ -336,15 +336,20 @@ def require_email_verified(
     return profile
 
 
+def is_founder(profile: dict[str, Any] | None) -> bool:
+    """Indica si el perfil pertenece al fundador (por su ID de Discord)."""
+    if not profile:
+        return False
+    provider = (profile.get("provider") or "discord").lower()
+    return provider == "discord" and str(profile.get("id")) in settings.founder_ids
+
+
 def is_admin(profile: dict[str, Any] | None) -> bool:
     """Indica si el perfil pertenece a un fundador/administrador.
 
     Los fundadores se identifican por su ID de Discord.
     """
-    if not profile:
-        return False
-    provider = (profile.get("provider") or "discord").lower()
-    return provider == "discord" and str(profile.get("id")) in settings.founder_ids
+    return is_founder(profile)
 
 
 def require_admin(profile: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
@@ -1411,6 +1416,7 @@ def twofa_verify(
     if not user.totp_enabled or not user.totp_secret:
         profile = dict(profile)
         profile["is_admin"] = is_admin(profile)
+        profile["is_founder"] = is_founder(profile)
         return AuthTokenResponse(token=create_session_token(profile, user.session_epoch), user=profile)
 
     code = payload.code.strip()
@@ -1423,6 +1429,7 @@ def twofa_verify(
 
     session_profile = dict(_email_profile(user)) if (profile.get("provider") == "email") else dict(profile)
     session_profile["is_admin"] = is_admin(session_profile)
+    session_profile["is_founder"] = is_founder(session_profile)
     return AuthTokenResponse(token=create_session_token(session_profile, user.session_epoch), user=session_profile)
 
 
@@ -1474,6 +1481,7 @@ def auth_me(
     db_user = upsert_user(db, user)
     profile = dict(user)
     profile["is_admin"] = is_admin(user)
+    profile["is_founder"] = is_founder(user)
     profile["is_banned"] = db_user.is_banned
     profile["is_active"] = db_user.is_active
     profile["email_verified"] = bool(db_user.email_verified)

@@ -93,16 +93,18 @@
     var isAdmin = !!user.is_admin;
     var isFounder = !!user.is_founder;
 
-    if (isAdmin) {
-      return {
-        details: custom.adminDetails || DEFAULT_PRESENCE.admin.details,
-        state: custom.adminState || DEFAULT_PRESENCE.admin.state,
-      };
-    }
+    // El fundador también cuenta como admin: se comprueba primero para que
+    // reciba sus textos propios.
     if (isFounder) {
       return {
         details: custom.founderDetails || DEFAULT_PRESENCE.founder.details,
         state: custom.founderState || DEFAULT_PRESENCE.founder.state,
+      };
+    }
+    if (isAdmin) {
+      return {
+        details: custom.adminDetails || DEFAULT_PRESENCE.admin.details,
+        state: custom.adminState || DEFAULT_PRESENCE.admin.state,
       };
     }
     return {
