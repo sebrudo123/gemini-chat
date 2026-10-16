@@ -19,7 +19,7 @@ class Settings:
     def __init__(self) -> None:
         # --- IA ---
         self.ai_api_key = os.environ.get("AI_API_KEY", "")
-        self.ai_model = os.environ.get("AI_MODEL", "gemini-3.8-flash")
+        self.ai_model = os.environ.get("AI_MODEL", "gemini-3.5-flash")
         self.ai_model_fallbacks = [
             model.strip()
             for model in os.environ.get("AI_MODEL_FALLBACKS", DEFAULT_FALLBACKS).split(",")
