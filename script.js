@@ -1363,16 +1363,26 @@ function isStaffUser() {
   return !!(currentUser && (currentUser.is_admin || currentUser.is_founder));
 }
 
+// Selecciona en un <select> el valor guardado; si no existe entre las opciones
+// (p. ej. un texto antiguo escrito a mano), deja la primera opción (la de por
+// defecto) para que nunca quede vacío.
+function setRpcOption(select, value) {
+  if (!select) return;
+  const wanted = String(value == null ? "" : value);
+  const has = Array.prototype.some.call(select.options, (option) => option.value === wanted);
+  select.value = has && wanted ? wanted : (select.options[0] ? select.options[0].value : "");
+}
+
 function renderDiscordRpcSettings() {
   if (!settingsRpcDetails) return;
   settingsRpcStaff.hidden = !isStaffUser();
   const custom = readRpcPresence();
-  settingsRpcDetails.value = custom.userDetails || "";
-  settingsRpcState.value = custom.userState || "";
-  settingsRpcAdminDetails.value = custom.adminDetails || "";
-  settingsRpcAdminState.value = custom.adminState || "";
-  settingsRpcFounderDetails.value = custom.founderDetails || "";
-  settingsRpcFounderState.value = custom.founderState || "";
+  setRpcOption(settingsRpcDetails, custom.userDetails);
+  setRpcOption(settingsRpcState, custom.userState);
+  setRpcOption(settingsRpcAdminDetails, custom.adminDetails);
+  setRpcOption(settingsRpcAdminState, custom.adminState);
+  setRpcOption(settingsRpcFounderDetails, custom.founderDetails);
+  setRpcOption(settingsRpcFounderState, custom.founderState);
 
   const enabled =
     window.coreiaPresence && typeof window.coreiaPresence.enabled === "function"

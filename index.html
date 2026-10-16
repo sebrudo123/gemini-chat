@@ -1671,29 +1671,64 @@
           </p>
           <label class="field">
             <span>Texto general (todos)</span>
-            <input type="text" id="settings-rpc-details" maxlength="128" placeholder="Usando Core IA" />
+            <select id="settings-rpc-details">
+              <option value="Usando Core IA">Usando Core IA</option>
+              <option value="Conversando con Core IA">Conversando con Core IA</option>
+              <option value="Chateando con Core IA">Chateando con Core IA</option>
+              <option value="Explorando Core IA">Explorando Core IA</option>
+              <option value="Preguntando a Core IA">Preguntando a Core IA</option>
+              <option value="Jugando con Core IA">Jugando con Core IA</option>
+            </select>
           </label>
           <label class="field">
             <span>Subtítulo general (todos)</span>
-            <input type="text" id="settings-rpc-state" maxlength="128" placeholder="Conversando" />
+            <select id="settings-rpc-state">
+              <option value="Conversando">Conversando</option>
+              <option value="En el chat">En el chat</option>
+              <option value="Haciendo preguntas">Haciendo preguntas</option>
+              <option value="Aprendiendo algo nuevo">Aprendiendo algo nuevo</option>
+              <option value="Explorando ideas">Explorando ideas</option>
+            </select>
           </label>
           <div id="settings-rpc-staff" hidden>
             <p class="settings-hint">Textos exclusivos para administradores y fundador.</p>
             <label class="field">
               <span>Texto de administrador</span>
-              <input type="text" id="settings-rpc-admin-details" maxlength="128" placeholder="Administrando Core IA" />
+              <select id="settings-rpc-admin-details">
+                <option value="Administrando Core IA">Administrando Core IA</option>
+                <option value="Gestionando Core IA">Gestionando Core IA</option>
+                <option value="Al mando de Core IA">Al mando de Core IA</option>
+                <option value="Supervisando Core IA">Supervisando Core IA</option>
+                <option value="Cuidando Core IA">Cuidando Core IA</option>
+              </select>
             </label>
             <label class="field">
               <span>Subtítulo de administrador</span>
-              <input type="text" id="settings-rpc-admin-state" maxlength="128" placeholder="En el panel de administración" />
+              <select id="settings-rpc-admin-state">
+                <option value="En el panel de administración">En el panel de administración</option>
+                <option value="Revisando usuarios">Revisando usuarios</option>
+                <option value="Ajustando la plataforma">Ajustando la plataforma</option>
+                <option value="Organizando todo">Organizando todo</option>
+              </select>
             </label>
             <label class="field">
               <span>Texto del fundador</span>
-              <input type="text" id="settings-rpc-founder-details" maxlength="128" placeholder="Modificando cosas en Core IA" />
+              <select id="settings-rpc-founder-details">
+                <option value="Modificando cosas en Core IA">Modificando cosas en Core IA</option>
+                <option value="Construyendo Core IA">Construyendo Core IA</option>
+                <option value="Creando Core IA">Creando Core IA</option>
+                <option value="Mejorando Core IA">Mejorando Core IA</option>
+                <option value="Dando forma a Core IA">Dando forma a Core IA</option>
+              </select>
             </label>
             <label class="field">
               <span>Subtítulo del fundador</span>
-              <input type="text" id="settings-rpc-founder-state" maxlength="128" placeholder="Fundador" />
+              <select id="settings-rpc-founder-state">
+                <option value="Fundador">Fundador</option>
+                <option value="Modo fundador">Modo fundador</option>
+                <option value="Al frente del proyecto">Al frente del proyecto</option>
+                <option value="Construyendo el futuro">Construyendo el futuro</option>
+              </select>
             </label>
           </div>
           <button class="admin-mini" id="settings-rpc-toggle" type="button">Desactivar presencia</button>
