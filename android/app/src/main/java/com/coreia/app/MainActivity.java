@@ -69,6 +69,21 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    /** URL de la web con la versión de la app: evita servir HTML/JS en caché. */
+    @SuppressWarnings("deprecation")
+    private String liveUrl() {
+        String version;
+        try {
+            version = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception error) {
+            version = "0";
+        }
+        if (version == null || version.isEmpty()) {
+            version = "0";
+        }
+        return LIVE_URL + "?v=" + version;
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -149,7 +164,7 @@ public class MainActivity extends AppCompatActivity {
         webViewRef = new WeakReference<>(webView);
 
         if (savedInstanceState == null) {
-            webView.loadUrl(LIVE_URL);
+            webView.loadUrl(liveUrl());
         } else {
             webView.restoreState(savedInstanceState);
         }

@@ -1,5 +1,5 @@
 /* Service worker de Core IA: shell offline ligero con actualización inmediata. */
-const CACHE = "coreia-shell-v2";
+const CACHE = "coreia-shell-v3";
 const ASSETS = [
   "./",
   "./index.html",
@@ -47,7 +47,9 @@ self.addEventListener("fetch", (event) => {
 
   if (isNetworkFirst(url)) {
     event.respondWith(
-      fetch(request)
+      // `no-store`: se pide siempre a la red sin caché HTTP intermedia, para
+      // que las actualizaciones de HTML/JS se apliquen al instante.
+      fetch(request, { cache: "no-store" })
         .then((response) => {
           if (response && response.status === 200 && response.type === "basic") {
             const copy = response.clone();
