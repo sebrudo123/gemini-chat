@@ -1646,6 +1646,44 @@
         </section>
 
         <section class="settings-section">
+          <h3>Discord</h3>
+          <p class="settings-hint" id="discord-rpc-status">
+            La presencia en Discord funciona en la app de Android con la aplicación de Discord instalada.
+          </p>
+          <label class="field">
+            <span>Application ID de Discord</span>
+            <input type="text" id="settings-discord-appid" inputmode="numeric" placeholder="123456789012345678" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Texto general (todos)</span>
+            <input type="text" id="settings-rpc-details" maxlength="128" placeholder="Usando Core IA" />
+          </label>
+          <label class="field">
+            <span>Subtítulo general (todos)</span>
+            <input type="text" id="settings-rpc-state" maxlength="128" placeholder="Conversando" />
+          </label>
+          <div id="settings-rpc-staff" hidden>
+            <p class="settings-hint">Textos exclusivos para administradores y fundador.</p>
+            <label class="field">
+              <span>Texto de administrador</span>
+              <input type="text" id="settings-rpc-admin-details" maxlength="128" placeholder="Administrando Core IA" />
+            </label>
+            <label class="field">
+              <span>Subtítulo de administrador</span>
+              <input type="text" id="settings-rpc-admin-state" maxlength="128" placeholder="En el panel de administración" />
+            </label>
+            <label class="field">
+              <span>Texto del fundador</span>
+              <input type="text" id="settings-rpc-founder-details" maxlength="128" placeholder="Modificando cosas en Core IA" />
+            </label>
+            <label class="field">
+              <span>Subtítulo del fundador</span>
+              <input type="text" id="settings-rpc-founder-state" maxlength="128" placeholder="Fundador" />
+            </label>
+          </div>
+        </section>
+
+        <section class="settings-section">
           <h3>Notificaciones</h3>
           <button class="admin-mini" id="settings-notify" type="button">Activar notificaciones de respuesta</button>
         </section>

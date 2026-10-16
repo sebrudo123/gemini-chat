@@ -78,6 +78,38 @@
     }
   }
 
+  function getAppId() {
+    try {
+      return localStorage.getItem("coreia_discord_app_id") || "";
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function initRpc() {
+    var native = window.DiscordRPC;
+    if (!native || typeof native.initRpc !== "function") {
+      return false;
+    }
+    var appId = getAppId();
+    if (!appId) {
+      return false;
+    }
+    try {
+      return !!native.initRpc(appId);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function isAvailable() {
+    try {
+      return !!(window.DiscordRPC && typeof window.DiscordRPC.isAvailable === "function" && window.DiscordRPC.isAvailable());
+    } catch (e) {
+      return false;
+    }
+  }
+
   function tick() {
     var next = buildPresence();
     if (!last || last.details !== next.details || last.state !== next.state) {
@@ -85,9 +117,33 @@
     }
   }
 
-  // Expone utilidades para que la UI de Ajustes pueda forzar una actualización.
+  // Expone utilidades para que la UI de Ajustes pueda controlar la presencia.
   window.coreiaPresence = {
     refresh: tick,
+    available: isAvailable,
+    appId: getAppId,
+    start: function () {
+      if (initRpc()) {
+        tick();
+        return true;
+      }
+      return false;
+    },
+    setAppId: function (appId) {
+      try {
+        if (appId) {
+          localStorage.setItem("coreia_discord_app_id", String(appId).trim());
+        } else {
+          localStorage.removeItem("coreia_discord_app_id");
+        }
+      } catch (e) {
+        /* ignorar */
+      }
+      last = null;
+      if (initRpc()) {
+        tick();
+      }
+    },
     setCustom: function (value) {
       try {
         if (value) {
@@ -103,5 +159,7 @@
   };
 
   setInterval(tick, 2000);
-  tick();
+  if (initRpc()) {
+    tick();
+  }
 })();

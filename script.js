@@ -55,6 +55,15 @@ const settingsModel = document.getElementById("settings-model");
 const settingsRag = document.getElementById("settings-rag");
 const settingsSave = document.getElementById("settings-save");
 const deleteAccountBtn = document.getElementById("delete-account");
+const settingsDiscordAppId = document.getElementById("settings-discord-appid");
+const settingsRpcDetails = document.getElementById("settings-rpc-details");
+const settingsRpcState = document.getElementById("settings-rpc-state");
+const settingsRpcStaff = document.getElementById("settings-rpc-staff");
+const settingsRpcAdminDetails = document.getElementById("settings-rpc-admin-details");
+const settingsRpcAdminState = document.getElementById("settings-rpc-admin-state");
+const settingsRpcFounderDetails = document.getElementById("settings-rpc-founder-details");
+const settingsRpcFounderState = document.getElementById("settings-rpc-founder-state");
+const discordRpcStatus = document.getElementById("discord-rpc-status");
 
 const plansModal = document.getElementById("plans-modal");
 const plansClose = document.getElementById("plans-close");
@@ -1338,6 +1347,62 @@ async function loadSettings() {
   } catch (_) { /* mantener valores por defecto */ }
 }
 
+/* Discord Rich Presence: la configuración de presencia vive en el dispositivo. */
+const RPC_PRESENCE_KEY = "coreia_rpc_presence";
+
+function readRpcPresence() {
+  try {
+    const raw = localStorage.getItem(RPC_PRESENCE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (err) {
+    return {};
+  }
+}
+
+function isStaffUser() {
+  return !!(currentUser && (currentUser.is_admin || currentUser.is_founder));
+}
+
+function renderDiscordRpcSettings() {
+  if (!settingsDiscordAppId) return;
+  settingsRpcStaff.hidden = !isStaffUser();
+  settingsDiscordAppId.value =
+    (window.coreiaPresence && window.coreiaPresence.appId && window.coreiaPresence.appId()) || "";
+  const custom = readRpcPresence();
+  settingsRpcDetails.value = custom.userDetails || "";
+  settingsRpcState.value = custom.userState || "";
+  settingsRpcAdminDetails.value = custom.adminDetails || "";
+  settingsRpcAdminState.value = custom.adminState || "";
+  settingsRpcFounderDetails.value = custom.founderDetails || "";
+  settingsRpcFounderState.value = custom.founderState || "";
+
+  if (discordRpcStatus) {
+    const available =
+      window.coreiaPresence && typeof window.coreiaPresence.available === "function"
+        ? window.coreiaPresence.available()
+        : false;
+    discordRpcStatus.textContent = available
+      ? "Discord disponible. Introduce tu Application ID y guarda para activar la presencia."
+      : "La presencia en Discord funciona en la app de Android con la aplicación de Discord instalada.";
+  }
+}
+
+function saveDiscordRpcSettings() {
+  if (!window.coreiaPresence) return;
+  const staff = isStaffUser();
+  const custom = {};
+  if (settingsRpcDetails.value.trim()) custom.userDetails = settingsRpcDetails.value.trim();
+  if (settingsRpcState.value.trim()) custom.userState = settingsRpcState.value.trim();
+  if (staff) {
+    if (settingsRpcAdminDetails.value.trim()) custom.adminDetails = settingsRpcAdminDetails.value.trim();
+    if (settingsRpcAdminState.value.trim()) custom.adminState = settingsRpcAdminState.value.trim();
+    if (settingsRpcFounderDetails.value.trim()) custom.founderDetails = settingsRpcFounderDetails.value.trim();
+    if (settingsRpcFounderState.value.trim()) custom.founderState = settingsRpcFounderState.value.trim();
+  }
+  window.coreiaPresence.setAppId(settingsDiscordAppId.value.trim());
+  window.coreiaPresence.setCustom(Object.keys(custom).length ? custom : null);
+}
+
 function openSettings() {
   if (!currentUser) {
     renderError("Inicia sesión para configurar tu cuenta.");
@@ -1349,6 +1414,7 @@ function openSettings() {
   renderAccountSummary();
   renderEmailStatus();
   renderTwofaStatus();
+  renderDiscordRpcSettings();
   settingsModal.classList.add("show");
   loadTwofaStatus();
 }
@@ -1371,6 +1437,7 @@ async function saveSettings() {
     });
     settings = data.settings;
     applyTheme(settings.theme);
+    saveDiscordRpcSettings();
     closeSettings();
   } catch (err) {
     renderError(err.message);
