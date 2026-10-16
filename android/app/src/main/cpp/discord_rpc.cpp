@@ -140,6 +140,8 @@ Java_com_coreia_app_DiscordRpc_nativeUpdate(JNIEnv* env, jclass /* clazz */, jst
 
         discordpp::Activity activity;
         activity.SetType(discordpp::ActivityTypes::Playing);
+        // Sin nombre, Discord muestra "Game" por defecto: se fija explícitamente.
+        activity.SetName("Core IA");
         if (!detail_text.empty()) {
             activity.SetDetails(detail_text);
         }
