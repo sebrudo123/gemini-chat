@@ -141,9 +141,6 @@
     .brand-logo {
       width: 30px; height: 30px;
       border-radius: 9px;
-      background: var(--grad);
-      display: grid; place-items: center;
-      font-size: 15px; color: #fff;
       flex-shrink: 0;
     }
 
@@ -905,13 +902,10 @@
     }
     .auth-logo {
       width: 76px; height: 76px;
-      border-radius: 50%;
-      background: var(--grad);
-      display: grid; place-items: center;
-      color: #fff; font-size: 34px;
+      border-radius: 20px;
       box-shadow: 0 12px 44px rgba(66, 133, 244, .45);
+      animation: splashPulse 3.4s ease-in-out infinite;
     }
-    .auth-logo span { display: inline-block; animation: spin 3.4s linear infinite; }
     .auth-card h1 { font-size: 26px; font-weight: 600; line-height: 1.25; }
     .auth-card h1 .grad {
       background: var(--grad);
@@ -1033,21 +1027,21 @@
 
     .splash-orb {
       position: relative;
-      width: 74px; height: 74px;
-      border-radius: 50%;
-      background: var(--grad);
+      width: 86px; height: 86px;
       display: grid; place-items: center;
-      color: #fff; font-size: 34px;
-      box-shadow: 0 12px 44px rgba(66, 133, 244, .45);
       animation: splashPulse 1.9s ease-in-out infinite;
     }
-    .splash-orb span { display: inline-block; animation: spin 3.4s linear infinite; }
+    .splash-orb img {
+      width: 86px; height: 86px;
+      border-radius: 22px;
+      box-shadow: 0 12px 44px rgba(66, 133, 244, .45);
+    }
     .splash-orb::before,
     .splash-orb::after {
       content: "";
       position: absolute;
       inset: 0;
-      border-radius: 50%;
+      border-radius: 22px;
       border: 2px solid var(--accent);
       animation: ripple 2.4s ease-out infinite;
     }
@@ -1439,7 +1433,7 @@
 <body>
   <div class="splash" id="splash">
     <div class="splash-inner">
-      <div class="splash-orb"><span>✦</span></div>
+      <div class="splash-orb"><img src="favicon.svg" alt="Core IA" width="86" height="86" /></div>
       <div class="splash-name">Core IA</div>
       <div class="splash-bar"><div class="splash-bar-fill"></div></div>
     </div>
@@ -1447,7 +1441,7 @@
 
   <div class="auth-gate" id="auth-gate">
     <div class="auth-card">
-      <div class="auth-logo"><span>✦</span></div>
+      <div class="auth-logo"><img src="favicon.svg" alt="Core IA" width="76" height="76" /></div>
       <h1>Bienvenido a <span class="grad">Core IA</span></h1>
       <p>Inicia sesión para empezar a chatear. Tus conversaciones y documentos se guardan de forma segura.</p>
       <div class="auth-providers" id="auth-providers"></div>
@@ -1477,7 +1471,7 @@
 
     <aside class="sidebar" id="sidebar">
       <div class="brand">
-        <span class="brand-logo">C</span>
+        <img class="brand-logo" src="favicon.svg" alt="Core IA" width="30" height="30" />
         <span>Core IA</span>
       </div>
 

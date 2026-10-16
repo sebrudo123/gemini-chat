@@ -8,6 +8,8 @@ on:
       - "index.html"
       - "script.js"
       - "discord-rpc.js"
+      - "sw.js"
+      - "favicon.svg"
       - "manifest.webmanifest"
       - ".github/workflows/android.yml"
   workflow_dispatch:
@@ -61,6 +63,8 @@ jobs:
           cp ../index.html app/src/main/assets/www/index.html
           cp ../script.js app/src/main/assets/www/script.js
           [ -f ../discord-rpc.js ] && cp ../discord-rpc.js app/src/main/assets/www/discord-rpc.js || true
+          [ -f ../favicon.svg ] && cp ../favicon.svg app/src/main/assets/www/favicon.svg || true
+          [ -f ../sw.js ] && cp ../sw.js app/src/main/assets/www/sw.js || true
           [ -f ../manifest.webmanifest ] && cp ../manifest.webmanifest app/src/main/assets/www/manifest.webmanifest || true
 
       - name: Decode signing keystore

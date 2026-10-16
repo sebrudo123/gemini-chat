@@ -284,14 +284,22 @@ así que se usa su API C++ desde un módulo nativo JNI
    - **Resto**: «Usando Core IA».
    Los textos de administrador/fundador solo se editan y se aplican a esos roles;
    los textos generales los puede personalizar cualquier usuario.
-4. Guarda los cambios. Si la app de Discord no está instalada, la presencia se
-   desactiva de forma silenciosa y el resto de la app sigue funcionando.
+4. Guarda los cambios. Mientras la presencia está activa, la app se mantiene en
+   segundo plano y aparece una notificación **«Mostrando en Discord»** con un
+   botón **Desactivar** que apaga la presencia al instante. Si la app de Discord
+   no está instalada, la presencia se desactiva de forma silenciosa y el resto
+   de la app sigue funcionando.
 
 Detalles técnicos:
 
 - `MainActivity` expone el puente `window.DiscordRPC` (`initRpc`, `isAvailable`,
-  `setPresence`, `stopRpc`) y `discord-rpc.js` calcula los textos.
+  `getStatus`, `setPresence`, `stopRpc`) y `discord-rpc.js` calcula los textos.
 - El módulo nativo llama a `discordpp::RunCallbacks()` cada 500 ms.
+- `DiscordPresenceService` (servicio en primer plano, tipo `dataSync`) mantiene
+  vivo el proceso y muestra la notificación; `DiscordPresenceReceiver` atiende el
+  botón «Desactivar».
+- El estado del RPC se muestra en *Ajustes → Discord* para diagnosticar
+  problemas (Application ID ausente, SDK no disponible, etc.).
 - El APK solo empaqueta ABIs ARM para reducir tamaño; en otras arquitecturas la
   librería no se carga y la función queda deshabilitada.
 

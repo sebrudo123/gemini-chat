@@ -23,6 +23,7 @@
   };
 
   var last = null;
+  var nativeDisabled = false;
 
   function getUser() {
     try {
@@ -102,6 +103,17 @@
     }
   }
 
+  function nativeStatus() {
+    try {
+      if (window.DiscordRPC && typeof window.DiscordRPC.getStatus === "function") {
+        return window.DiscordRPC.getStatus();
+      }
+    } catch (e) {
+      /* ignorar */
+    }
+    return "";
+  }
+
   function isAvailable() {
     try {
       return !!(window.DiscordRPC && typeof window.DiscordRPC.isAvailable === "function" && window.DiscordRPC.isAvailable());
@@ -122,7 +134,9 @@
     refresh: tick,
     available: isAvailable,
     appId: getAppId,
+    status: nativeStatus,
     start: function () {
+      nativeDisabled = false;
       if (initRpc()) {
         tick();
         return true;
@@ -139,9 +153,13 @@
       } catch (e) {
         /* ignorar */
       }
+      nativeDisabled = false;
       last = null;
       if (initRpc()) {
         tick();
+      }
+      if (typeof window.coreiaRefreshRpcStatus === "function") {
+        window.coreiaRefreshRpcStatus();
       }
     },
     setCustom: function (value) {
@@ -155,6 +173,17 @@
         /* ignorar */
       }
       tick();
+    },
+    /** Llamado desde Android cuando se pulsa «Desactivar» en la notificación. */
+    onNativeStopped: function () {
+      nativeDisabled = true;
+      last = null;
+      if (typeof window.coreiaRefreshRpcStatus === "function") {
+        window.coreiaRefreshRpcStatus();
+      }
+      if (typeof window.showToast === "function") {
+        window.showToast("Presencia en Discord desactivada.");
+      }
     },
   };
 

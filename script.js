@@ -1381,11 +1381,24 @@ function renderDiscordRpcSettings() {
       window.coreiaPresence && typeof window.coreiaPresence.available === "function"
         ? window.coreiaPresence.available()
         : false;
-    discordRpcStatus.textContent = available
-      ? "Discord disponible. Introduce tu Application ID y guarda para activar la presencia."
-      : "La presencia en Discord funciona en la app de Android con la aplicación de Discord instalada.";
+    if (!available) {
+      discordRpcStatus.textContent =
+        "La presencia en Discord funciona en la app de Android con la aplicación de Discord instalada.";
+    } else {
+      const status =
+        typeof window.coreiaPresence.status === "function" ? window.coreiaPresence.status() : "";
+      discordRpcStatus.textContent = settingsDiscordAppId.value
+        ? `Discord listo. Estado: ${status || "sin inicializar"}.`
+        : "Discord disponible. Introduce tu Application ID y guarda para activar la presencia.";
+    }
   }
 }
+
+window.coreiaRefreshRpcStatus = function () {
+  if (settingsModal && settingsModal.classList.contains("show")) {
+    renderDiscordRpcSettings();
+  }
+};
 
 function saveDiscordRpcSettings() {
   if (!window.coreiaPresence) return;

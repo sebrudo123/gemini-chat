@@ -2,6 +2,7 @@ package com.coreia.app;
 
 import android.annotation.SuppressLint;
 import android.graphics.Bitmap;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.KeyEvent;
 import android.webkit.PermissionRequest;
@@ -12,11 +13,14 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.webkit.JavascriptInterface;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
 import androidx.webkit.WebViewAssetLoader;
-import android.webkit.JavascriptInterface;
+
+import java.lang.ref.WeakReference;
 
 /**
  * Contenedor WebView de Core IA.
@@ -34,6 +38,25 @@ public class MainActivity extends AppCompatActivity {
     private WebViewAssetLoader assetLoader;
     private boolean loadedFallback = false;
     private UpdateChecker updateChecker;
+
+    private static WeakReference<WebView> webViewRef = new WeakReference<>(null);
+
+    /** Avisa a la web de que la presencia se apagó desde la notificación. */
+    public static void notifyPresenceStopped() {
+        final WebView view = webViewRef.get();
+        if (view == null) {
+            return;
+        }
+        view.post(() -> {
+            try {
+                view.evaluateJavascript(
+                        "window.coreiaPresence && window.coreiaPresence.onNativeStopped && window.coreiaPresence.onNativeStopped();",
+                        null);
+            } catch (Throwable ignored) {
+                // sin web cargada: ignorar
+            }
+        });
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -101,6 +124,7 @@ public class MainActivity extends AppCompatActivity {
             }
         });
         webView.addJavascriptInterface(new DiscordBridge(), "DiscordRPC");
+        webViewRef = new WeakReference<>(webView);
 
         if (savedInstanceState == null) {
             webView.loadUrl(LIVE_URL);
@@ -122,6 +146,8 @@ public class MainActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         DiscordRpc.shutdown();
+        DiscordPresenceService.stop(this);
+        webViewRef = new WeakReference<>(null);
     }
 
     @Override
@@ -138,7 +164,11 @@ public class MainActivity extends AppCompatActivity {
         /** Inicializa el RPC con el Application ID de Discord. */
         @JavascriptInterface
         public boolean initRpc(String appId) {
-            return DiscordRpc.init(MainActivity.this, appId);
+            boolean ok = DiscordRpc.init(MainActivity.this, appId);
+            if (ok) {
+                requestNotificationPermission();
+            }
+            return ok;
         }
 
         /** Indica si el SDK de Discord está disponible en esta compilación. */
@@ -147,16 +177,38 @@ public class MainActivity extends AppCompatActivity {
             return DiscordRpc.isAvailable();
         }
 
+        /** Estado legible de la presencia (para Ajustes). */
+        @JavascriptInterface
+        public String getStatus() {
+            return DiscordRpc.getStatus();
+        }
+
         /** Actualiza los textos de la presencia. */
         @JavascriptInterface
         public void setPresence(String details, String state) {
             DiscordRpc.update(details, state);
         }
 
-        /** Detiene la presencia. */
+        /** Detiene la presencia y su notificación. */
         @JavascriptInterface
         public void stopRpc() {
             DiscordRpc.shutdown();
+            DiscordPresenceService.stop(MainActivity.this);
         }
+    }
+
+    private void requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return;
+        }
+        runOnUiThread(() -> {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(
+                        MainActivity.this,
+                        new String[] {android.Manifest.permission.POST_NOTIFICATIONS},
+                        9001);
+            }
+        });
     }
 }

@@ -1,6 +1,40 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108">
-  <rect width="108" height="108" rx="24" fill="#212121"/>
-  <path d="M54 24 L84 84 L24 84 Z" fill="#4285F4"/>
-  <path d="M54 38 L74 80 L34 80 Z" fill="#9B72CB"/>
-  <path d="M54 52 L64 76 L44 76 Z" fill="#ffffff"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108" role="img" aria-label="Core IA">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a1d24"/>
+      <stop offset="1" stop-color="#07080b"/>
+    </linearGradient>
+    <linearGradient id="hex" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.45" stop-color="#c9d2df"/>
+      <stop offset="1" stop-color="#7d889b"/>
+    </linearGradient>
+    <linearGradient id="ia" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#66b4ff"/>
+      <stop offset="0.55" stop-color="#2b7bff"/>
+      <stop offset="1" stop-color="#1143d6"/>
+    </linearGradient>
+    <filter id="glow" x="-45%" y="-45%" width="190%" height="190%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="108" height="108" rx="24" fill="url(#bg)"/>
+
+  <!-- Resplandor azul del hexágono -->
+  <g filter="url(#glow)" opacity="0.85">
+    <path d="M24.56 71 L54 88 L83.44 71" fill="none" stroke="#2b7bff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Hexágono metálico -->
+  <path d="M54 20 L83.44 37 L83.44 71 L54 88 L24.56 71 L24.56 37 Z"
+        fill="none" stroke="url(#hex)" stroke-width="6" stroke-linejoin="round"/>
+
+  <!-- Monograma IA -->
+  <path d="M45 38 L53 38 L47.2 70 L39.2 70 Z" fill="url(#ia)"/>
+  <path d="M70 38 L72.2 70 L56.2 70 Z M69 50.5 L67.6 66 L61.6 66 Z" fill="url(#ia)" fill-rule="evenodd"/>
 </svg>
