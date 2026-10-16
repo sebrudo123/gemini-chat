@@ -16,6 +16,12 @@
 (function () {
   "use strict";
 
+  // Application ID de la app de Discord de Core IA (se puede cambiar en Ajustes).
+  var DEFAULT_APP_ID = "1532950355955028110";
+  var ENABLED_KEY = "coreia_discord_rpc_enabled";
+  var APP_ID_KEY = "coreia_discord_app_id";
+  var PRESENCE_KEY = "coreia_rpc_presence";
+
   var DEFAULT_PRESENCE = {
     admin: { details: "Administrando Core IA", state: "En el panel de administración" },
     founder: { details: "Modificando cosas en Core IA", state: "Fundador" },
@@ -23,7 +29,30 @@
   };
 
   var last = null;
-  var nativeDisabled = false;
+
+  function storageGet(key) {
+    try {
+      return localStorage.getItem(key);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function storageSet(key, value) {
+    try {
+      localStorage.setItem(key, value);
+    } catch (e) {
+      /* ignorar */
+    }
+  }
+
+  function storageRemove(key) {
+    try {
+      localStorage.removeItem(key);
+    } catch (e) {
+      /* ignorar */
+    }
+  }
 
   function getUser() {
     try {
@@ -35,9 +64,21 @@
     }
   }
 
+  function isEnabled() {
+    return storageGet(ENABLED_KEY) !== "0";
+  }
+
+  function getAppId() {
+    var stored = storageGet(APP_ID_KEY);
+    if (stored === null) {
+      return DEFAULT_APP_ID;
+    }
+    return stored;
+  }
+
   function customPresence() {
     try {
-      var raw = localStorage.getItem("coreia_rpc_presence");
+      var raw = storageGet(PRESENCE_KEY);
       return raw ? JSON.parse(raw) : null;
     } catch (e) {
       return null;
@@ -79,15 +120,10 @@
     }
   }
 
-  function getAppId() {
-    try {
-      return localStorage.getItem("coreia_discord_app_id") || "";
-    } catch (e) {
-      return "";
-    }
-  }
-
   function initRpc() {
+    if (!isEnabled()) {
+      return false;
+    }
     var native = window.DiscordRPC;
     if (!native || typeof native.initRpc !== "function") {
       return false;
@@ -116,9 +152,19 @@
 
   function isAvailable() {
     try {
-      return !!(window.DiscordRPC && typeof window.DiscordRPC.isAvailable === "function" && window.DiscordRPC.isAvailable());
+      return !!(
+        window.DiscordRPC &&
+        typeof window.DiscordRPC.isAvailable === "function" &&
+        window.DiscordRPC.isAvailable()
+      );
     } catch (e) {
       return false;
+    }
+  }
+
+  function refreshStatusUi() {
+    if (typeof window.coreiaRefreshRpcStatus === "function") {
+      window.coreiaRefreshRpcStatus();
     }
   }
 
@@ -133,54 +179,56 @@
   window.coreiaPresence = {
     refresh: tick,
     available: isAvailable,
-    appId: getAppId,
     status: nativeStatus,
-    start: function () {
-      nativeDisabled = false;
-      if (initRpc()) {
+    enabled: isEnabled,
+    appId: getAppId,
+    defaultAppId: DEFAULT_APP_ID,
+    enable: function () {
+      storageSet(ENABLED_KEY, "1");
+      last = null;
+      var ok = initRpc();
+      if (ok) {
         tick();
-        return true;
       }
-      return false;
+      refreshStatusUi();
+      return ok;
+    },
+    disable: function () {
+      storageSet(ENABLED_KEY, "0");
+      last = null;
+      try {
+        if (window.DiscordRPC && typeof window.DiscordRPC.stopRpc === "function") {
+          window.DiscordRPC.stopRpc();
+        }
+      } catch (e) {
+        /* ignorar */
+      }
+      refreshStatusUi();
     },
     setAppId: function (appId) {
-      try {
-        if (appId) {
-          localStorage.setItem("coreia_discord_app_id", String(appId).trim());
-        } else {
-          localStorage.removeItem("coreia_discord_app_id");
-        }
-      } catch (e) {
-        /* ignorar */
-      }
-      nativeDisabled = false;
+      storageSet(APP_ID_KEY, String(appId || "").trim());
+      storageSet(ENABLED_KEY, "1");
       last = null;
-      if (initRpc()) {
+      var ok = initRpc();
+      if (ok) {
         tick();
       }
-      if (typeof window.coreiaRefreshRpcStatus === "function") {
-        window.coreiaRefreshRpcStatus();
-      }
+      refreshStatusUi();
+      return ok;
     },
     setCustom: function (value) {
-      try {
-        if (value) {
-          localStorage.setItem("coreia_rpc_presence", JSON.stringify(value));
-        } else {
-          localStorage.removeItem("coreia_rpc_presence");
-        }
-      } catch (e) {
-        /* ignorar */
+      if (value) {
+        storageSet(PRESENCE_KEY, JSON.stringify(value));
+      } else {
+        storageRemove(PRESENCE_KEY);
       }
       tick();
     },
-    /** Llamado desde Android cuando se pulsa «Desactivar» en la notificación. */
+    /** Llamado desde Android al pulsar «Desactivar» en la notificación. */
     onNativeStopped: function () {
-      nativeDisabled = true;
+      storageSet(ENABLED_KEY, "0");
       last = null;
-      if (typeof window.coreiaRefreshRpcStatus === "function") {
-        window.coreiaRefreshRpcStatus();
-      }
+      refreshStatusUi();
       if (typeof window.showToast === "function") {
         window.showToast("Presencia en Discord desactivada.");
       }

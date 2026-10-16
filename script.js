@@ -64,6 +64,7 @@ const settingsRpcAdminState = document.getElementById("settings-rpc-admin-state"
 const settingsRpcFounderDetails = document.getElementById("settings-rpc-founder-details");
 const settingsRpcFounderState = document.getElementById("settings-rpc-founder-state");
 const discordRpcStatus = document.getElementById("discord-rpc-status");
+const settingsRpcToggle = document.getElementById("settings-rpc-toggle");
 
 const plansModal = document.getElementById("plans-modal");
 const plansClose = document.getElementById("plans-close");
@@ -1376,6 +1377,14 @@ function renderDiscordRpcSettings() {
   settingsRpcFounderDetails.value = custom.founderDetails || "";
   settingsRpcFounderState.value = custom.founderState || "";
 
+  const enabled =
+    window.coreiaPresence && typeof window.coreiaPresence.enabled === "function"
+      ? window.coreiaPresence.enabled()
+      : false;
+  if (settingsRpcToggle) {
+    settingsRpcToggle.textContent = enabled ? "Desactivar presencia" : "Activar presencia";
+  }
+
   if (discordRpcStatus) {
     const available =
       window.coreiaPresence && typeof window.coreiaPresence.available === "function"
@@ -1384,12 +1393,12 @@ function renderDiscordRpcSettings() {
     if (!available) {
       discordRpcStatus.textContent =
         "La presencia en Discord funciona en la app de Android con la aplicación de Discord instalada.";
+    } else if (!enabled) {
+      discordRpcStatus.textContent = "Presencia desactivada.";
     } else {
       const status =
         typeof window.coreiaPresence.status === "function" ? window.coreiaPresence.status() : "";
-      discordRpcStatus.textContent = settingsDiscordAppId.value
-        ? `Discord listo. Estado: ${status || "sin inicializar"}.`
-        : "Discord disponible. Introduce tu Application ID y guarda para activar la presencia.";
+      discordRpcStatus.textContent = `Discord listo. Estado: ${status || "sin inicializar"}.`;
     }
   }
 }
@@ -3113,6 +3122,22 @@ settingsClose.addEventListener("click", closeSettings);
 settingsSave.addEventListener("click", saveSettings);
 deleteAccountBtn.addEventListener("click", deleteAccount);
 document.getElementById("settings-notify").addEventListener("click", requestNotifications);
+
+if (settingsRpcToggle) {
+  settingsRpcToggle.addEventListener("click", () => {
+    if (!window.coreiaPresence) return;
+    if (typeof window.coreiaPresence.enabled === "function" && window.coreiaPresence.enabled()) {
+      window.coreiaPresence.disable();
+    } else {
+      if (settingsDiscordAppId && settingsDiscordAppId.value.trim()) {
+        window.coreiaPresence.setAppId(settingsDiscordAppId.value.trim());
+      } else {
+        window.coreiaPresence.enable();
+      }
+    }
+    renderDiscordRpcSettings();
+  });
+}
 settingsModal.addEventListener("click", (event) => {
   if (event.target === settingsModal) closeSettings();
 });
