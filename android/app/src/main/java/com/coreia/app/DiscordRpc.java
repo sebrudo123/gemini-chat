@@ -54,9 +54,9 @@ public final class DiscordRpc {
         }
         if (initialized) {
             try {
-                String native = nativeStatus();
-                if (native != null && !native.isEmpty()) {
-                    return native;
+                String nativeMessage = nativeStatus();
+                if (nativeMessage != null && !nativeMessage.isEmpty()) {
+                    return nativeMessage;
                 }
             } catch (Throwable ignored) {
                 // usar el último estado conocido
