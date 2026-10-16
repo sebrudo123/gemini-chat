@@ -13,6 +13,10 @@
 #include <mutex>
 #include <string>
 
+// Las clases C++ del SDK (discordpp::Client/Activity) se generan en el propio
+// encabezado; hay que activar la implementación en una única unidad de
+// compilación y enlazar contra la API C exportada por libdiscord_partner_sdk.so.
+#define DISCORDPP_IMPLEMENTATION
 #include "discordpp.h"
 
 #define LOG_TAG "CoreIA.DiscordRpc"
@@ -61,6 +65,14 @@ Java_com_coreia_app_DiscordRpc_nativeInit(JNIEnv* env, jclass /* clazz */, jstri
     }
 
     try {
+        // Los callbacks del SDK se ejecutan directamente en el hilo que los
+        // dispare (no hay bucle de mensajes propio que sincronizar).
+        discordpp::SetSynchronizationContext([](std::function<void()> task) {
+            if (task) {
+                task();
+            }
+        });
+
         auto client = std::make_unique<discordpp::Client>();
         if (!*client) {
             LOGW("No se pudo crear discordpp::Client.");
