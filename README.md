@@ -266,3 +266,32 @@ pruebas en cada push y pull request.
 - El `access_token` de Discord nunca se expone al cliente.
 - La `state` de OAuth está firmada y expira en 10 minutos.
 - `state` incluye la URL de retorno validada contra `ALLOWED_ORIGINS` (multi-frontend).
+
+## Discord Rich Presence (app Android)
+
+La app de Android (`android/`) incluye presencia en Discord mediante el **SDK
+oficial de Discord** (Social SDK). La capa Java del SDK no expone la presencia,
+así que se usa su API C++ desde un módulo nativo JNI
+(`android/app/src/main/cpp/discord_rpc.cpp`) enlazado con
+`libdiscord_partner_sdk.so` (ABIs `arm64-v8a` y `armeabi-v7a`).
+
+1. En el [Portal de Desarrolladores de Discord](https://discord.com/developers/applications)
+   crea una aplicación y copia su **Application ID**.
+2. En la app, abre *Ajustes → Discord* e introduce el **Application ID**.
+3. La presencia se activa al guardar y se actualiza según el rol y la actividad:
+   - **Administrador**: «Administrando Core IA».
+   - **Fundador**: «Modificando cosas en Core IA».
+   - **Resto**: «Usando Core IA».
+   Los textos de administrador/fundador solo se editan y se aplican a esos roles;
+   los textos generales los puede personalizar cualquier usuario.
+4. Guarda los cambios. Si la app de Discord no está instalada, la presencia se
+   desactiva de forma silenciosa y el resto de la app sigue funcionando.
+
+Detalles técnicos:
+
+- `MainActivity` expone el puente `window.DiscordRPC` (`initRpc`, `isAvailable`,
+  `setPresence`, `stopRpc`) y `discord-rpc.js` calcula los textos.
+- El módulo nativo llama a `discordpp::RunCallbacks()` cada 500 ms.
+- El APK solo empaqueta ABIs ARM para reducir tamaño; en otras arquitecturas la
+  librería no se carga y la función queda deshabilitada.
+
