@@ -183,7 +183,6 @@ public class MainActivity extends AppCompatActivity {
 
     /** Puente para que la web controle la presencia en Discord. */
     public class DiscordBridge {
-        private boolean reportedPresenceCall = false;
 
         /** Inicializa el RPC con el Application ID de Discord. */
         @JavascriptInterface
@@ -216,10 +215,8 @@ public class MainActivity extends AppCompatActivity {
         /** Actualiza los textos de la presencia. */
         @JavascriptInterface
         public void setPresence(String details, String state) {
-            if (reportedPresenceCall) {
-                return;
-            }
-            reportedPresenceCall = true;
+            // Se permite actualizar siempre: al cambiar de opción en Ajustes la
+            // presencia debe reflejar la nueva selección (no solo la primera vez).
             Log.i("CoreIA", "setPresence desde la web: " + details + " / " + state);
             DiscordRpc.update(details, state);
         }
