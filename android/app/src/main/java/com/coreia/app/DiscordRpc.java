@@ -52,6 +52,16 @@ public final class DiscordRpc {
         if (!libraryLoaded) {
             return "no disponible";
         }
+        if (initialized) {
+            try {
+                String native = nativeStatus();
+                if (native != null && !native.isEmpty()) {
+                    return native;
+                }
+            } catch (Throwable ignored) {
+                // usar el último estado conocido
+            }
+        }
         return statusMessage;
     }
 
@@ -173,6 +183,8 @@ public final class DiscordRpc {
     private static native void nativeUpdate(String details, String state);
 
     private static native void nativeRunCallbacks();
+
+    private static native String nativeStatus();
 
     private static native void nativeShutdown();
 }

@@ -29,6 +29,9 @@ std::mutex g_mutex;
 std::unique_ptr<discordpp::Client> g_client;
 uint64_t g_application_id = 0;
 
+std::mutex g_status_mutex;
+std::string g_status = "sin iniciar";
+
 std::string to_utf8(JNIEnv* env, jstring value) {
     if (value == nullptr) {
         return std::string();
@@ -40,6 +43,16 @@ std::string to_utf8(JNIEnv* env, jstring value) {
     std::string result(chars);
     env->ReleaseStringUTFChars(value, chars);
     return result;
+}
+
+void set_status(const std::string& status) {
+    std::lock_guard<std::mutex> lock(g_status_mutex);
+    g_status = status;
+}
+
+std::string get_status() {
+    std::lock_guard<std::mutex> lock(g_status_mutex);
+    return g_status;
 }
 
 }  // namespace
@@ -57,10 +70,12 @@ Java_com_coreia_app_DiscordRpc_nativeInit(JNIEnv* env, jclass /* clazz */, jstri
         parsed = std::stoull(raw);
     } catch (...) {
         LOGW("Application ID inválido: '%s'", raw.c_str());
+        set_status("Application ID inválido");
         return JNI_FALSE;
     }
     if (parsed == 0) {
         LOGW("Application ID vacío; RPC deshabilitado.");
+        set_status("falta el Application ID");
         return JNI_FALSE;
     }
 
@@ -76,6 +91,7 @@ Java_com_coreia_app_DiscordRpc_nativeInit(JNIEnv* env, jclass /* clazz */, jstri
         auto client = std::make_unique<discordpp::Client>();
         if (!*client) {
             LOGW("No se pudo crear discordpp::Client.");
+            set_status("no se pudo crear el cliente del SDK");
             return JNI_FALSE;
         }
         client->SetApplicationId(parsed);
@@ -84,16 +100,28 @@ Java_com_coreia_app_DiscordRpc_nativeInit(JNIEnv* env, jclass /* clazz */, jstri
                     LOGI("Estado del cliente Discord: status=%d error=%d detalle=%d",
                          static_cast<int>(status), static_cast<int>(error), detail);
                 });
+
         g_application_id = parsed;
         g_client = std::move(client);
-        LOGI("Discord RPC inicializado (app=%llu)",
-             static_cast<unsigned long long>(parsed));
+        LOGI("Discord RPC inicializado (app=%llu)", static_cast<unsigned long long>(parsed));
+        set_status("iniciado; comprobando la app de Discord…");
+
+        // Diagnóstico: ¿está instalada la app de Discord?
+        g_client->IsDiscordAppInstalled([](bool installed) {
+            LOGI("¿App de Discord instalada? %s", installed ? "sí" : "no");
+            if (!installed) {
+                set_status("la app de Discord no está instalada");
+            }
+        });
+
         return JNI_TRUE;
     } catch (const std::exception& error) {
         LOGW("Excepción al inicializar el RPC: %s", error.what());
+        set_status(std::string("error: ") + error.what());
         return JNI_FALSE;
     } catch (...) {
         LOGW("Excepción desconocida al inicializar el RPC.");
+        set_status("error desconocido al iniciar");
         return JNI_FALSE;
     }
 }
@@ -120,15 +148,26 @@ Java_com_coreia_app_DiscordRpc_nativeUpdate(JNIEnv* env, jclass /* clazz */, jst
         }
 
         g_client->UpdateRichPresence(std::move(activity), [](discordpp::ClientResult result) {
-            if (!result.Successful()) {
+            if (result.Successful()) {
+                set_status("mostrando en Discord");
+            } else {
                 LOGW("No se pudo actualizar la presencia en Discord.");
+                set_status("no se pudo mostrar en Discord");
             }
         });
     } catch (const std::exception& error) {
         LOGW("Excepción al actualizar la presencia: %s", error.what());
+        set_status(std::string("error: ") + error.what());
     } catch (...) {
         LOGW("Excepción desconocida al actualizar la presencia.");
+        set_status("error desconocido al actualizar");
     }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_coreia_app_DiscordRpc_nativeStatus(JNIEnv* env, jclass /* clazz */) {
+    const std::string status = get_status();
+    return env->NewStringUTF(status.c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -141,5 +180,6 @@ Java_com_coreia_app_DiscordRpc_nativeShutdown(JNIEnv* /* env */, jclass /* clazz
     std::lock_guard<std::mutex> lock(g_mutex);
     g_client.reset();
     g_application_id = 0;
+    set_status("desactivado");
     LOGI("Discord RPC detenido.");
 }
