@@ -3173,3 +3173,61 @@ authSwitchBtn.addEventListener("click", () => {
 })();
 
 window.addEventListener("load", () => setTimeout(hideSplash, 15000));
+
+let swRegistration = null;
+function checkForUpdate() {
+  if (swRegistration && swRegistration.waiting) {
+    showUpdateBanner();
+    return;
+  }
+  if (swRegistration) {
+    swRegistration.update().catch(() => {});
+  }
+}
+
+function showUpdateBanner() {
+  let banner = document.getElementById("update-banner");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id = "update-banner";
+    banner.className = "update-banner";
+    banner.innerHTML = '<div class="update-content"><span>Nueva actualización disponible. Actualiza para tener la última versión.</span><button class="update-btn" type="button">Actualizar ahora</button></div>';
+    document.body.appendChild(banner);
+    const btn = banner.querySelector(".update-btn");
+    if (btn) {
+      btn.addEventListener("click", async () => {
+        if (swRegistration && swRegistration.waiting) {
+          swRegistration.waiting.postMessage({ type: "SKIP_WAITING" });
+        }
+        window.location.reload();
+      });
+    }
+  }
+  banner.classList.add("show");
+}
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", async () => {
+    try {
+      const reg = await navigator.serviceWorker.register("./sw.js");
+      swRegistration = reg;
+      reg.addEventListener("updatefound", () => {
+        const newWorker = reg.installing;
+        if (!newWorker) return;
+        newWorker.addEventListener("statechange", () => {
+          if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+            showUpdateBanner();
+          }
+        });
+      });
+    } catch (_) {}
+  });
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    window.location.reload();
+  });
+}
+window.addEventListener("focus", checkForUpdate);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") checkForUpdate();
+});
+
