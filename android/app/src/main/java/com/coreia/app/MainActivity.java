@@ -133,4 +133,12 @@ public class MainActivity extends AppCompatActivity {
         }
         return super.onKeyDown(keyCode, event);
     }
+
+    /** Puente para que la web actualice la presencia en Discord. */
+    public class DiscordBridge {
+        @JavascriptInterface
+        public void setPresence(String details, String state) {
+            DiscordRpc.update(details, state);
+        }
+    }
 }
