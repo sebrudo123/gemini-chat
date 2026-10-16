@@ -22,6 +22,12 @@ android {
                 arguments "-DANDROID_STL=c++_shared"
             }
         }
+
+        ndk {
+            // Solo arquitecturas ARM (cubren prácticamente todos los móviles).
+            // Reduce el tamaño del APK: el SDK de Discord aporta ~13 MB por ABI.
+            abiFilters "armeabi-v7a", "arm64-v8a"
+        }
     }
 
     signingConfigs {
