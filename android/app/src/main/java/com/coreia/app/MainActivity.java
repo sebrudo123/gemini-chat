@@ -4,9 +4,11 @@ import android.annotation.SuppressLint;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.KeyEvent;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
@@ -25,6 +27,8 @@ import androidx.core.app.ActivityCompat;
 import androidx.webkit.WebViewAssetLoader;
 
 import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Contenedor WebView de Core IA.
@@ -42,6 +46,9 @@ public class MainActivity extends AppCompatActivity {
     private WebViewAssetLoader assetLoader;
     private boolean loadedFallback = false;
     private UpdateChecker updateChecker;
+    private PermissionRequest pendingAudioRequest;
+
+    private static final int REQUEST_MIC = 9002;
 
     private static WeakReference<WebView> webViewRef = new WeakReference<>(null);
 
@@ -67,6 +74,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        Log.i("CoreIA", "onCreate: vista lista");
 
         CrashReporter.install(this);
         showLastCrashIfAny();
@@ -108,6 +116,13 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 super.onPageStarted(view, url, favicon);
+                Log.i("CoreIA", "onPageStarted " + url);
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                Log.i("CoreIA", "onPageFinished " + url);
             }
 
             @Override
@@ -127,7 +142,7 @@ public class MainActivity extends AppCompatActivity {
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onPermissionRequest(final PermissionRequest request) {
-                request.grant(request.getResources());
+                grantWebPermissions(request);
             }
         });
         webView.addJavascriptInterface(new DiscordBridge(), "DiscordRPC");
@@ -168,6 +183,8 @@ public class MainActivity extends AppCompatActivity {
 
     /** Puente para que la web controle la presencia en Discord. */
     public class DiscordBridge {
+        private boolean reportedPresenceCall = false;
+
         /** Inicializa el RPC con el Application ID de Discord. */
         @JavascriptInterface
         public boolean initRpc(String appId) {
@@ -199,6 +216,11 @@ public class MainActivity extends AppCompatActivity {
         /** Actualiza los textos de la presencia. */
         @JavascriptInterface
         public void setPresence(String details, String state) {
+            if (reportedPresenceCall) {
+                return;
+            }
+            reportedPresenceCall = true;
+            Log.i("CoreIA", "setPresence desde la web: " + details + " / " + state);
             DiscordRpc.update(details, state);
         }
 
@@ -211,16 +233,31 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showLastCrashIfAny() {
-        final String report = CrashReporter.lastReport(this);
-        if (report == null) {
+        // Leer el logcat y la traza puede tardar: nunca en el hilo principal.
+        new Thread(() -> {
+            final String report = CrashReporter.lastReport(this);
+            if (report == null) {
+                return;
+            }
+            CrashReporter.clear(this);
+            CrashReporter.saveReport(this, report);
+            // Evita que la presencia se active sola y vuelva a cerrar la app.
+            DiscordRpc.markAutoDisabled();
+            runOnUiThread(() -> showDiagnosticDialog(report));
+        }, "coreia-diagnostico").start();
+    }
+
+    private void showDiagnosticDialog(String report) {
+        if (isFinishing()) {
             return;
         }
-        CrashReporter.clear(this);
-        // Evita que la presencia se active sola y vuelva a cerrar la app.
-        DiscordRpc.markAutoDisabled();
+        String message = report;
+        if (message.length() > 12000) {
+            message = message.substring(0, 12000) + "\n[...recortado...]";
+        }
         new AlertDialog.Builder(this)
                 .setTitle("Diagnóstico: la app se cerró")
-                .setMessage(report)
+                .setMessage(message)
                 .setPositiveButton("Copiar", (dialog, which) -> {
                     ClipboardManager clipboard =
                             (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
@@ -233,13 +270,77 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
+    /**
+     * Concede a la web solo los permisos que la app tiene de verdad.
+     *
+     * Si la web pide el micrófono y la app aún no tiene el permiso del sistema,
+     * se solicita y se responde a la petición cuando el usuario conteste.
+     * Conceder el micrófono sin el permiso del sistema cierra WebView.
+     */
+    private void grantWebPermissions(final PermissionRequest request) {
+        try {
+            List<String> granted = new ArrayList<>();
+            boolean needsMic = false;
+            for (String resource : request.getResources()) {
+                if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)) {
+                    if (hasPermission(android.Manifest.permission.RECORD_AUDIO)) {
+                        granted.add(resource);
+                    } else {
+                        needsMic = true;
+                    }
+                } else if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)) {
+                    // La app no usa cámara.
+                } else {
+                    granted.add(resource);
+                }
+            }
+            if (needsMic) {
+                pendingAudioRequest = request;
+                ActivityCompat.requestPermissions(
+                        this, new String[] {android.Manifest.permission.RECORD_AUDIO}, REQUEST_MIC);
+            }
+            if (!granted.isEmpty()) {
+                request.grant(granted.toArray(new String[0]));
+            } else if (!needsMic) {
+                request.deny();
+            }
+        } catch (Throwable error) {
+            Log.w("CoreIA", "onPermissionRequest falló: " + error);
+        }
+    }
+
+    private boolean hasPermission(String permission) {
+        return checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQUEST_MIC) {
+            return;
+        }
+        PermissionRequest pending = pendingAudioRequest;
+        pendingAudioRequest = null;
+        if (pending == null) {
+            return;
+        }
+        try {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                pending.grant(new String[] {PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+            } else {
+                pending.deny();
+            }
+        } catch (Throwable error) {
+            Log.w("CoreIA", "respuesta al permiso de micrófono falló: " + error);
+        }
+    }
+
     private void requestNotificationPermission() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             return;
         }
         runOnUiThread(() -> {
-            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
-                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            if (!hasPermission(android.Manifest.permission.POST_NOTIFICATIONS)) {
                 ActivityCompat.requestPermissions(
                         MainActivity.this,
                         new String[] {android.Manifest.permission.POST_NOTIFICATIONS},

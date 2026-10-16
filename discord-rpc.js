@@ -112,6 +112,11 @@
   }
 
   function push(details, state) {
+    // Sin presencia activada no se llama al puente nativo: así la app no
+    // toca el SDK ni el puente de Java al abrirse.
+    if (!isEnabled()) {
+      return;
+    }
     try {
       if (window.DiscordRPC && typeof window.DiscordRPC.setPresence === "function") {
         window.DiscordRPC.setPresence(details, state);
