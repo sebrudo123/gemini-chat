@@ -7,6 +7,7 @@ on:
       - "android/**"
       - "index.html"
       - "script.js"
+      - "discord-rpc.js"
       - "manifest.webmanifest"
       - ".github/workflows/android.yml"
   workflow_dispatch:
@@ -29,6 +30,8 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+
+      - uses: android-actions/setup-android@v3
 
       - uses: gradle/actions/setup-gradle@v3
         with:
@@ -56,6 +59,7 @@ jobs:
           mkdir -p app/src/main/assets/www
           cp ../index.html app/src/main/assets/www/index.html
           cp ../script.js app/src/main/assets/www/script.js
+          [ -f ../discord-rpc.js ] && cp ../discord-rpc.js app/src/main/assets/www/discord-rpc.js || true
           [ -f ../manifest.webmanifest ] && cp ../manifest.webmanifest app/src/main/assets/www/manifest.webmanifest || true
 
       - name: Decode signing keystore

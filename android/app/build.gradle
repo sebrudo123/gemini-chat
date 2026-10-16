@@ -8,6 +8,7 @@ def hasKeystore = keystorePath != null && !keystorePath.trim().isEmpty() && file
 android {
     namespace "com.coreia.app"
     compileSdk 34
+    ndkVersion "26.1.10909125"
 
     defaultConfig {
         applicationId "com.coreia.app"
@@ -15,6 +16,12 @@ android {
         targetSdk 34
         versionCode System.getenv("VERSION_CODE") != null ? System.getenv("VERSION_CODE").toInteger() : 1
         versionName System.getenv("VERSION_NAME") != null ? System.getenv("VERSION_NAME") : "1.0.0"
+
+        externalNativeBuild {
+            cmake {
+                arguments "-DANDROID_STL=c++_shared"
+            }
+        }
     }
 
     signingConfigs {
@@ -42,6 +49,13 @@ android {
             minifyEnabled false
             shrinkResources false
             signingConfig hasKeystore ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.22.1"
         }
     }
 

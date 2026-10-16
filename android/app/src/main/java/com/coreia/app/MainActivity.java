@@ -108,7 +108,6 @@ public class MainActivity extends AppCompatActivity {
             webView.restoreState(savedInstanceState);
         }
 
-        DiscordRpc.init(this);
         updateChecker = new UpdateChecker(this);
         updateChecker.checkForUpdate(true);
     }
@@ -134,11 +133,30 @@ public class MainActivity extends AppCompatActivity {
         return super.onKeyDown(keyCode, event);
     }
 
-    /** Puente para que la web actualice la presencia en Discord. */
+    /** Puente para que la web controle la presencia en Discord. */
     public class DiscordBridge {
+        /** Inicializa el RPC con el Application ID de Discord. */
+        @JavascriptInterface
+        public boolean initRpc(String appId) {
+            return DiscordRpc.init(MainActivity.this, appId);
+        }
+
+        /** Indica si el SDK de Discord está disponible en esta compilación. */
+        @JavascriptInterface
+        public boolean isAvailable() {
+            return DiscordRpc.isAvailable();
+        }
+
+        /** Actualiza los textos de la presencia. */
         @JavascriptInterface
         public void setPresence(String details, String state) {
             DiscordRpc.update(details, state);
+        }
+
+        /** Detiene la presencia. */
+        @JavascriptInterface
+        public void stopRpc() {
+            DiscordRpc.shutdown();
         }
     }
 }
