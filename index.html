@@ -632,6 +632,31 @@
       transition: border-color .15s, box-shadow .15s;
     }
     .field select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    .field input[type="text"],
+    .field input[type="password"],
+    .field input[type="email"],
+    .field input:not([type]) {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 14px;
+      padding: 11px 13px;
+      outline: none;
+      -webkit-appearance: none;
+      appearance: none;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .field input[type="text"]::placeholder,
+    .field input[type="password"]::placeholder,
+    .field input[type="email"]::placeholder,
+    .field input:not([type])::placeholder { color: var(--faint); opacity: 1; }
+    .field input[type="text"]:focus,
+    .field input[type="password"]:focus,
+    .field input[type="email"]:focus,
+    .field input:not([type]):focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
     .field.checkbox {
       flex-direction: row;
       align-items: center;
@@ -1644,10 +1669,6 @@
           <p class="settings-hint" id="discord-rpc-status">
             La presencia en Discord funciona en la app de Android con la aplicación de Discord instalada.
           </p>
-          <label class="field">
-            <span>Application ID de Discord</span>
-            <input type="text" id="settings-discord-appid" inputmode="numeric" placeholder="123456789012345678" autocomplete="off" />
-          </label>
           <label class="field">
             <span>Texto general (todos)</span>
             <input type="text" id="settings-rpc-details" maxlength="128" placeholder="Usando Core IA" />

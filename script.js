@@ -55,7 +55,6 @@ const settingsModel = document.getElementById("settings-model");
 const settingsRag = document.getElementById("settings-rag");
 const settingsSave = document.getElementById("settings-save");
 const deleteAccountBtn = document.getElementById("delete-account");
-const settingsDiscordAppId = document.getElementById("settings-discord-appid");
 const settingsRpcDetails = document.getElementById("settings-rpc-details");
 const settingsRpcState = document.getElementById("settings-rpc-state");
 const settingsRpcStaff = document.getElementById("settings-rpc-staff");
@@ -1365,10 +1364,8 @@ function isStaffUser() {
 }
 
 function renderDiscordRpcSettings() {
-  if (!settingsDiscordAppId) return;
+  if (!settingsRpcDetails) return;
   settingsRpcStaff.hidden = !isStaffUser();
-  settingsDiscordAppId.value =
-    (window.coreiaPresence && window.coreiaPresence.appId && window.coreiaPresence.appId()) || "";
   const custom = readRpcPresence();
   settingsRpcDetails.value = custom.userDetails || "";
   settingsRpcState.value = custom.userState || "";
@@ -1420,14 +1417,6 @@ function saveDiscordRpcSettings() {
     if (settingsRpcAdminState.value.trim()) custom.adminState = settingsRpcAdminState.value.trim();
     if (settingsRpcFounderDetails.value.trim()) custom.founderDetails = settingsRpcFounderDetails.value.trim();
     if (settingsRpcFounderState.value.trim()) custom.founderState = settingsRpcFounderState.value.trim();
-  }
-  const appIdValue = settingsDiscordAppId.value.trim();
-  const activeAppId =
-    window.coreiaPresence.appId && typeof window.coreiaPresence.appId === "function"
-      ? window.coreiaPresence.appId()
-      : "";
-  if (appIdValue !== activeAppId) {
-    window.coreiaPresence.setAppId(appIdValue);
   }
   window.coreiaPresence.setCustom(Object.keys(custom).length ? custom : null);
 }
@@ -3136,10 +3125,6 @@ if (settingsRpcToggle) {
     if (typeof window.coreiaPresence.enabled === "function" && window.coreiaPresence.enabled()) {
       window.coreiaPresence.disable();
     } else {
-      const value = settingsDiscordAppId ? settingsDiscordAppId.value.trim() : "";
-      if (value) {
-        window.coreiaPresence.setAppId(value);
-      }
       window.coreiaPresence.enable();
     }
     renderDiscordRpcSettings();
