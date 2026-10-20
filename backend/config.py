@@ -51,6 +51,15 @@ class Settings:
         self.discord_client_secret = os.environ.get("DISCORD_CLIENT_SECRET", "")
         self.discord_redirect_uri = os.environ.get("DISCORD_REDIRECT_URI", "")
 
+        # --- Bot de Discord (opcional) ---
+        self.discord_bot_token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
+        self.discord_bot_guild_id = os.environ.get("DISCORD_BOT_GUILD_ID", "").strip()
+        self.discord_bot_channel_ids = [
+            item.strip()
+            for item in os.environ.get("DISCORD_BOT_CHANNEL_IDS", "").split(",")
+            if item.strip()
+        ]
+
         # --- Proveedores de login OAuth habilitados ---
         # El login por correo/contraseña está siempre disponible.
         self.auth_providers = [

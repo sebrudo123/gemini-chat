@@ -11,6 +11,7 @@ Características:
 Consulta el README para las variables de entorno.
 """
 
+import asyncio
 import base64
 import csv
 import hashlib
@@ -62,6 +63,7 @@ import plans
 import rag
 import llm
 import websearch
+import discord_bot
 from cache import is_enabled as cache_is_enabled
 from config import settings
 from database import SessionLocal, get_db, init_db
@@ -163,7 +165,24 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         seed_app_settings(db)
     finally:
         db.close()
-    yield
+
+    # Bot de Discord opcional: convive con la API en el mismo proceso.
+    bot_task = discord_bot.start_bot(
+        generate_reply,
+        COREIA_IDENTITY,
+        token=settings.discord_bot_token,
+        guild_id=settings.discord_bot_guild_id,
+        channel_ids=settings.discord_bot_channel_ids,
+    )
+    try:
+        yield
+    finally:
+        if bot_task is not None:
+            bot_task.cancel()
+            try:
+                await bot_task
+            except asyncio.CancelledError:
+                pass
 
 
 app = FastAPI(title="Core IA API", version="2.1.0", lifespan=lifespan)

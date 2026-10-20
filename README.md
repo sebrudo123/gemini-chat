@@ -78,6 +78,9 @@ SESSION_SECRET=...        # cadena aleatoria larga
 DISCORD_CLIENT_ID=...
 DISCORD_CLIENT_SECRET=...
 DISCORD_REDIRECT_URI=https://TU-BACKEND.onrender.com/api/auth/discord/callback
+DISCORD_BOT_TOKEN=        # opcional: activa los comandos /coreia en Discord
+DISCORD_BOT_GUILD_ID=     # opcional: ID del servidor para sync instantáneo
+DISCORD_BOT_CHANNEL_IDS=  # opcional: canales permitidos, separados por comas
 AUTH_PROVIDERS=discord
 FOUNDER_DISCORD_IDS=1439761085040427100   # IDs con acceso al panel de administración
 FOUNDER_2FA_REQUIRED=true                  # exige 2FA al fundador antes de usar el chat
@@ -307,6 +310,39 @@ pruebas en cada push y pull request.
 - El `access_token` de Discord nunca se expone al cliente.
 - La `state` de OAuth está firmada y expira en 10 minutos.
 - `state` incluye la URL de retorno validada contra `ALLOWED_ORIGINS` (multi-frontend).
+
+## Bot de Discord
+
+El backend puede hospedar un bot con comandos de barra en el mismo proceso
+FastAPI (no hace falta otro servicio). Solo se activa si defines
+`DISCORD_BOT_TOKEN`.
+
+### Crear el bot
+
+1. Entra en el [Portal de Desarrolladores de Discord](https://discord.com/developers/applications)
+   y crea una aplicación.
+2. Abre **Bot → Add Bot** y pulsa **Reset Token**. Copia el token: solo se
+   muestra una vez.
+3. Invita el bot con los scopes `bot` y `applications.commands`:
+   `https://discord.com/oauth2/authorize?client_id=TU_CLIENT_ID&scope=bot%20applications.commands&permissions=2048`
+   (permiso *Send Messages*; añade *Embed Links* si quieres vistas previas).
+4. En Render, añade `DISCORD_BOT_TOKEN` con ese token y redespliega. Opcional:
+   - `DISCORD_BOT_GUILD_ID`: ID de tu servidor para que los comandos aparezcan
+     al instante (sin él, Discord puede tardar hasta una hora en sincronizarlos).
+   - `DISCORD_BOT_CHANNEL_IDS`: lista de canales separados por comas donde puede
+     responder. Vacío = todos los canales.
+
+### Uso
+
+- `/coreia pregunta:...` responde en el canal con el mismo motor de Core IA,
+  búsqueda web automática y respaldo Gemini ante el límite gratuito.
+- `/coreia-reset` borra el historial reciente de ese canal (se guarda en memoria
+  y se pierde al reiniciar el backend).
+- Hay un enfriamiento de 4 segundos por usuario para evitar abusos.
+
+> En Render gratuito el servicio se suspende por inactividad y el bot se
+> desconecta hasta que alguien vuelve a abrir la web o lo despierta. Para que
+> esté siempre en línea necesitas un plan de pago o un ping externo al backend.
 
 ## Discord Rich Presence (app Android)
 
