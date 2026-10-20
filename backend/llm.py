@@ -34,8 +34,8 @@ DEFAULTS: dict[str, dict[str, str]] = {
     },
     "openrouter": {
         "base_url": "https://openrouter.ai/api/v1",
-        "model": "nvidia/nemotron-3-super-120b-a12b:free",
-        "vision_model": "nvidia/nemotron-3.5-super-vl:free",
+        "model": "minimax/minimax-m3.1-flash:free",
+        "vision_model": "minimax/minimax-m3.1-flash:free",
     },
     "cerebras": {
         "base_url": "https://api.cerebras.ai/v1",
@@ -60,6 +60,16 @@ DEFAULTS: dict[str, dict[str, str]] = {
 }
 
 
+def _provider_key(provider: str) -> str:
+    """Clave específica de cada proveedor (si no se usó LLM_API_KEY)."""
+    return {
+        "groq": settings.groq_api_key,
+        "openrouter": settings.openrouter_api_key,
+        "cerebras": settings.cerebras_api_key,
+        "cloudflare": settings.cloudflare_api_token,
+    }.get(provider, "")
+
+
 def resolve() -> dict[str, Any] | None:
     """Configuración del motor propio, o `None` para usar Gemini."""
     provider = (settings.llm_provider or "auto").lower()
@@ -78,6 +88,8 @@ def resolve() -> dict[str, Any] | None:
             provider, key = "custom", key or "local"
         else:
             return None
+    elif not key:
+        key = _provider_key(provider)
 
     if provider == "gemini":
         return None

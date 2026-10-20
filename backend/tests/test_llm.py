@@ -85,6 +85,16 @@ def test_stream_parses_openai_sse(monkeypatch):
     }
 
 
+def test_explicit_provider_reads_its_own_key(monkeypatch):
+    _clear_providers(monkeypatch)
+    monkeypatch.setattr(settings, "llm_provider", "openrouter")
+    monkeypatch.setattr(settings, "openrouter_api_key", "sk-test")
+    cfg = llm.resolve()
+    assert cfg is not None
+    assert cfg["provider"] == "openrouter"
+    assert cfg["api_key"] == "sk-test"
+
+
 def test_pollinations_needs_no_key(monkeypatch):
     _clear_providers(monkeypatch)
     monkeypatch.setattr(settings, "llm_provider", "pollinations")
