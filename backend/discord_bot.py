@@ -878,6 +878,35 @@ class BotManager:
             )
 
         @verificacion.command(
+            name="desactivar",
+            description="Desactiva la verificación por botón en este servidor",
+        )
+        async def desactivar(interaction: "discord.Interaction") -> None:
+            if not _is_manager(interaction):
+                await interaction.response.send_message(
+                    "Necesitas el permiso **Gestionar servidor**.",
+                    ephemeral=True,
+                )
+                return
+            if interaction.guild is None:
+                return
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            await asyncio.to_thread(
+                save_guild_config,
+                interaction.guild.id,
+                {
+                    "verify_role_id": "",
+                    "unverified_role_id": "",
+                    "verify_channel_id": "",
+                },
+            )
+            await interaction.followup.send(
+                "Verificación desactivada. Puedes borrar el panel antiguo. "
+                "Los mensajes de bienvenida y despedida siguen activos.",
+                ephemeral=True,
+            )
+
+        @verificacion.command(
             name="estado",
             description="Muestra la configuración actual de verificación y mensajes",
         )

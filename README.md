@@ -400,6 +400,8 @@ en el canal de verificación y también aparece en el mensaje de bienvenida.
    personalizan con `mensaje_bienvenida` y `mensaje_despedida`.
 3. Publica o vuelve a publicar el panel con `/verificacion panel`.
 4. Consulta la configuración y los permisos del bot con `/verificacion estado`.
+5. Si quieres desactivar la verificación, usa `/verificacion desactivar` y borra
+   el panel antiguo.
 
 Placeholders disponibles:
 
