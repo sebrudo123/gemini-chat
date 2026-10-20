@@ -57,6 +57,17 @@ const memoryInput = document.getElementById("memory-input");
 const memorySave = document.getElementById("memory-save");
 const memoryList = document.getElementById("memory-list");
 
+const studyBtn = document.getElementById("study-btn");
+const studyModal = document.getElementById("study-modal");
+const studyClose = document.getElementById("study-close");
+const studyText = document.getElementById("study-text");
+const studyFile = document.getElementById("study-file");
+const studyFileBtn = document.getElementById("study-file-btn");
+const studyFileName = document.getElementById("study-file-name");
+const studyFileClear = document.getElementById("study-file-clear");
+const studyResult = document.getElementById("study-result");
+const studyKindButtons = document.querySelectorAll("[data-study-kind]");
+
 const settingsModal = document.getElementById("settings-modal");
 const settingsClose = document.getElementById("settings-close");
 const settingsTheme = document.getElementById("settings-theme");
@@ -168,6 +179,9 @@ let sending = false;
 let streamController = null;
 let imageMode = false;
 let webSearch = false;
+let engineVision = false;
+let studyAttachment = null;
+let studyBusy = false;
 let ttsEnabled = localStorage.getItem(TTS_KEY) === "1";
 let settings = { theme: "dark", preferred_model: null, use_rag: true };
 let usage = null;
@@ -398,6 +412,7 @@ async function loadConfig() {
   try {
     const data = await api("/api/config");
     flags = { ...flags, ...(data.flags || {}) };
+    engineVision = Boolean(data.vision);
     applyEngineBadge(data.engine, data.model);
   } catch (_) {
     /* mantener valores por defecto */
@@ -1517,6 +1532,11 @@ async function sendMessage(text, options = {}) {
   updateSendState();
   updateComposerForVerification();
 
+  // Si la imagen se está leyendo con OCR, esperamos antes de enviarla.
+  if (attachment && attachment.ocrPromise) {
+    await attachment.ocrPromise;
+  }
+
   if (!skipUserMessage) {
     addMessage("user", text, null, attachment);
     renderChat();
@@ -1541,6 +1561,9 @@ async function sendMessage(text, options = {}) {
       const result = await streamChatMessage(text, {
         ...streamOptions,
         ...(attachment ? { attachment_token: attachment.token } : {}),
+        ...(attachment && attachment.ocrText
+          ? { attachment_text: attachment.ocrText }
+          : {}),
       });
       if (result.conversationId) currentChatId = result.conversationId;
       updateShareButton();
@@ -2020,6 +2043,184 @@ async function deleteMemory(id) {
     await loadMemories();
   } catch (err) {
     renderError(err.message);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Modo estudio                                                        */
+/* ------------------------------------------------------------------ */
+
+function openStudy() {
+  if (!currentUser) {
+    renderError("Inicia sesión para usar el modo estudio.");
+    return;
+  }
+  closeSettings();
+  studyModal.classList.add("show");
+}
+
+function closeStudy() {
+  studyModal.classList.remove("show");
+}
+
+function updateStudyFile() {
+  if (studyAttachment) {
+    studyFileName.textContent = studyAttachment.filename || "Documento PDF";
+    studyFileClear.classList.remove("hidden");
+  } else {
+    studyFileName.textContent = "Sin archivo";
+    studyFileClear.classList.add("hidden");
+  }
+}
+
+async function uploadStudyPdf(file) {
+  if (!file) return;
+  if (file.type !== "application/pdf") {
+    renderError("El modo estudio acepta PDF o texto pegado.");
+    return;
+  }
+  if (file.size > ATTACHMENT_MAX_BYTES) {
+    renderError("El PDF supera el máximo de 8 MB.");
+    return;
+  }
+  studyFileBtn.disabled = true;
+  try {
+    const body = new FormData();
+    body.append("file", file);
+    const res = await fetch(`${BACKEND_URL}/api/attachments`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body,
+    });
+    if (res.status === 401) {
+      clearSession();
+      return;
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || "No se pudo subir el PDF.");
+    studyAttachment = data.attachment;
+    updateStudyFile();
+  } catch (err) {
+    renderError(err.message);
+  } finally {
+    studyFileBtn.disabled = false;
+    studyFile.value = "";
+  }
+}
+
+function renderStudy(data) {
+  studyResult.innerHTML = "";
+  if (data.summary) {
+    const box = document.createElement("div");
+    box.className = "study-summary";
+    renderRich(box, data.summary);
+    studyResult.appendChild(box);
+  }
+
+  if (Array.isArray(data.cards) && data.cards.length) {
+    const grid = document.createElement("div");
+    grid.className = "study-cards";
+    data.cards.forEach((card) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "flashcard";
+      const label = document.createElement("span");
+      label.className = "flashcard-label";
+      label.textContent = "Concepto";
+      const body = document.createElement("span");
+      body.textContent = card.front;
+      button.append(label, body);
+      let flipped = false;
+      button.addEventListener("click", () => {
+        flipped = !flipped;
+        label.textContent = flipped ? "Respuesta" : "Concepto";
+        body.textContent = flipped ? card.back : card.front;
+        button.classList.toggle("flipped", flipped);
+      });
+      grid.appendChild(button);
+    });
+    studyResult.appendChild(grid);
+  }
+
+  if (Array.isArray(data.questions) && data.questions.length) {
+    data.questions.forEach((question, index) => {
+      const card = document.createElement("div");
+      card.className = "quiz-card";
+      const title = document.createElement("h4");
+      title.textContent = `${index + 1}. ${question.question}`;
+      card.appendChild(title);
+
+      const buttons = [];
+      (question.options || []).forEach((option, optionIndex) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "quiz-option";
+        button.textContent = `${String.fromCharCode(65 + optionIndex)}. ${option}`;
+        button.addEventListener("click", () => {
+          if (card.dataset.answered === "1") return;
+          card.dataset.answered = "1";
+          buttons.forEach((item, itemIndex) => {
+            if (itemIndex === question.answer) item.classList.add("correct");
+            else if (itemIndex === optionIndex) item.classList.add("wrong");
+          });
+          if (question.explanation) {
+            const explanation = document.createElement("div");
+            explanation.className = "quiz-explanation";
+            explanation.textContent = question.explanation;
+            card.appendChild(explanation);
+          }
+        });
+        buttons.push(button);
+        card.appendChild(button);
+      });
+      studyResult.appendChild(card);
+    });
+  }
+
+  if (!studyResult.childElementCount) {
+    const empty = document.createElement("div");
+    empty.className = "study-loading";
+    empty.textContent = "No se generó contenido. Inténtalo de nuevo.";
+    studyResult.appendChild(empty);
+  }
+}
+
+async function runStudy(kind) {
+  if (studyBusy) return;
+  const text = studyText.value.trim();
+  if (!text && !studyAttachment) {
+    renderError("Pega tus apuntes o sube un PDF primero.");
+    return;
+  }
+  studyBusy = true;
+  studyKindButtons.forEach((button) => {
+    button.disabled = true;
+  });
+  studyResult.innerHTML = "";
+  const loading = document.createElement("div");
+  loading.className = "study-loading";
+  loading.textContent = "Generando material de estudio...";
+  studyResult.appendChild(loading);
+
+  try {
+    const payload = { kind, text, count: kind === "quiz" ? 8 : 10 };
+    if (studyAttachment) payload.attachment_token = studyAttachment.token;
+    const data = await api("/api/study", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    renderStudy(data);
+  } catch (err) {
+    studyResult.innerHTML = "";
+    const error = document.createElement("div");
+    error.className = "study-loading";
+    error.textContent = err.message;
+    studyResult.appendChild(error);
+  } finally {
+    studyBusy = false;
+    studyKindButtons.forEach((button) => {
+      button.disabled = false;
+    });
   }
 }
 
@@ -4062,6 +4263,32 @@ const ATTACHMENT_TYPES = [
 ];
 const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
 
+let tesseractLoader = null;
+
+function loadTesseract() {
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  if (!tesseractLoader) {
+    tesseractLoader = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+      script.async = true;
+      script.onload = () => {
+        if (window.Tesseract) resolve(window.Tesseract);
+        else reject(new Error("OCR no disponible"));
+      };
+      script.onerror = () => reject(new Error("No se pudo cargar el OCR"));
+      document.head.appendChild(script);
+    });
+  }
+  return tesseractLoader;
+}
+
+async function ocrImage(file) {
+  const Tesseract = await loadTesseract();
+  const result = await Tesseract.recognize(file, "spa+eng");
+  return String((result && result.data && result.data.text) || "").trim();
+}
+
 async function uploadAttachment(file) {
   if (!file) return;
   if (!currentUser) {
@@ -4092,6 +4319,23 @@ async function uploadAttachment(file) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.detail || "No se pudo subir el archivo.");
     pendingAttachment = data.attachment;
+    if (
+      !engineVision &&
+      (pendingAttachment.mime || "").startsWith("image/") &&
+      pendingAttachment.token
+    ) {
+      pendingAttachment.ocrText = "";
+      pendingAttachment.ocrStatus = "reading";
+      pendingAttachment.ocrPromise = ocrImage(file)
+        .then((text) => {
+          pendingAttachment.ocrText = text;
+          pendingAttachment.ocrStatus = text ? "done" : "empty";
+        })
+        .catch(() => {
+          pendingAttachment.ocrStatus = "error";
+        })
+        .finally(() => renderAttachmentPreview());
+    }
     renderAttachmentPreview();
     updateSendState();
   } catch (err) {
@@ -4123,6 +4367,20 @@ function renderAttachmentPreview() {
   const name = document.createElement("span");
   name.textContent = pendingAttachment.filename || "Archivo";
   chip.appendChild(name);
+
+  if ((pendingAttachment.mime || "").startsWith("image/") && !engineVision) {
+    const status = pendingAttachment.ocrStatus;
+    if (status) {
+      const ocr = document.createElement("span");
+      ocr.className = "attachment-ocr";
+      if (status === "reading") ocr.textContent = "Leyendo texto…";
+      else if (status === "done") {
+        ocr.textContent = `Texto listo (${pendingAttachment.ocrText.length} caracteres)`;
+      } else if (status === "empty") ocr.textContent = "Sin texto detectado";
+      else ocr.textContent = "OCR no disponible";
+      chip.appendChild(ocr);
+    }
+  }
 
   const remove = document.createElement("button");
   remove.type = "button";
@@ -4222,6 +4480,24 @@ memoryInput.addEventListener("keydown", (event) => {
 });
 memoryModal.addEventListener("click", (event) => {
   if (event.target === memoryModal) closeMemory();
+});
+
+studyBtn.addEventListener("click", openStudy);
+studyClose.addEventListener("click", closeStudy);
+studyModal.addEventListener("click", (event) => {
+  if (event.target === studyModal) closeStudy();
+});
+studyFileBtn.addEventListener("click", () => studyFile.click());
+studyFile.addEventListener("change", () => {
+  const file = studyFile.files && studyFile.files[0];
+  if (file) uploadStudyPdf(file);
+});
+studyFileClear.addEventListener("click", () => {
+  studyAttachment = null;
+  updateStudyFile();
+});
+studyKindButtons.forEach((button) => {
+  button.addEventListener("click", () => runStudy(button.dataset.studyKind));
 });
 
 settingsBtn.addEventListener("click", openSettings);

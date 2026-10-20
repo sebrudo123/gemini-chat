@@ -163,8 +163,13 @@ pruebas en cada push y pull request.
 | GET    | `/api/auth/discord/callback`  | Intercambia el código y crea la sesión   |
 | GET    | `/api/auth/me`                | Perfil del usuario autenticado           |
 | POST   | `/api/auth/logout`            | Cierra la sesión                         |
-| POST   | `/api/chat`                   | Chat con Gemini (Bearer + rate limit)    |
-| POST   | `/api/image`                  | Genera una imagen (requiere `IMAGE_MODEL`)|
+| POST   | `/api/chat`                   | Chat con el motor configurado (Bearer + rate limit) |
+| POST   | `/api/chat/stream`            | Chat en streaming SSE                    |
+| POST   | `/api/image`                  | Genera una imagen (Pollinations o `IMAGE_MODEL`) |
+| POST   | `/api/study`                  | Resumen, flashcards o quiz de apuntes/PDF |
+| GET    | `/api/memory`                 | Lista la memoria del usuario             |
+| POST   | `/api/memory`                 | Guarda un dato en la memoria             |
+| DELETE | `/api/memory/{id}`            | Olvida un dato                           |
 | POST   | `/api/rag/documents`          | Crea un documento de conocimiento (RAG)  |
 | GET    | `/api/rag/documents`          | Lista los documentos del usuario         |
 | DELETE | `/api/rag/documents/{id}`     | Elimina un documento y sus fragmentos    |
@@ -191,11 +196,22 @@ pruebas en cada push y pull request.
   conversaciones. Panel para añadir u olvidar (máximo 50 por usuario).
 - **Generación de imágenes**: `POST /api/image` usa Pollinations (Flux) gratis
   cuando `IMAGE_MODEL` está vacío; si defines un modelo de Gemini, usa ese.
+- **OCR gratis**: al adjuntar una imagen y usar un motor sin visión, el navegador
+  extrae el texto con Tesseract.js (`spa+eng`) y se lo envía al modelo. También
+  funciona con PDFs que tengan texto.
+- **Modo estudio**: `POST /api/study` genera resúmenes, flashcards o quizzes a
+  partir de apuntes o de un PDF. La interfaz permite voltear tarjetas y
+  responder el quiz con corrección inmediata.
 - **RAG**: los documentos se dividen en fragmentos, se vectorizan con
   `EMBEDDING_MODEL` y se recuperan por similitud coseno para ampliar el contexto
   del chat. Tablas `documents` y `document_chunks`.
 - **Frontend**: dictado por voz (Web Speech API), lectura en voz alta y botón
-  “Escuchar” por respuesta, modo imagen, base de conocimiento y memoria.
+  “Escuchar” por respuesta, modo imagen, modo estudio, base de conocimiento y
+  memoria.
+
+> El motor gratuito de Pollinations permite 1 respuesta cada 30 segundos por IP.
+> Si se alcanza el límite, Core IA usa Gemini como respaldo cuando `AI_API_KEY`
+> está configurada.
 
 ## Producto (sección 4)
 

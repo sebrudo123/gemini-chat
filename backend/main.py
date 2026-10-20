@@ -691,20 +691,48 @@ def generate_reply(
     system_instruction: str | None = None,
     temperature: float | None = None,
 ) -> str:
-    """Genera una respuesta probando varios modelos, con herramientas y reintentos.
+    """Genera una respuesta con el motor propio y cae a Gemini si falla.
 
-    Primero intenta el *automatic function calling* (fecha/hora, cálculos).
-    Si el modelo rechaza las herramientas, reintenta sin ellas para no
-    degradar la experiencia. `system_instruction` y `temperature` provienen de
-    la configuración del panel de administración.
+    El motor gratuito limita las peticiones por IP, así que un error 402/429 no
+    debe dejar al usuario sin respuesta. Gemini se usa como respaldo cuando hay
+    clave configurada.
     """
     if llm.available():
-        return llm.complete_text(
-            message,
-            system_instruction=system_instruction,
-            temperature=temperature,
+        try:
+            return llm.complete_text(
+                message,
+                system_instruction=system_instruction,
+                temperature=temperature,
+            )
+        except Exception as exc:  # noqa: BLE001 - se intenta el respaldo
+            if genai_client is None:
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "El motor gratuito está saturado. "
+                        "Inténtalo de nuevo en unos segundos."
+                    ),
+                ) from exc
+    if genai_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="No hay ningún motor de IA configurado.",
         )
+    return _generate_with_gemini(
+        message,
+        preferred_model=preferred_model,
+        system_instruction=system_instruction,
+        temperature=temperature,
+    )
 
+
+def _generate_with_gemini(
+    message: str,
+    preferred_model: str | None = None,
+    system_instruction: str | None = None,
+    temperature: float | None = None,
+) -> str:
+    """Genera una respuesta con Gemini, probando modelos y reintentos."""
     primary = preferred_model or settings.ai_model
     models = [primary] + [
         m for m in ([settings.ai_model] + settings.ai_model_fallbacks) if m != primary
@@ -912,6 +940,7 @@ class ChatStreamRequest(ChatRequest):
     regenerate: bool = False
     edit_message_id: int | None = None
     attachment_token: str | None = None
+    attachment_text: str | None = Field(default=None, max_length=20000)
 
 
 class UserResponse(BaseModel):
@@ -929,6 +958,20 @@ class ImageResponse(BaseModel):
 
 class MemoryRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=500)
+
+
+class StudyRequest(BaseModel):
+    kind: str = Field(default="summary", pattern="^(summary|flashcards|quiz)$")
+    text: str = Field(default="", max_length=50000)
+    attachment_token: str | None = None
+    count: int = Field(default=8, ge=3, le=20)
+
+
+class StudyResponse(BaseModel):
+    kind: str
+    summary: str | None = None
+    cards: list[dict[str, str]] = Field(default_factory=list)
+    questions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class DocumentRequest(BaseModel):
@@ -1980,6 +2023,16 @@ def prepare_chat(
             f"Contexto:\n{context}\n\nPregunta: {message}"
         )
 
+    # OCR del frontend: si hay texto extraído de la imagen, se usa como
+    # contenido y no se envía la imagen (el motor gratuito no tiene visión).
+    attachment_text = (getattr(payload, "attachment_text", "") or "").strip()[:20000]
+    if attachment_text:
+        prompt = (
+            f"{prompt}\n\n[Texto extraído de la imagen adjunta por OCR]\n"
+            f"{attachment_text}"
+        )
+        attachment = None
+
     system_prompt = get_setting(db, "system_prompt", "").strip() or COREIA_IDENTITY
     extras: list[str] = []
 
@@ -2360,6 +2413,204 @@ def delete_memory(
     db.delete(row)
     db.commit()
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+# Modo estudio: resumen, flashcards y quiz
+# --------------------------------------------------------------------------- #
+
+STUDY_SYSTEM = (
+    "Eres Core IA en modo estudio. Respondes en español con claridad y rigor. "
+    "Sigues exactamente el formato que se te pide."
+)
+
+
+def _json_payload(raw: str) -> Any:
+    """Extrae el primer array/objeto JSON de una respuesta del modelo."""
+    text = raw.strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
+    text = re.sub(r"\s*```$", "", text)
+    for opener, closer in (("[", "]"), ("{", "}")):
+        start = text.find(opener)
+        end = text.rfind(closer)
+        if start == -1 or end <= start:
+            continue
+        try:
+            return json.loads(text[start : end + 1])
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def _study_instructions(kind: str, count: int) -> str:
+    if kind == "summary":
+        return (
+            "Resume el material de estudio en español. Usa títulos y viñetas, "
+            "destaca los conceptos clave y no inventes datos que no aparezcan."
+        )
+    if kind == "flashcards":
+        return (
+            f"Genera {count} flashcards para estudiar el material. Cada tarjeta "
+            "debe tener una pregunta o concepto al frente y una respuesta breve "
+            "detrás. Devuelve SOLO un array JSON válido, sin markdown ni texto "
+            'adicional: [{"front": "...", "back": "..."}].'
+        )
+    return (
+        f"Genera {count} preguntas tipo test sobre el material, con 4 opciones "
+        "cada una y una sola respuesta correcta. El campo answer es el índice "
+        "0-based de la opción correcta. Devuelve SOLO un array JSON válido, sin "
+        "markdown ni texto adicional: "
+        '[{"question": "...", "options": ["...", "...", "...", "..."], '
+        '"answer": 0, "explanation": "..."}].'
+    )
+
+
+def _parse_cards(raw: str) -> list[dict[str, str]]:
+    data = _json_payload(raw)
+    if isinstance(data, dict):
+        data = data.get("cards") or data.get("items") or []
+    cards: list[dict[str, str]] = []
+    if isinstance(data, list):
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            front = str(
+                item.get("front") or item.get("question") or item.get("q") or ""
+            ).strip()
+            back = str(
+                item.get("back") or item.get("answer") or item.get("a") or ""
+            ).strip()
+            if front and back:
+                cards.append({"front": front[:500], "back": back[:1500]})
+    if not cards:
+        pairs = re.findall(
+            r"(?:^|\n)\s*(?:P|Pregunta|Q)\s*:\s*(.+?)\n\s*"
+            r"(?:R|Respuesta|A)\s*:\s*(.+)",
+            raw,
+            re.I,
+        )
+        for front, back in pairs:
+            cards.append({"front": front.strip()[:500], "back": back.strip()[:1500]})
+    return cards[:20]
+
+
+def _parse_questions(raw: str) -> list[dict[str, Any]]:
+    data = _json_payload(raw)
+    if isinstance(data, dict):
+        data = data.get("questions") or data.get("items") or []
+    questions: list[dict[str, Any]] = []
+    if not isinstance(data, list):
+        return questions
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        question = str(item.get("question") or item.get("q") or "").strip()
+        options = item.get("options")
+        if not question or not isinstance(options, list):
+            continue
+        options = [str(option).strip() for option in options[:4] if str(option).strip()]
+        if len(options) < 2:
+            continue
+        answer = item.get("answer", item.get("correct", 0))
+        if isinstance(answer, str):
+            value = answer.strip()
+            if len(value) == 1 and value.upper() in "ABCD":
+                answer = "ABCD".index(value.upper())
+            else:
+                try:
+                    answer = int(value)
+                except ValueError:
+                    answer = 0
+        try:
+            answer = int(answer)
+        except (TypeError, ValueError):
+            answer = 0
+        if not 0 <= answer < len(options):
+            answer = 0
+        questions.append(
+            {
+                "question": question[:800],
+                "options": options,
+                "answer": answer,
+                "explanation": str(item.get("explanation") or "").strip()[:800],
+            }
+        )
+    return questions[:20]
+
+
+@app.post("/api/study", response_model=StudyResponse)
+@limiter.limit(settings.rate_limit)
+def study_material(
+    request: Request,
+    payload: StudyRequest,
+    profile: dict[str, Any] = Depends(get_current_user),
+    _: dict[str, Any] = Depends(require_email_verified),
+    db: Session = Depends(get_db),
+) -> StudyResponse:
+    """Genera un resumen, flashcards o un quiz a partir de apuntes o un PDF."""
+    user = upsert_user(db, profile)
+    check_quota(db, user, "message")
+
+    text = payload.text.strip()
+    if not text and payload.attachment_token:
+        attachment = _attachment_for_user(db, user, payload.attachment_token)
+        if attachment is None:
+            raise HTTPException(status_code=404, detail="Adjunto no encontrado.")
+        if not (attachment.mime or "").startswith("application/pdf"):
+            raise HTTPException(
+                status_code=400,
+                detail="Adjunta un PDF o pega el texto de tus apuntes.",
+            )
+        text = llm.pdf_text(attachment).strip()
+
+    if len(text) < 40:
+        raise HTTPException(
+            status_code=400,
+            detail="El material es demasiado corto. Pega más texto o sube un PDF con texto.",
+        )
+
+    instructions = _study_instructions(payload.kind, payload.count)
+    prompt = f"{instructions}\n\n--- MATERIAL ---\n{text[:30000]}"
+    try:
+        raw = generate_reply(
+            prompt,
+            system_instruction=STUDY_SYSTEM,
+            temperature=0.3,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - error del motor externo
+        raise HTTPException(
+            status_code=502,
+            detail="No se pudo generar el material de estudio. Inténtalo de nuevo.",
+        ) from exc
+
+    if payload.kind == "summary":
+        summary = raw.strip()
+        if not summary:
+            raise HTTPException(
+                status_code=502, detail="El modelo devolvió una respuesta vacía."
+            )
+        result = StudyResponse(kind="summary", summary=summary)
+    elif payload.kind == "flashcards":
+        cards = _parse_cards(raw)
+        if not cards:
+            raise HTTPException(
+                status_code=502,
+                detail="No se pudieron estructurar las flashcards. Inténtalo de nuevo.",
+            )
+        result = StudyResponse(kind="flashcards", cards=cards)
+    else:
+        questions = _parse_questions(raw)
+        if not questions:
+            raise HTTPException(
+                status_code=502,
+                detail="No se pudo estructurar el quiz. Inténtalo de nuevo.",
+            )
+        result = StudyResponse(kind="quiz", questions=questions)
+
+    bump_usage(db, get_usage_row(db, user), "message")
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -3909,6 +4160,8 @@ def public_config(db: Session = Depends(get_db)) -> dict[str, Any]:
         "flags": flags,
         "engine": llm.provider_name(),
         "model": cfg["model"] if cfg else "",
+        "vision": bool(cfg and cfg.get("vision_model"))
+        or (cfg is None and genai_client is not None),
     }
 
 

@@ -158,6 +158,7 @@
     }
     .new-chat:hover { background: var(--surface-hover); border-color: var(--border-strong); }
     .new-chat:active { transform: scale(.985); }
+    .study-entry { margin-top: 8px; }
 
     .section-label {
       font-size: 11.5px;
@@ -671,6 +672,88 @@
       box-shadow: 0 0 0 3px var(--accent-soft);
     }
     #kb-text { resize: vertical; min-height: 150px; line-height: 1.55; }
+
+    #study-text {
+      width: 100%;
+      min-height: 150px;
+      resize: vertical;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 14px;
+      line-height: 1.55;
+      padding: 12px 13px;
+      outline: none;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    #study-text:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    .study-file-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .study-file-row .settings-hint {
+      flex: 1; min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .study-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .study-actions .primary-btn { flex: 1; min-width: 110px; }
+    .study-result {
+      display: flex; flex-direction: column; gap: 10px;
+      max-height: 45vh; overflow-y: auto;
+    }
+    .study-summary { font-size: 14px; line-height: 1.65; }
+    .study-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 9px;
+    }
+    .flashcard {
+      text-align: left;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 13px;
+      color: var(--text);
+      min-height: 110px;
+      cursor: pointer;
+      font-size: 13.5px;
+      line-height: 1.5;
+    }
+    .flashcard .flashcard-label {
+      display: block;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .flashcard.flipped { border-color: var(--accent); background: var(--accent-soft); }
+    .quiz-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 13px;
+    }
+    .quiz-card h4 { font-size: 14px; line-height: 1.45; margin-bottom: 9px; }
+    .quiz-option {
+      display: block; width: 100%;
+      text-align: left;
+      margin-top: 6px;
+      padding: 8px 10px;
+      border-radius: 9px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .quiz-option:hover { background: var(--surface-hover); }
+    .quiz-option.correct { border-color: #22c55e; background: rgba(34, 197, 94, .12); }
+    .quiz-option.wrong { border-color: var(--danger); background: rgba(248, 113, 113, .12); }
+    .quiz-explanation { margin-top: 8px; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+    .study-loading { color: var(--muted); font-size: 13.5px; text-align: center; padding: 14px; }
 
     .primary-btn {
       border: none; border-radius: 11px;
@@ -1576,6 +1659,12 @@
       cursor: pointer; font-size: 13px; padding: 2px 5px; border-radius: 6px;
     }
     .attachment-chip button:hover { background: var(--surface-hover); color: var(--text); }
+    .attachment-chip .attachment-ocr {
+      color: var(--accent);
+      font-size: 11px;
+      max-width: 220px;
+      white-space: normal;
+    }
     .msg-attachment { margin: 2px 0 8px; }
     .msg-attachment img {
       display: block; max-width: min(360px, 100%); max-height: 320px;
@@ -1678,6 +1767,11 @@
       <button class="new-chat" id="new-chat">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         Nuevo chat
+      </button>
+
+      <button class="new-chat study-entry" id="study-btn" type="button">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 9 10-5 10 5-10 5L2 9Z"/><path d="M6 11v5c3 2 9 2 12 0v-5"/></svg>
+        Modo estudio
       </button>
 
       <div class="history-search">
@@ -1788,6 +1882,29 @@
         <button class="primary-btn small" id="memory-save" type="button">Añadir</button>
       </div>
       <div class="kb-list" id="memory-list"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="study-modal">
+    <div class="modal-card modal-wide">
+      <div class="modal-head">
+        <h2>Modo estudio</h2>
+        <button class="icon-btn" id="study-close" type="button" aria-label="Cerrar">✕</button>
+      </div>
+      <p class="modal-sub">Pega tus apuntes o sube un PDF y genera un resumen, flashcards o un quiz para practicar.</p>
+      <textarea id="study-text" placeholder="Pega aquí tus apuntes, el tema o la documentación..."></textarea>
+      <div class="study-file-row">
+        <input type="file" id="study-file" accept="application/pdf" hidden />
+        <button class="admin-mini" id="study-file-btn" type="button">Subir PDF</button>
+        <span class="settings-hint" id="study-file-name">Sin archivo</span>
+        <button class="admin-mini hidden" id="study-file-clear" type="button">Quitar</button>
+      </div>
+      <div class="study-actions">
+        <button class="primary-btn small" data-study-kind="summary" type="button">Resumen</button>
+        <button class="primary-btn small" data-study-kind="flashcards" type="button">Flashcards</button>
+        <button class="primary-btn small" data-study-kind="quiz" type="button">Quiz</button>
+      </div>
+      <div class="study-result" id="study-result"></div>
     </div>
   </div>
 

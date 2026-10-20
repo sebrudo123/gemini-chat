@@ -201,3 +201,101 @@ def test_web_search_injection(client, monkeypatch):
     )
     assert response.status_code == 200
     assert response.json()["web_sources"][0]["url"] == "https://example.com"
+
+
+def test_study_summary(client, monkeypatch):
+    headers = auth_header()
+    monkeypatch.setattr(
+        main.llm,
+        "complete_text",
+        lambda *args, **kwargs: "Resumen de prueba con conceptos clave.",
+    )
+    response = client.post(
+        "/api/study",
+        json={"kind": "summary", "text": "Material de estudio " * 5},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert "Resumen" in response.json()["summary"]
+
+
+def test_study_flashcards_parses_json(client, monkeypatch):
+    headers = auth_header()
+    monkeypatch.setattr(
+        main.llm,
+        "complete_text",
+        lambda *args, **kwargs: (
+            '```json\n[{"front": "¿Qué es Core IA?", "back": "Un asistente."}]\n```'
+        ),
+    )
+    response = client.post(
+        "/api/study",
+        json={"kind": "flashcards", "text": "Material de estudio " * 5},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    cards = response.json()["cards"]
+    assert cards[0]["front"] == "¿Qué es Core IA?"
+    assert cards[0]["back"] == "Un asistente."
+
+
+def test_study_quiz_parses_json(client, monkeypatch):
+    headers = auth_header()
+    monkeypatch.setattr(
+        main.llm,
+        "complete_text",
+        lambda *args, **kwargs: (
+            '[{"question": "2 + 2", "options": ["3", "4", "5"], '
+            '"answer": 1, "explanation": "Cuatro."}]'
+        ),
+    )
+    response = client.post(
+        "/api/study",
+        json={"kind": "quiz", "text": "Material de estudio " * 5},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    question = response.json()["questions"][0]
+    assert question["answer"] == 1
+    assert question["options"][1] == "4"
+
+
+def test_study_rejects_short_material(client):
+    response = client.post(
+        "/api/study",
+        json={"kind": "summary", "text": "muy corto"},
+        headers=auth_header(),
+    )
+    assert response.status_code == 400
+
+
+def test_generate_reply_falls_back_to_gemini(monkeypatch):
+    monkeypatch.setattr(main.llm, "available", lambda: True)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("402")
+
+    monkeypatch.setattr(main.llm, "complete_text", boom)
+    monkeypatch.setattr(main, "genai_client", object())
+    monkeypatch.setattr(main, "_generate_with_gemini", lambda *a, **k: "respaldo")
+    assert main.generate_reply("hola") == "respaldo"
+
+
+def test_ocr_text_is_used_without_vision(client, monkeypatch):
+    headers = auth_header()
+    captured = {}
+
+    def fake_stream(message, **kwargs):
+        captured["message"] = message
+        captured["attachment"] = kwargs.get("attachment")
+        yield "ok"
+
+    monkeypatch.setattr(main, "stream_reply", fake_stream)
+    response = client.post(
+        "/api/chat/stream",
+        json={"message": "¿Qué dice la imagen?", "attachment_text": "HOLA MUNDO"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert "HOLA MUNDO" in captured["message"]
+    assert captured["attachment"] is None
