@@ -783,10 +783,15 @@ def stream_reply(
     que este modo no usa herramientas (el modo no-streaming sí).
     """
     if llm.available():
-        yield from _stream_own_model(
-            message, system_instruction, temperature, attachment
-        )
-        return
+        try:
+            yield from _stream_own_model(
+                message, system_instruction, temperature, attachment
+            )
+            return
+        except HTTPException:
+            if genai_client is None:
+                raise
+            # Si el motor propio no responde, Gemini queda como último respaldo.
 
     primary = preferred_model or settings.ai_model
     models = [primary] + [

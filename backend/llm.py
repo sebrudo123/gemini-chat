@@ -52,6 +52,11 @@ DEFAULTS: dict[str, dict[str, str]] = {
         "model": "llama3.1",
         "vision_model": "",
     },
+    "pollinations": {
+        "base_url": "https://text.pollinations.ai/openai",
+        "model": "openai-fast",
+        "vision_model": "",
+    },
 }
 
 
@@ -83,7 +88,7 @@ def resolve() -> dict[str, Any] | None:
         base_url = base_url.format(account_id=settings.cloudflare_account_id)
     if not base_url:
         return None
-    if not key and provider not in {"ollama", "custom"}:
+    if not key and provider not in {"ollama", "custom", "pollinations"}:
         return None
 
     return {
@@ -166,6 +171,11 @@ def build_messages(
                     f"{message}\n\n[El usuario adjuntó un PDF que no se pudo "
                     "leer; pídele que lo pegue como texto.]"
                 )
+        elif mime.startswith("image/"):
+            content = (
+                f"{message}\n\n[El usuario adjuntó una imagen, pero el motor "
+                "actual no admite visión. Explícaselo amablemente.]"
+            )
     messages.append({"role": "user", "content": content})
     return messages
 
@@ -185,6 +195,11 @@ def _payload(
     if temperature is not None:
         data["temperature"] = temperature
     return data
+
+
+def _timeout(cfg: dict[str, Any]) -> float:
+    """Los modelos gratuitos con razonamiento pueden tardar más en arrancar."""
+    return 180.0 if cfg["provider"] == "pollinations" else 120.0
 
 
 def _stream_line_text(line: str) -> str:
@@ -228,7 +243,7 @@ def stream_text(
         f"{cfg['base_url']}/chat/completions",
         headers=_headers(cfg),
         json=payload,
-        timeout=120.0,
+        timeout=_timeout(cfg),
     ) as response:
         if response.status_code >= 400:
             detail = response.read().decode("utf-8", "ignore")[:300]
@@ -263,7 +278,7 @@ def complete_text(
         f"{cfg['base_url']}/chat/completions",
         headers=_headers(cfg),
         json=payload,
-        timeout=120.0,
+        timeout=_timeout(cfg),
     )
     if response.status_code >= 400:
         raise RuntimeError(f"{response.status_code}: {response.text[:300]}")

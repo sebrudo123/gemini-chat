@@ -55,11 +55,12 @@ AI_RETRIES=2
 
 # Motor de chat propio (opcional). Si defines una clave, las respuestas de
 # texto salen del modelo abierto y Gemini queda solo como respaldo/embeddings.
-# Proveedores: groq, openrouter, cerebras, cloudflare, ollama o custom.
+# Proveedores: groq, openrouter, cerebras, cloudflare, ollama, pollinations o custom.
 LLM_PROVIDER=auto         # auto detecta la primera clave disponible
 GROQ_API_KEY=             # https://console.groq.com/keys (gratis, sin tarjeta)
 LLM_MODEL=                # vacío = llama-3.3-70b-versatile en Groq
 LLM_VISION_MODEL=         # vacío = llama-4-scout en Groq (imágenes)
+# LLM_PROVIDER=pollinations # sin clave: GPT-OSS 20B gratuito (texto)
 # OPENROUTER_API_KEY=...  # alternativa: https://openrouter.ai/keys
 # LLM_BASE_URL=...        # para Ollama u otro servidor compatible con OpenAI
 # LLM_API_KEY=...

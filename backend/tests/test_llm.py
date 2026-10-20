@@ -85,6 +85,16 @@ def test_stream_parses_openai_sse(monkeypatch):
     }
 
 
+def test_pollinations_needs_no_key(monkeypatch):
+    _clear_providers(monkeypatch)
+    monkeypatch.setattr(settings, "llm_provider", "pollinations")
+    cfg = llm.resolve()
+    assert cfg is not None
+    assert cfg["provider"] == "pollinations"
+    assert cfg["base_url"] == "https://text.pollinations.ai/openai"
+    assert cfg["model"] == "openai-fast"
+
+
 def test_provider_accepts_custom_base_url(monkeypatch):
     _clear_providers(monkeypatch)
     monkeypatch.setattr(settings, "llm_provider", "custom")
