@@ -326,9 +326,12 @@ FastAPI (no hace falta otro servicio). Solo se activa si defines
 2. Abre **Bot → Add Bot** y pulsa **Reset Token**. Copia el token: solo se
    muestra una vez.
 3. Invita el bot con los scopes `bot` y `applications.commands`:
-   `https://discord.com/oauth2/authorize?client_id=TU_CLIENT_ID&scope=bot%20applications.commands&permissions=2048`
-   (permiso *Send Messages*; añade *Embed Links* si quieres vistas previas).
-4. En Render, añade `DISCORD_BOT_TOKEN` con ese token y redespliega. Opcional:
+   `https://discord.com/oauth2/authorize?client_id=TU_CLIENT_ID&scope=bot%20applications.commands&permissions=268520448`
+   (Ver canales, Enviar mensajes, Insertar enlaces, Leer historial y Gestionar
+   roles). El rol del bot debe estar **por encima** del rol verificado.
+4. En **Bot → Privileged Gateway Intents**, activa **Server Members Intent**.
+   Sin él funcionan los comandos, pero no las bienvenidas ni las despedidas.
+5. En Render, añade `DISCORD_BOT_TOKEN` con ese token y redespliega. Opcional:
    - `DISCORD_BOT_GUILD_ID`: ID de tu servidor para que los comandos aparezcan
      al instante (sin él, Discord puede tardar hasta una hora en sincronizarlos).
    - `DISCORD_BOT_CHANNEL_IDS`: lista de canales separados por comas donde puede
@@ -337,6 +340,13 @@ FastAPI (no hace falta otro servicio). Solo se activa si defines
      `false` lo deja apagado hasta que lo enciendas desde el panel.
    - `DISCORD_BOT_WAKE_KEY`: clave de la URL de encendido externo. Si se omite,
      se deriva de `SESSION_SECRET`.
+   - `DISCORD_BOT_MEMBERS_INTENT`: `true` por defecto; activa el intent de
+     miembros en el código.
+   - `DISCORD_VERIFY_ROLE_ID`, `DISCORD_UNVERIFIED_ROLE_ID`,
+     `DISCORD_VERIFY_CHANNEL_ID`, `DISCORD_WELCOME_CHANNEL_ID`,
+     `DISCORD_GOODBYE_CHANNEL_ID`, `DISCORD_LOG_CHANNEL_ID` y
+     `DISCORD_MIN_ACCOUNT_AGE_DAYS`: configuración inicial de verificación.
+     También se puede cambiar en Discord con `/verificacion configurar`.
 
 ### Encender y apagar desde el panel
 
@@ -371,6 +381,35 @@ y redesplegando.
 - `/coreia-reset` borra el historial reciente de ese canal (se guarda en memoria
   y se pierde al reiniciar el backend).
 - Hay un enfriamiento de 4 segundos por usuario para evitar abusos.
+
+### Verificación, bienvenida y despedida
+
+La verificación es un botón persistente: el miembro pulsa **Verificarme**, el bot
+le entrega el rol verificado y le quita el rol inicial. El panel se puede publicar
+en el canal de verificación y también aparece en el mensaje de bienvenida.
+
+1. Crea o elige un rol **Verificado** y, si quieres, un rol inicial para nuevos
+   miembros. El rol del bot debe estar por encima de ambos.
+2. Ejecuta en Discord (solo administradores):
+
+   ```text
+   /verificacion configurar rol_verificado:@Verificado rol_no_verificado:@No verificado canal_verificacion:#verificación canal_bienvenida:#bienvenidas canal_despedida:#despedidas canal_logs:#logs edad_minima_dias:0
+   ```
+
+   Todos los campos son opcionales; puedes cambiar solo uno. Los mensajes se
+   personalizan con `mensaje_bienvenida` y `mensaje_despedida`.
+3. Publica o vuelve a publicar el panel con `/verificacion panel`.
+4. Consulta la configuración y los permisos del bot con `/verificacion estado`.
+
+Placeholders disponibles:
+
+- Bienvenida: `{user}`, `{name}`, `{server}`, `{count}`, `{created}`,
+  `{joined}`, `{verify_channel}`.
+- Despedida: `{user}`, `{name}`, `{server}`, `{count}`, `{joined}`.
+
+Con `edad_minima_dias` puedes impedir que cuentas recién creadas se verifiquen
+(útil contra raids). `0` lo desactiva. Las entradas, salidas y verificaciones se
+registran en `canal_logs` si lo configuras.
 
 > En Render gratuito el servicio se suspende por inactividad y el bot se
 > desconecta hasta que alguien vuelve a abrir la web o lo despierta. La URL de

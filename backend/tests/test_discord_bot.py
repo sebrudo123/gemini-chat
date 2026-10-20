@@ -58,3 +58,58 @@ def test_manager_stop_when_off():
     manager = discord_bot.BotManager()
     status = asyncio.run(manager.stop())
     assert status["running"] is False
+
+
+def test_guild_config_key():
+    assert (
+        discord_bot.guild_config_key(123, "verify_role_id")
+        == "discord:123:verify_role_id"
+    )
+
+
+def test_render_template_replaces_known_placeholders():
+    rendered = discord_bot._render_template(
+        "Hola {user}, bienvenido a {server}. {missing}",
+        {"user": "<@1>", "server": "Core IA"},
+    )
+    assert rendered == "Hola <@1>, bienvenido a Core IA. {missing}"
+
+
+def test_config_int_handles_invalid_values():
+    assert discord_bot._config_int({"days": "7"}, "days") == 7
+    assert discord_bot._config_int({"days": "no"}, "days", default=3) == 3
+    assert discord_bot._config_int({}, "days", default=5) == 5
+
+
+def test_guild_config_roundtrip():
+    from database import SessionLocal, init_db
+    from models import AppSetting
+
+    init_db()
+    guild_id = 987654321012345678
+    prefix = f"discord:{guild_id}:"
+    try:
+        discord_bot.save_guild_config(
+            guild_id,
+            {
+                "verify_role_id": "111",
+                "welcome_channel_id": "222",
+                "min_account_age_days": 7,
+                "welcome_message": "Hola {user}",
+            },
+        )
+        config = discord_bot.load_guild_config(guild_id)
+        assert config["verify_role_id"] == "111"
+        assert config["welcome_channel_id"] == "222"
+        assert config["min_account_age_days"] == "7"
+        assert config["welcome_message"] == "Hola {user}"
+        assert config["goodbye_message"] == discord_bot.DEFAULT_GOODBYE
+    finally:
+        db = SessionLocal()
+        try:
+            db.query(AppSetting).filter(AppSetting.key.like(prefix + "%")).delete(
+                synchronize_session=False
+            )
+            db.commit()
+        finally:
+            db.close()

@@ -66,6 +66,39 @@ class Settings:
         # Clave opcional para la URL pública de encendido. Si se omite, se
         # deriva de SESSION_SECRET para no tener que configurar otra variable.
         self.discord_bot_wake_key = os.environ.get("DISCORD_BOT_WAKE_KEY", "").strip()
+        # Necesario para bienvenidas, despedidas y altas/bajas de miembros.
+        self.discord_bot_members_intent = os.environ.get(
+            "DISCORD_BOT_MEMBERS_INTENT", "true"
+        ).lower() in ("1", "true", "yes")
+        # Valores iniciales de verificación y mensajes. También se pueden
+        # cambiar desde Discord con /verificacion configurar.
+        self.discord_verify_role_id = os.environ.get(
+            "DISCORD_VERIFY_ROLE_ID", ""
+        ).strip()
+        self.discord_unverified_role_id = os.environ.get(
+            "DISCORD_UNVERIFIED_ROLE_ID", ""
+        ).strip()
+        self.discord_verify_channel_id = os.environ.get(
+            "DISCORD_VERIFY_CHANNEL_ID", ""
+        ).strip()
+        self.discord_welcome_channel_id = os.environ.get(
+            "DISCORD_WELCOME_CHANNEL_ID", ""
+        ).strip()
+        self.discord_goodbye_channel_id = os.environ.get(
+            "DISCORD_GOODBYE_CHANNEL_ID", ""
+        ).strip()
+        self.discord_log_channel_id = os.environ.get(
+            "DISCORD_LOG_CHANNEL_ID", ""
+        ).strip()
+        self.discord_min_account_age_days = os.environ.get(
+            "DISCORD_MIN_ACCOUNT_AGE_DAYS", "0"
+        ).strip()
+        self.discord_welcome_message = os.environ.get(
+            "DISCORD_WELCOME_MESSAGE", ""
+        ).strip()
+        self.discord_goodbye_message = os.environ.get(
+            "DISCORD_GOODBYE_MESSAGE", ""
+        ).strip()
 
         # --- Proveedores de login OAuth habilitados ---
         # El login por correo/contraseña está siempre disponible.
