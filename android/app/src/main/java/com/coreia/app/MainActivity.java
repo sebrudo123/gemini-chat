@@ -52,7 +52,7 @@ public class MainActivity extends AppCompatActivity {
     private PermissionRequest pendingAudioRequest;
 
     private static final int REQUEST_MIC = 9002;
-    private static final int REQUEST_FILE_CHOOSER = 9003;
+    private static final int FILE_CHOOSER_REQUEST = 9003;
     private ValueCallback<Uri[]> filePathCallback;
 
     private static WeakReference<WebView> webViewRef = new WeakReference<>(null);
@@ -169,7 +169,7 @@ public class MainActivity extends AppCompatActivity {
             public boolean onShowFileChooser(
                     WebView view,
                     ValueCallback<Uri[]> callback,
-                    FileChooserParams params) {
+                    WebChromeClient.FileChooserParams params) {
                 if (filePathCallback != null) {
                     filePathCallback.onReceiveValue(null);
                 }
@@ -352,7 +352,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        if (requestCode == REQUEST_FILE_CHOOSER) {
+        if (requestCode == FILE_CHOOSER_REQUEST) {
             if (filePathCallback != null) {
                 Uri[] results = null;
                 if (resultCode == RESULT_OK && data != null) {
