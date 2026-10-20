@@ -142,6 +142,14 @@ def test_default_system_prompt_is_coreia(client, monkeypatch):
     headers = auth("600000000000000025")
     captured = {}
 
+    # Otros tests de administración pueden haber definido un prompt global.
+    db = main.SessionLocal()
+    try:
+        main.set_setting(db, "system_prompt", "")
+        db.commit()
+    finally:
+        db.close()
+
     def fake_reply(message, preferred_model=None, system_instruction=None, **kwargs):
         captured["system"] = system_instruction
         return "ok"

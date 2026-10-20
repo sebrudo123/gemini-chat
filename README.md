@@ -62,6 +62,8 @@ LLM_MODEL=                # vacío = llama-3.3-70b-versatile en Groq
 LLM_VISION_MODEL=         # vacío = llama-4-scout en Groq (imágenes)
 # LLM_PROVIDER=pollinations # sin clave: GPT-OSS 20B gratuito (texto)
 # OPENROUTER_API_KEY=...  # alternativa: https://openrouter.ai/keys
+#   En OpenRouter el modelo por defecto es minimax/minimax-m3.1-flash:free
+#   (texto, imágenes y 1M de contexto). Límite gratuito: ~50 peticiones/día.
 # LLM_BASE_URL=...        # para Ollama u otro servidor compatible con OpenAI
 # LLM_API_KEY=...
 
