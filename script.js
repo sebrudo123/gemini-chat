@@ -1130,7 +1130,7 @@ function buildMessage(role, text, image, meta = {}) {
   }
   body.appendChild(bubble);
 
-  if (meta.index !== undefined) {
+  if (meta.index !== undefined && !image) {
     attachMessageActions(body, { role, text, index: meta.index });
   }
 
