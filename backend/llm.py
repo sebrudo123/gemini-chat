@@ -34,8 +34,8 @@ DEFAULTS: dict[str, dict[str, str]] = {
     },
     "openrouter": {
         "base_url": "https://openrouter.ai/api/v1",
-        "model": "meta-llama/llama-3.3-70b-instruct:free",
-        "vision_model": "meta-llama/llama-3.2-11b-vision-instruct:free",
+        "model": "nvidia/nemotron-3-super-120b-a12b:free",
+        "vision_model": "nvidia/nemotron-3.5-super-vl:free",
     },
     "cerebras": {
         "base_url": "https://api.cerebras.ai/v1",
