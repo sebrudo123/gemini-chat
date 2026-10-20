@@ -1084,6 +1084,27 @@ def serve_favicon_svg() -> FileResponse:
     return _static_response("favicon.svg")
 
 
+BOT_PANEL_ROOT = STATIC_ROOT / "bot"
+
+
+@app.get("/bot", include_in_schema=False)
+@app.get("/bot/", include_in_schema=False)
+def serve_bot_panel() -> FileResponse:
+    """Panel de administración del bot (app aparte)."""
+    index = BOT_PANEL_ROOT / "index.html"
+    if not index.is_file():
+        raise HTTPException(status_code=404, detail="Panel del bot no disponible.")
+    return FileResponse(index, media_type="text/html")
+
+
+@app.get("/bot/bot.js", include_in_schema=False)
+def serve_bot_panel_js() -> FileResponse:
+    path = BOT_PANEL_ROOT / "bot.js"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Panel del bot no disponible.")
+    return FileResponse(path, media_type="application/javascript")
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     """Liveness: el proceso está vivo."""
@@ -4101,6 +4122,140 @@ async def admin_discord_bot_stop(
     """Apaga el bot desde el panel de administración."""
     await bot_manager.stop()
     record_audit(db, admin, "discord_bot.stop", "", "")
+    return {"bot": _admin_bot_payload(request)}
+
+
+# --------------------------------------------------------------------------- #
+# Administración completa del bot de Discord (panel dedicado)
+# --------------------------------------------------------------------------- #
+
+
+class BotGuildConfigUpdate(BaseModel):
+    values: dict[str, str] = Field(default_factory=dict)
+
+
+class BotTestMessageRequest(BaseModel):
+    channel_id: str = Field(..., min_length=1, max_length=32)
+    content: str = Field(..., min_length=1, max_length=1500)
+
+
+BOT_CONFIG_KEYS = (
+    "verify_role_id",
+    "unverified_role_id",
+    "verify_channel_id",
+    "welcome_channel_id",
+    "goodbye_channel_id",
+    "log_channel_id",
+    "min_account_age_days",
+    "welcome_message",
+    "goodbye_message",
+)
+
+
+@app.get("/api/admin/discord-bot/guilds")
+async def admin_discord_bot_guilds(
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """Servidores de Discord en los que está instalado el bot."""
+    try:
+        guilds = await discord_bot.fetch_bot_guilds()
+    except discord_bot.BotError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"guilds": guilds}
+
+
+@app.get("/api/admin/discord-bot/guilds/{guild_id}/inventory")
+async def admin_discord_bot_guild_inventory(
+    guild_id: int,
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """Canales y roles reales de un servidor, leídos desde Discord."""
+    if guild_id <= 0:
+        raise HTTPException(status_code=400, detail="Identificador de servidor no válido.")
+    try:
+        inventory = await discord_bot.fetch_guild_inventory(guild_id)
+    except discord_bot.BotError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return inventory
+
+
+@app.get("/api/admin/discord-bot/guilds/{guild_id}/config")
+def admin_discord_bot_guild_config(
+    guild_id: int,
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """Configuración guardada del bot para un servidor concreto."""
+    if guild_id <= 0:
+        raise HTTPException(status_code=400, detail="Identificador de servidor no válido.")
+    return {
+        "guild_id": str(guild_id),
+        "config": discord_bot.load_guild_config(guild_id),
+    }
+
+
+@app.patch("/api/admin/discord-bot/guilds/{guild_id}/config")
+def admin_discord_bot_guild_config_update(
+    guild_id: int,
+    payload: BotGuildConfigUpdate,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Guarda la configuración del bot en la base de datos."""
+    if guild_id <= 0:
+        raise HTTPException(status_code=400, detail="Identificador de servidor no válido.")
+    values: dict[str, str] = {}
+    for key, raw in (payload.values or {}).items():
+        if key not in BOT_CONFIG_KEYS or not isinstance(raw, str):
+            continue
+        values[key] = raw.strip()[:1500]
+    if not values:
+        raise HTTPException(
+            status_code=400,
+            detail="Ninguna opción reconocida para guardar.",
+        )
+    discord_bot.save_guild_config(guild_id, values)
+    record_audit(db, admin, "discord_bot.config", str(guild_id), ", ".join(values))
+    return {
+        "guild_id": str(guild_id),
+        "config": discord_bot.load_guild_config(guild_id),
+    }
+
+
+@app.post("/api/admin/discord-bot/guilds/{guild_id}/test-message")
+async def admin_discord_bot_test_message(
+    guild_id: int,
+    payload: BotTestMessageRequest,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Envía un mensaje de prueba para comprobar el bot y sus permisos."""
+    if guild_id <= 0:
+        raise HTTPException(status_code=400, detail="Identificador de servidor no válido.")
+    channel_id = discord_bot._snowflake(payload.channel_id)
+    if not channel_id:
+        raise HTTPException(status_code=400, detail="Identificador de canal no válido.")
+    try:
+        await discord_bot.send_channel_message(channel_id, payload.content)
+    except discord_bot.BotError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    record_audit(
+        db, admin, "discord_bot.test_message", str(guild_id), payload.channel_id
+    )
+    return {"ok": True}
+
+
+@app.post("/api/admin/discord-bot/sync")
+async def admin_discord_bot_sync(
+    request: Request,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Vuelve a sincronizar los comandos de barra en Discord."""
+    try:
+        await bot_manager.sync_commands()
+    except discord_bot.BotNotConfigured as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    record_audit(db, admin, "discord_bot.sync", "", "")
     return {"bot": _admin_bot_payload(request)}
 
 

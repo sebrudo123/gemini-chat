@@ -8,6 +8,7 @@ FastAPI y el panel de administración puede encenderlo y apagarlo.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections import defaultdict, deque
@@ -132,6 +133,133 @@ def save_guild_config(guild_id: int, values: dict[str, Any]) -> None:
         db.close()
 
 
+# --------------------------------------------------------------------------- #
+# Consultas a la API REST de Discord (inventario de servidores, canales, roles)
+# --------------------------------------------------------------------------- #
+
+DISCORD_API = "https://discord.com/api/v10"
+_TEXT_CHANNEL_TYPES = {0, 5, 15}  # texto, anuncios y foros
+
+
+async def _discord_request(
+    method: str,
+    path: str,
+    *,
+    token: str = "",
+    json_body: dict[str, Any] | None = None,
+) -> Any:
+    """Llama a la API REST de Discord con el token del bot."""
+    if discord is None:
+        raise BotUnavailable("discord.py no está instalado en el servidor.")
+    token = token or settings.discord_bot_token.strip()
+    if not token:
+        raise BotNotConfigured(
+            "Falta DISCORD_BOT_TOKEN en el servidor. Añádelo en Render y redespliega."
+        )
+    import aiohttp  # discord.py ya lo trae
+
+    url = f"{DISCORD_API}{path}"
+    headers: dict[str, str] = {"Authorization": f"Bot {token}"}
+    if json_body is not None:
+        headers["Content-Type"] = "application/json"
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.request(
+            method, url, headers=headers, json=json_body
+        ) as response:
+            raw = await response.text()
+            if response.status >= 400:
+                raise BotError(
+                    f"Discord respondió {response.status}: {raw[:200] or 'sin detalle'}"
+                )
+            if not raw:
+                return None
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                return raw
+
+
+async def fetch_bot_guilds(token: str = "") -> list[dict[str, Any]]:
+    """Lista los servidores en los que está el bot."""
+    data = await _discord_request("GET", "/users/@me/guilds", token=token)
+    return [
+        {
+            "id": str(item.get("id", "")),
+            "name": item.get("name", ""),
+            "icon": item.get("icon"),
+            "owner": bool(item.get("owner")),
+            "permissions": str(item.get("permissions", "0")),
+            "member_count": item.get("approximate_member_count"),
+        }
+        for item in (data if isinstance(data, list) else [])
+    ]
+
+
+async def fetch_guild_inventory(guild_id: int, token: str = "") -> dict[str, Any]:
+    """Devuelve servidores, canales y roles del servidor para el panel."""
+    base = f"/guilds/{int(guild_id)}"
+    guild, channels, roles = await asyncio.gather(
+        _discord_request("GET", f"{base}?with_counts=true", token=token),
+        _discord_request("GET", f"{base}/channels", token=token),
+        _discord_request("GET", f"{base}/roles", token=token),
+    )
+
+    channel_list = []
+    for channel in channels or []:
+        try:
+            channel_type = int(channel.get("type", -1))
+        except (TypeError, ValueError):
+            continue
+        channel_list.append(
+            {
+                "id": str(channel.get("id", "")),
+                "name": channel.get("name", ""),
+                "type": channel_type,
+                "text": channel_type in _TEXT_CHANNEL_TYPES,
+                "category": channel.get("parent_id"),
+            }
+        )
+    channel_list.sort(key=lambda item: (not item["text"], item["name"].lower()))
+
+    role_list = []
+    for role in roles or []:
+        try:
+            role_list.append(
+                {
+                    "id": str(role.get("id", "")),
+                    "name": role.get("name", ""),
+                    "color": role.get("color", 0),
+                    "managed": bool(role.get("managed")),
+                    "default": str(role.get("id", "")) == str(guild_id),  # @everyone
+                }
+            )
+        except (TypeError, ValueError):
+            continue
+    role_list.sort(key=lambda item: (-item.get("color", 0), item["name"].lower()))
+
+    return {
+        "guild": {
+            "id": str(guild.get("id", guild_id)),
+            "name": guild.get("name", ""),
+            "icon": guild.get("icon"),
+            "member_count": guild.get("approximate_member_count"),
+        },
+        "channels": channel_list,
+        "roles": role_list,
+    }
+
+
+async def send_channel_message(channel_id: int, content: str, token: str = "") -> None:
+    """Envía un mensaje de prueba a un canal concreto."""
+    await _discord_request(
+        "POST",
+        f"/channels/{int(channel_id)}/messages",
+        token=token,
+        json_body={"content": content, "allowed_mentions": {"parse": []}},
+    )
+
+
 def _snowflake(value: str | None) -> int | None:
     try:
         return int(value) if value else None
@@ -220,6 +348,7 @@ class BotManager:
         self._guild_id = ""
         self._allowed_channels: set[str] = set()
         self._client: Any = None
+        self._tree: Any = None
         self._task: asyncio.Task[None] | None = None
         self._ready = False
         self._user = ""
@@ -301,6 +430,23 @@ class BotManager:
                 task.cancel()
                 with suppress(asyncio.CancelledError):
                     await task
+            return self.status()
+
+    async def sync_commands(self) -> dict[str, Any]:
+        """Sincroniza los comandos de barra si el bot está encendido."""
+        async with self._lock:
+            if self._task is None or self._task.done() or self._client is None:
+                raise BotNotConfigured(
+                    "El bot no está encendido. Enciéndelo antes de sincronizar comandos."
+                )
+            if self._tree is None:
+                raise BotNotConfigured("El bot no tiene un árbol de comandos activo.")
+            if self._guild_id:
+                guild = discord.Object(id=int(self._guild_id))
+                self._tree.copy_global_to(guild=guild)
+                await self._tree.sync(guild=guild)
+            else:
+                await self._tree.sync()
             return self.status()
 
     def _make_verify_view(self) -> Any:
@@ -596,6 +742,7 @@ class BotManager:
             intents.members = True
         client = discord.Client(intents=intents)
         tree = app_commands.CommandTree(client)
+        self._tree = tree
         allowed_channels = set(self._allowed_channels)
         reply_fn = self._reply_fn
         system_prompt = self._system_prompt

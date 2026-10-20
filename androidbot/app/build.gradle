@@ -1,0 +1,68 @@
+plugins {
+    id "com.android.application"
+}
+
+def keystorePath = System.getenv("KEYSTORE_FILE")
+def hasKeystore = keystorePath != null && !keystorePath.trim().isEmpty() && file(keystorePath).exists()
+
+android {
+    namespace "com.coreia.botpanel"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.coreia.botpanel"
+        minSdk 24
+        targetSdk 34
+        versionCode System.getenv("VERSION_CODE") != null ? System.getenv("VERSION_CODE").toInteger() : 1
+        versionName System.getenv("VERSION_NAME") != null ? System.getenv("VERSION_NAME") : "1.0.0"
+
+        // URL del panel web del bot. Es donde FastAPI sirve /bot en el backend.
+        buildConfigField(
+            "String",
+            "PANEL_URL",
+            "\"${System.getenv("BOT_PANEL_URL") ?: "https://gemini-chat-backend-vyrz.onrender.com/bot"}\""
+        )
+    }
+
+    buildFeatures {
+        buildConfig = true
+    }
+
+    signingConfigs {
+        debug {
+            def debugKeystore = file("debug.keystore")
+            if (debugKeystore.exists()) {
+                storeFile debugKeystore
+                storePassword "android"
+                keyAlias "androiddebugkey"
+                keyPassword "android"
+            }
+        }
+        release {
+            if (hasKeystore) {
+                storeFile file(keystorePath)
+                storePassword System.getenv("KEYSTORE_PASSWORD")
+                keyAlias System.getenv("KEY_ALIAS")
+                keyPassword System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            shrinkResources false
+            signingConfig hasKeystore ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation "androidx.appcompat:appcompat:1.7.0"
+    implementation "androidx.core:core:1.13.1"
+}

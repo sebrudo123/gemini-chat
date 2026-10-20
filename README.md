@@ -419,6 +419,48 @@ registran en `canal_logs` si lo configuras.
 > siempre en línea sin depender de Render necesitas un plan de pago o moverlo a
 > otro host.
 
+## Panel del bot (aplicación aparte)
+
+### Panel web (móvil)
+
+El backend sirve un panel dedicado en `https://gemini-chat-backend-vyrz.onrender.com/bot`.
+Es una app móvil con el theme de Core IA que reinicia el token de sesión admin
+de Core IA y, desde ahí, permite configurar todo el bot de Discord:
+
+- **Resumen**: encender/apagar el bot, sincronizar los comandos de barra y
+  enviar un mensaje de prueba a un canal real.
+- **Servidores**: lista de servidores donde está el bot (leída de Discord), con
+  conteo de miembros.
+- **Canales**: todos los canales de texto reales del servidor, para asignar el
+  de verificación, bienvenida, despedida y registros.
+- **Roles**: todos los roles reales del servidor, para el rol de verificado y
+  el inicial; aquí también se ajusta la antigüedad mínima de la cuenta.
+- **Mensajes**: plantillas de bienvenida y despedida con sus placeholders
+  tocables (`{user}`, `{name}`, `{server}`, `{count}`…).
+
+Los datos se leen en vivo desde la API de Discord con el token del bot
+(`DISCORD_BOT_TOKEN`), nunca desde el repositorio. Cada servidor guarda su
+configuración en la tabla `app_settings` bajo la clave
+`discord:<guild_id>:<opción>`. Los cambios se aplican de inmediato.
+
+### Endpoints de administración (requieren sesión admin)
+
+- `GET  /api/admin/discord-bot` — estado del bot.
+- `POST /api/admin/discord-bot/start` · `…/stop` · `…/sync`.
+- `GET  /api/admin/discord-bot/guilds` — servidores del bot.
+- `GET  /api/admin/discord-bot/guilds/{id}/inventory` — canales y roles reales.
+- `GET  /api/admin/discord-bot/guilds/{id}/config`
+- `PATCH /api/admin/discord-bot/guilds/{id}/config` — guarda la configuración.
+- `POST /api/admin/discord-bot/guilds/{id}/test-message` — mensaje de prueba.
+
+### APK aparte
+
+`androidbot/` es una aplicación Android independiente
+(`com.coreia.botpanel`) que carga el panel web en un WebView apuntando a
+`BOT_PANEL_URL` (por defecto el `/bot` de Render). El workflow adicional
+`.github/workflows/android-bot.yml` compila y publica la APK como release de
+GitHub (`coreia-bot.apk`) cada vez que cambia `androidbot/` o `bot/`.
+
 ## Discord Rich Presence (app Android)
 
 La app de Android (`android/`) incluye presencia en Discord mediante el **SDK

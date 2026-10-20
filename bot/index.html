@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="description" content="Core IA Bot — panel de administración del bot de Discord" />
+  <meta name="theme-color" content="#171722" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Core IA Bot" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <title>Core IA Bot</title>
+  <style>
+    :root {
+      --bg: #171722;
+      --bg-2: #1c1c2a;
+      --bg-3: #13131c;
+      --surface: #20202f;
+      --surface-2: #262636;
+      --surface-hover: #2b2b3d;
+      --border: #2e2e40;
+      --border-strong: #3d3d55;
+      --text: #ececf6;
+      --muted: #b4b4c8;
+      --faint: #8b8ba6;
+      --accent: #8f7bff;
+      --accent-2: #6d5dfc;
+      --accent-soft: rgba(143, 123, 255, .14);
+      --grad: linear-gradient(135deg, #6d5dfc 0%, #8f7bff 50%, #b19fff 100%);
+      --ok: #22c55e;
+      --warn: #facc15;
+      --danger: #f87171;
+      --radius: 16px;
+      --radius-lg: 22px;
+      --shadow: 0 12px 34px rgba(0, 0, 0, .42);
+      --shadow-sm: 0 6px 18px rgba(0, 0, 0, .28);
+      --nav-h: 64px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; }
+    body {
+      font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+      background: radial-gradient(1100px 420px at 80% -10%, rgba(143,123,255,.16), transparent 60%),
+                  radial-gradient(900px 400px at 0% 110%, rgba(109,93,252,.14), transparent 60%),
+                  var(--bg);
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+      overflow: hidden;
+    }
+    .app { display: flex; flex-direction: column; height: 100dvh; }
+
+    /* Header */
+    header.topbar {
+      padding: 12px 16px 10px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(23,8,44,.35);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px;
+      position: sticky; top: 0; z-index: 20;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .logo {
+      width: 38px; height: 38px; border-radius: 12px;
+      background: var(--grad);
+      display: grid; place-items: center;
+      color: #fff; font-weight: 800; font-size: 17px;
+      box-shadow: var(--shadow-sm); flex: none;
+    }
+    .brand-text { min-width: 0; }
+    .brand h1 { font-size: 16px; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .brand p { font-size: 11.5px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 11px; border-radius: 999px; font-size: 11.5px; font-weight: 600;
+      border: 1px solid var(--border); background: var(--surface);
+      white-space: nowrap;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+    .dot.on { background: var(--ok); box-shadow: 0 0 8px rgba(34,197,94,.7); }
+    .dot.off { background: var(--danger); }
+    .dot.idle { background: var(--warn); }
+
+    /* Layout */
+    main { flex: 1; overflow-y: auto; padding: 16px 16px calc(var(--nav-h) + 26px); }
+    .panel { max-width: 720px; margin: 0 auto; }
+    section.view { display: none; }
+    section.view.active { display: block; animation: fade .18s ease; }
+    @keyframes fade { from { opacity: 0; transform: translateY(4px);} to { opacity: 1; transform: none; } }
+
+    .card {
+      background: linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,0));
+      background-color: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 16px;
+      margin-bottom: 14px;
+      box-shadow: var(--shadow-sm);
+    }
+    .card h2 { font-size: 14.5px; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+    .card h3 { font-size: 13px; color: var(--muted); font-weight: 600; margin-bottom: 12px; letter-spacing:.2px; }
+    .card .hint { font-size: 12px; color: var(--muted); margin: 4px 0 10px; line-height: 1.5; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; }
+    .row > * { flex: 1 1 120px; }
+
+    /* Inputs */
+    label.fl { display: block; font-size: 11.5px; color: var(--muted); margin: 12px 0 6px; font-weight: 600; letter-spacing:.2px; }
+    label.fl:first-child { margin-top: 0; }
+    input[type="text"], input[type="email"], input[type="password"], input[type="number"],
+    input[type="url"], textarea, select {
+      width: 100%;
+      padding: 12px 13px;
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: var(--text);
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+      transition: border .15s, background .15s;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+    select { background-image: none; }
+    input:focus, textarea:focus, select:focus { border-color: var(--accent-2); background: var(--surface-2); }
+    textarea { min-height: 96px; resize: vertical; line-height: 1.5; }
+    input::placeholder, textarea::placeholder { color: var(--faint); }
+
+    /* Botones */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      padding: 11px 15px; border-radius: 12px; border: 1px solid var(--border);
+      background: var(--surface-2); color: var(--text);
+      font-size: 13.5px; font-weight: 600; cursor: pointer;
+      transition: transform .12s, filter .12s, background .15s;
+      font-family: inherit; min-height: 44px;
+    }
+    .btn:active { transform: scale(.97); }
+    .btn:hover { background: var(--surface-hover); }
+    .btn.primary { background: var(--grad); color: #fff; border: none; font-weight: 700; box-shadow: var(--shadow-sm); }
+    .btn.primary:hover { filter: brightness(1.08); background: var(--grad); }
+    .btn.ghost { background: transparent; }
+    .btn.danger { background: rgba(248,113,113,.12); color: var(--danger); border-color: rgba(248,113,113,.3); }
+    .btn.small { padding: 8px 12px; font-size: 12.5px; min-height: 0; }
+    .btn.wide { width: 100%; }
+    .btn:disabled { opacity: .55; cursor: not-allowed; }
+
+    /* Listas */
+    .list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+    .item {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 13px; border-radius: 14px; border: 1px solid var(--border);
+      background: var(--bg-2); cursor: pointer; transition: background .15s, border-color .15s;
+    }
+    .item:hover, .item.sel { background: var(--surface-hover); border-color: var(--accent-2); }
+    .item .ico {
+      width: 34px; height: 34px; border-radius: 10px; flex: none;
+      display: grid; place-items: center; font-size: 15px;
+      background: var(--accent-soft); color: var(--accent);
+      border: 1px solid rgba(143,123,255,.2);
+    }
+    .item .meta { min-width: 0; flex: 1; }
+    .item .meta b { display: block; font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .item .meta span { display: block; font-size: 11px; color: var(--faint); margin-top: 2px; }
+    .item .right { flex: none; font-size: 11px; color: var(--faint); text-align: right; }
+    .item .badge-check { color: var(--ok); font-size: 14px; }
+    .role-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--faint); flex: none; }
+    .tag {
+      display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 10.5px;
+      background: var(--accent-soft); color: var(--accent); border: 1px solid rgba(143,123,255,.25);
+      font-weight: 600; margin-left: 6px; vertical-align: middle;
+    }
+    .tag.muted { background: var(--surface-2); color: var(--faint); border-color: var(--border); }
+
+    /* Stats grid */
+    .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .stat { padding: 13px; border-radius: 14px; border: 1px solid var(--border); background: var(--bg-2); }
+    .stat .k { font-size: 11px; color: var(--faint); margin-bottom: 4px; letter-spacing:.3px; }
+    .stat .v { font-size: 16px; font-weight: 700; color: var(--text); word-break: break-word; }
+    .stat .v.big { font-size: 22px; }
+
+    /* Chip placeholders */
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
+    .chip {
+      padding: 5px 10px; border-radius: 999px; font-size: 11px; font-weight: 600;
+      background: var(--surface-2); border: 1px solid var(--border); color: var(--muted);
+      cursor: pointer; user-select: none; font-family: ui-monospace, monospace;
+      transition: background .15s, color .15s;
+    }
+    .chip:active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-2); }
+
+    /* Toast */
+    .toast {
+      position: fixed; left: 50%; bottom: calc(var(--nav-h) + 18px);
+      transform: translate(-50%, 16px); opacity: 0;
+      background: var(--surface-2); border: 1px solid var(--border-strong);
+      color: var(--text); padding: 11px 16px; border-radius: 12px;
+      font-size: 13px; box-shadow: var(--shadow);
+      pointer-events: none; transition: all .2s ease; z-index: 100;
+      max-width: calc(100% - 32px); text-align: center;
+    }
+    .toast.show { transform: translate(-50%, 0); opacity: 1; }
+    .toast.ok { border-color: rgba(34,197,94,.45); }
+    .toast.err { border-color: rgba(248,113,113,.45); }
+
+    /* Login */
+    .login-wrap { display: flex; align-items: center; justify-content: center; height: 100dvh; padding: 20px; }
+    .login-card { width: 100%; max-width: 380px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 22px; box-shadow: var(--shadow); }
+    .login-card .logo { width: 52px; height: 52px; font-size: 24px; margin: 0 auto 14px; border-radius: 16px; }
+    .login-card h2 { text-align: center; font-size: 18px; }
+    .login-card p.sub { text-align: center; font-size: 12.5px; color: var(--muted); margin: 4px 0 18px; }
+    .divider { display:flex; align-items:center; gap:10px; margin: 16px 0; color: var(--faint); font-size: 11px; }
+    .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+
+    /* Nav */
+    nav.tabs {
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 20;
+      display: flex; height: var(--nav-h);
+      background: rgba(23,23,34,.94); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      border-top: 1px solid var(--border);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    nav.tabs button {
+      flex: 1; background: none; border: none; color: var(--faint);
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+      font-size: 10.5px; font-weight: 600; font-family: inherit; cursor: pointer;
+      padding-top: 6px;
+    }
+    nav.tabs button .ic { font-size: 18px; line-height: 1; }
+    nav.tabs button.active { color: var(--accent); }
+    nav.tabs button:hover { color: var(--muted); background: transparent; }
+    nav.tabs button.active:hover { color: var(--accent); }
+
+    .spinner { width: 15px; height: 15px; border: 2px solid rgba(255,255,255,.25); border-top-color: #fff; border-radius: 50%; display: inline-block; animation: spin .8s linear infinite; }
+    .spinner.dark { border-color: rgba(0,0,0,.2); border-top-color: var(--accent-2); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .empty { color: var(--faint); font-size: 12.5px; text-align: center; padding: 18px 0; }
+    .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--accent); word-break: break-all; }
+    .msgbox { display:none; padding:10px 12px; border-radius:12px; font-size:12.5px; margin-bottom: 12px; }
+    .msgbox.show { display:block; }
+    .msgbox.err { background: rgba(248,113,113,.1); border:1px solid rgba(248,113,113,.3); color: var(--danger); }
+    .skeleton { color: var(--faint); font-size: 12px; padding: 12px; text-align: center; }
+    @media (min-width: 720px) { .grid { grid-template-columns: repeat(4,1fr); } }
+  </style>
+</head>
+<body>
+  <div class="login-wrap" id="loginView">
+    <div class="login-card">
+      <div class="logo">C</div>
+      <h2>Core IA Bot</h2>
+      <p class="sub">Panel de administración del bot de Discord</p>
+      <div class="msgbox err" id="loginMsg"></div>
+      <label class="fl">Correo</label>
+      <input type="email" id="loginEmail" placeholder="admin@coreia.app" autocomplete="username" />
+      <label class="fl">Contraseña</label>
+      <input type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password" />
+      <button class="btn primary wide" id="loginBtn" style="margin-top:14px">Entrar</button>
+      <div class="divider">o usa un token</div>
+      <label class="fl">Token de la app principal</label>
+      <input type="text" id="loginToken" placeholder="eyJhbGciOiJodHRwczovL2l0c2Rhbmdlcm91cy5pb3Qv…" />
+      <button class="btn ghost wide" id="tokenBtn" style="margin-top:10px">Usar token</button>
+      <p class="hint" style="margin-top:12px;text-align:center">
+        Necesitas una cuenta <b>admin</b> de Core IA. La sesión se guarda solo en este dispositivo.
+      </p>
+    </div>
+  </div>
+
+  <div class="app" id="appView" style="display:none">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">C</div>
+        <div class="brand-text">
+          <h1 id="guildTitle">Core IA Bot</h1>
+          <p id="botSub">Bot de Discord · panel de control</p>
+        </div>
+      </div>
+      <div class="status-pill" id="botStatusPill">
+        <span class="dot idle" id="botStatusDot"></span>
+        <span id="botStatusText">…</span>
+      </div>
+    </header>
+
+    <main>
+      <div class="panel">
+        <section class="view active" id="view-resumen">
+          <div class="card">
+            <h2>🤖 Estado del bot</h2>
+            <p class="hint" id="botHint">Cargando…</p>
+            <div class="row" style="margin-top:10px">
+              <button class="btn primary" id="btnStart">▶ Encender</button>
+              <button class="btn danger" id="btnStop">■ Apagar</button>
+            </div>
+            <div class="row" style="margin-top:10px">
+              <button class="btn ghost" id="btnSync">⟳ Sincronizar /comandos</button>
+            </div>
+          </div>
+          <div class="card">
+            <h2>📊 Resumen</h2>
+            <div class="grid">
+              <div class="stat"><div class="k">Servidores</div><div class="v big" id="statGuilds">—</div></div>
+              <div class="stat"><div class="k">Canales</div><div class="v big" id="statChannels">—</div></div>
+              <div class="stat"><div class="k">Roles</div><div class="v big" id="statRoles">—</div></div>
+              <div class="stat"><div class="k">Verificación</div><div class="v" id="statVerify">—</div></div>
+            </div>
+          </div>
+          <div class="card">
+            <h2>🧪 Probar mensaje</h2>
+            <p class="hint">Envía un mensaje real mediante el bot a un canal de texto. Sirve para comprobar permisos.</p>
+            <label class="fl">Canal</label>
+            <select id="testChannel"></select>
+            <label class="fl">Contenido</label>
+            <textarea id="testContent" placeholder="Hola, esto es una prueba de Core IA."></textarea>
+            <button class="btn primary wide" id="btnTest" style="margin-top:10px">Enviar prueba</button>
+          </div>
+        </section>
+
+        <section class="view" id="view-servidores">
+          <div class="card">
+            <h2>🏰 Servidores</h2>
+            <p class="hint">Elige el servidor de Discord que vas a configurar. Cada uno guarda su propia configuración.</p>
+            <div class="list" id="guildList"><div class="skeleton">Cargando…</div></div>
+          </div>
+        </section>
+
+        <section class="view" id="view-canales">
+          <div class="card">
+            <h2>💬 Configuración de canales</h2>
+            <p class="hint">Se leen todos los canales de texto del servidor. Toca el canal que quieras usar en cada apartado.</p>
+            <div id="channelConfig">
+              <label class="fl"># Canal de verificación</label>
+              <select id="cfgVerifyChannel"></select>
+              <label class="fl"># Canal de bienvenida</label>
+              <select id="cfgWelcomeChannel"></select>
+              <label class="fl"># Canal de despedida</label>
+              <select id="cfgGoodbyeChannel"></select>
+              <label class="fl"># Canal de registros</label>
+              <select id="cfgLogChannel"></select>
+              <button class="btn primary wide" id="btnSaveChannels" style="margin-top:12px">Guardar canales</button>
+            </div>
+            <div class="empty" id="noChannels" style="display:none">No hay canales de texto. Selecciona un servidor primero.</div>
+          </div>
+        </section>
+
+        <section class="view" id="view-roles">
+          <div class="card">
+            <h2>🛡️ Configuración de roles</h2>
+            <p class="hint">Roles leídos del servidor. El rol de verificación no debe ser @everyone ni un rol de integración.</p>
+            <label class="fl">Rol de verificado</label>
+            <select id="cfgVerifyRole"></select>
+            <label class="fl">Rol inicial (no verificado)</label>
+            <select id="cfgUnverifiedRole"></select>
+            <label class="fl">Antigüedad mínima de la cuenta (días)</label>
+            <input type="number" id="cfgMinAge" min="0" max="365" placeholder="0 = sin límite" />
+            <button class="btn primary wide" id="btnSaveRoles" style="margin-top:12px">Guardar roles</button>
+          </div>
+          <div class="card">
+            <h2>👥 Lista de roles del servidor</h2>
+            <div class="list" id="roleList"><div class="skeleton">Cargando…</div></div>
+          </div>
+        </section>
+
+        <section class="view" id="view-mensajes">
+          <div class="card">
+            <h2>👋 Mensaje de bienvenida</h2>
+            <p class="hint">Se envía cuando alguien entra al servidor. Usa los placeholders que desees.</p>
+            <div class="chips" data-for="cfgWelcomeMsg">
+              <span class="chip">{user}</span><span class="chip">{name}</span><span class="chip">{server}</span>
+              <span class="chip">{count}</span><span class="chip">{created}</span><span class="chip">{joined}</span>
+              <span class="chip">{verify_channel}</span>
+            </div>
+            <textarea id="cfgWelcomeMsg" placeholder="¡Bienvenido a {server}, {user}!"></textarea>
+            <button class="btn primary wide" id="btnSaveWelcome" style="margin-top:10px">Guardar bienvenida</button>
+          </div>
+          <div class="card">
+            <h2>🚪 Mensaje de despedida</h2>
+            <p class="hint">Se envía cuando alguien sale del servidor.</p>
+            <div class="chips" data-for="cfgGoodbyeMsg">
+              <span class="chip">{user}</span><span class="chip">{name}</span><span class="chip">{server}</span>
+              <span class="chip">{count}</span><span class="chip">{joined}</span>
+            </div>
+            <textarea id="cfgGoodbyeMsg" placeholder="{name} ha salido de {server}. ¡Hasta pronto!"></textarea>
+            <button class="btn primary wide" id="btnSaveGoodbye" style="margin-top:10px">Guardar despedida</button>
+          </div>
+        </section>
+
+        <section class="view" id="view-ajustes">
+          <div class="card">
+            <h2>⚙️ Ajustes del panel</h2>
+            <div class="grid">
+              <div class="stat"><div class="k">Servidor actual</div><div class="v" id="setGuildId">—</div></div>
+              <div class="stat"><div class="k">Bot</div><div class="v" id="setBotUser">—</div></div>
+            </div>
+            <button class="btn ghost wide" id="btnReload" style="margin-top:12px">⟳ Recargar datos</button>
+            <button class="btn danger wide" id="btnLogout" style="margin-top:10px">Cerrar sesión</button>
+          </div>
+          <div class="card">
+            <h2>ℹ️ Cómo funciona</h2>
+            <p class="hint" style="margin-bottom:8px">
+              Este panel lee en tiempo real los <b>canales</b> y <b>roles</b> del servidor desde Discord.
+              Cada cambio se guarda en la base de datos de Core IA y el bot lo aplica
+              de inmediato en la siguiente interacción.
+            </p>
+            <p class="hint">
+              Los comandos <span class="code">/verificacion configurar</span>, <span class="code">/verificacion panel</span>,
+              <span class="code">/verificacion estado</span> y <span class="code">/verificacion desactivar</span>
+              también están disponibles dentro de Discord.
+            </p>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <nav class="tabs">
+      <button data-view="resumen" class="active"><span class="ic">🏠</span>Resumen</button>
+      <button data-view="servidores"><span class="ic">🏰</span>Servidores</button>
+      <button data-view="canales"><span class="ic">💬</span>Canales</button>
+      <button data-view="roles"><span class="ic">🛡️</span>Roles</button>
+      <button data-view="mensajes"><span class="ic">✍️</span>Mensajes</button>
+      <button data-view="ajustes"><span class="ic">⚙️</span>Ajustes</button>
+    </nav>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="/bot/bot.js"></script>
+</body>
+</html>
