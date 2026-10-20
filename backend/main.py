@@ -22,7 +22,7 @@ import re
 import secrets
 import smtplib
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from email.message import EmailMessage
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -34,7 +34,13 @@ import httpx
 import pyotp
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from google import genai
 from google.genai import types
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -638,6 +644,62 @@ def generate_reply(
                 if use_tools and not is_transient_error(exc):
                     use_tools = False
                     continue
+                if not is_transient_error(exc):
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Error al contactar con Gemini ({model}): {exc}",
+                    ) from exc
+                if attempt < attempts - 1:
+                    time.sleep(1.2 * (attempt + 1))
+
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Core IA está experimentando alta demanda. Inténtalo de nuevo en unos segundos.",
+    ) from last_error
+
+
+def stream_reply(
+    message: str,
+    preferred_model: str | None = None,
+    system_instruction: str | None = None,
+    temperature: float | None = None,
+) -> Iterator[str]:
+    """Genera una respuesta en streaming, con reintentos y modelos de respaldo.
+
+    El *automatic function calling* del SDK no está disponible en streaming, así
+    que este modo no usa herramientas (el modo no-streaming sí).
+    """
+    primary = preferred_model or settings.ai_model
+    models = [primary] + [
+        m for m in ([settings.ai_model] + settings.ai_model_fallbacks) if m != primary
+    ]
+    attempts = max(1, settings.ai_retries)
+    last_error: Exception | None = None
+
+    for model in models:
+        for attempt in range(attempts):
+            yielded = False
+            try:
+                config_kwargs: dict[str, Any] = {}
+                if system_instruction:
+                    config_kwargs["system_instruction"] = system_instruction
+                if temperature is not None:
+                    config_kwargs["temperature"] = temperature
+                config = types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
+                stream = genai_client.models.generate_content_stream(
+                    model=model, contents=message, config=config
+                )
+                for chunk in stream:
+                    text = getattr(chunk, "text", None)
+                    if text:
+                        yielded = True
+                        yield text
+                return
+            except Exception as exc:  # noqa: BLE001 - se decide según el tipo de error
+                last_error = exc
+                # Si ya enviamos texto no podemos cambiar de modelo sin duplicarlo.
+                if yielded:
+                    raise
                 if not is_transient_error(exc):
                     raise HTTPException(
                         status_code=502,
@@ -1501,6 +1563,187 @@ def auth_logout(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, b
 # --------------------------------------------------------------------------- #
 # Chat con Gemini
 # --------------------------------------------------------------------------- #
+
+def prepare_chat(
+    payload: ChatRequest,
+    profile: dict[str, Any],
+    db: Session,
+) -> dict[str, Any]:
+    """Valida el mensaje y prepara todo lo necesario para responder.
+
+    Se comparte entre el chat normal y el de streaming para que ambos apliquen
+    exactamente las mismas comprobaciones (flags, cuotas, palabras prohibidas…).
+    """
+    message = payload.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="El mensaje no puede estar vacío.")
+    if not flag_enabled(db, "chat"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="El chat está desactivado temporalmente por el administrador.",
+        )
+    if genai_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="El servidor no tiene configurada AI_API_KEY.",
+        )
+
+    banned = get_setting(db, "banned_words", "")
+    hit = banned_words_hit(message, banned) if banned else None
+    if hit:
+        raise HTTPException(
+            status_code=400,
+            detail="Tu mensaje contiene contenido no permitido.",
+        )
+
+    user = upsert_user(db, profile)
+    _ensure_email_verified(user)
+    user_settings = get_settings_row(db, user)
+    check_quota(db, user, "message")
+
+    conversation = None
+    if payload.conversation_id is not None:
+        conversation = (
+            db.query(Conversation)
+            .filter(
+                Conversation.id == payload.conversation_id,
+                Conversation.user_id == user.id,
+            )
+            .first()
+        )
+    if conversation is None:
+        conversation = Conversation(user_id=user.id, title=message[:60] or "Nuevo chat")
+        db.add(conversation)
+        db.commit()
+        db.refresh(conversation)
+
+    db.add(Message(conversation_id=conversation.id, role="user", content=message))
+    conversation.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+    use_rag = user_settings.use_rag if payload.use_rag is None else payload.use_rag
+    context = retrieve_context(db, user, message) if use_rag else ""
+    prompt = message
+    if context:
+        prompt = (
+            "Usa el siguiente contexto del usuario para responder si es relevante. "
+            "Si no lo es, responde con tu propio conocimiento.\n\n"
+            f"Contexto:\n{context}\n\nPregunta: {message}"
+        )
+
+    system_prompt = get_setting(db, "system_prompt", "").strip() or None
+    default_model = get_setting(db, "default_model", "").strip() or None
+    temperature_raw = get_setting(db, "temperature", "").strip()
+    try:
+        temperature = float(temperature_raw) if temperature_raw else None
+    except ValueError:
+        temperature = None
+
+    return {
+        "user": user,
+        "conversation": conversation,
+        "prompt": prompt,
+        "sources": context.count("\n\n") + 1 if context else 0,
+        "system_prompt": system_prompt,
+        "temperature": temperature,
+        "model": user_settings.preferred_model or default_model,
+    }
+
+
+def save_assistant_reply(db: Session, conversation: Conversation, reply: str) -> None:
+    """Guarda la respuesta del asistente y actualiza la conversación."""
+    db.add(Message(conversation_id=conversation.id, role="assistant", content=reply))
+    conversation.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+
+@app.post("/api/chat/stream")
+@limiter.limit(settings.rate_limit)
+def chat_stream(
+    request: Request,
+    payload: ChatRequest,
+    profile: dict[str, Any] = Depends(require_founder_2fa),
+    _: dict[str, Any] = Depends(require_email_verified),
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    """Genera la respuesta en streaming mediante Server-Sent Events (SSE)."""
+    prepared = prepare_chat(payload, profile, db)
+    conversation: Conversation = prepared["conversation"]
+
+    # El streaming no permite el automatic function calling, así que la fecha
+    # y hora se inyectan en el prompt de sistema (cubre las preguntas de fecha).
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    system_prompt = prepared["system_prompt"]
+    extra = f"Fecha y hora actual: {stamp}."
+    system_prompt = f"{system_prompt}\n\n{extra}" if system_prompt else extra
+
+    def event(data: dict[str, Any]) -> str:
+        return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    def generate() -> Iterator[str]:
+        parts: list[str] = []
+        saved = False
+        try:
+            yield event(
+                {
+                    "type": "start",
+                    "conversation_id": conversation.id,
+                    "sources": prepared["sources"],
+                }
+            )
+            for piece in stream_reply(
+                prepared["prompt"],
+                preferred_model=prepared["model"],
+                system_instruction=system_prompt,
+                temperature=prepared["temperature"],
+            ):
+                parts.append(piece)
+                yield event({"type": "delta", "text": piece})
+
+            reply = "".join(parts).strip()
+            if reply:
+                save_assistant_reply(db, conversation, reply)
+                bump_usage(db, get_usage_row(db, prepared["user"]), "message")
+                saved = True
+            else:
+                reply = "Sin respuesta."
+            yield event(
+                {
+                    "type": "done",
+                    "conversation_id": conversation.id,
+                    "reply": reply,
+                    "sources": prepared["sources"],
+                }
+            )
+        except HTTPException as exc:
+            yield event({"type": "error", "message": str(exc.detail)})
+        except Exception:  # noqa: BLE001 - el cliente recibe un error legible
+            yield event(
+                {
+                    "type": "error",
+                    "message": "Se cortó la respuesta. Inténtalo de nuevo.",
+                }
+            )
+        finally:
+            # Si el usuario pulsa "Detener", conservamos la parte generada.
+            if not saved:
+                partial = "".join(parts).strip()
+                if partial:
+                    try:
+                        save_assistant_reply(db, conversation, partial)
+                    except Exception:  # noqa: BLE001 - nunca romper el cierre
+                        db.rollback()
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
 
 @app.post("/api/chat", response_model=ChatResponse)
 @limiter.limit(settings.rate_limit)

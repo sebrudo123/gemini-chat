@@ -65,6 +65,24 @@ def test_chat_persists_conversation(client, monkeypatch):
     assert data["conversation_id"] is not None
 
 
+def test_chat_stream_sends_sse_and_persists(client, monkeypatch):
+    monkeypatch.setattr(
+        main, "stream_reply", lambda *a, **k: iter(["Hola", ", ", "mundo"])
+    )
+    with client.stream(
+        "POST", "/api/chat/stream", json={"message": "hola"}, headers=auth_header()
+    ) as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        body = "".join(response.iter_text())
+
+    assert '"type": "start"' in body
+    assert '"type": "delta"' in body
+    assert "mundo" in body
+    assert '"type": "done"' in body
+    assert "Hola, mundo" in body
+
+
 def test_chat_rate_limit_headers(client, monkeypatch):
     monkeypatch.setattr(main, "generate_reply", lambda message, preferred_model=None, **_: "ok")
     response = client.post("/api/chat", json={"message": "hola"}, headers=auth_header())

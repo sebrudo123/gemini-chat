@@ -138,6 +138,7 @@ let conversations = [];
 let messages = [];
 let currentChatId = null;
 let sending = false;
+let streamController = null;
 let imageMode = false;
 let ttsEnabled = localStorage.getItem(TTS_KEY) === "1";
 let settings = { theme: "dark", preferred_model: null, use_rag: true };
@@ -948,6 +949,139 @@ function scrollToBottom() {
 /* Envío de mensajes                                                   */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* Respuestas en streaming (SSE)                                       */
+/* ------------------------------------------------------------------ */
+
+function isNearBottom() {
+  return scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 140;
+}
+
+async function streamChatMessage(text) {
+  const controller = new AbortController();
+  streamController = controller;
+  updateSendState();
+
+  let row = null;
+  let bubble = null;
+  let reply = "";
+  let conversationId = currentChatId;
+
+  function ensureRow() {
+    if (row) return;
+    removeTyping();
+    row = document.createElement("div");
+    row.className = "msg bot";
+    const icon = document.createElement("div");
+    icon.className = "role-icon";
+    icon.textContent = "C";
+    bubble = document.createElement("div");
+    bubble.className = "bubble streaming";
+    row.append(icon, bubble);
+    chatEl.appendChild(row);
+    welcomeEl.style.display = "none";
+  }
+
+  function paint() {
+    ensureRow();
+    const stick = isNearBottom();
+    bubble.textContent = reply;
+    if (stick) scrollToBottom();
+  }
+
+  function finalize() {
+    const final_ = reply.trim();
+    if (!final_) {
+      if (row) row.remove();
+      removeTyping();
+      return "";
+    }
+    ensureRow();
+    bubble.classList.remove("streaming");
+    bubble.innerHTML = "";
+    renderRich(bubble, final_);
+    return final_;
+  }
+
+  let aborted = false;
+  let failure = null;
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/chat/stream`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ message: text, conversation_id: currentChatId }),
+      signal: controller.signal,
+    });
+
+    if (res.status === 401) {
+      clearSession();
+      throw new Error("Sesión expirada. Vuelve a iniciar sesión.");
+    }
+    if (!res.ok) {
+      let detail = `Error ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data && data.detail) detail = data.detail;
+      } catch (_) { /* respuesta sin JSON */ }
+      throw new Error(detail);
+    }
+    if (!res.body) throw new Error("Tu navegador no permite respuestas en streaming.");
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+
+      let index;
+      while ((index = buffer.indexOf("\n\n")) !== -1) {
+        const raw = buffer.slice(0, index);
+        buffer = buffer.slice(index + 2);
+        const line = raw.split("\n").find((item) => item.startsWith("data:"));
+        if (!line) continue;
+        let payload;
+        try {
+          payload = JSON.parse(line.slice(5).trim());
+        } catch (_) {
+          continue;
+        }
+        if (payload.type === "start") {
+          if (payload.conversation_id) conversationId = payload.conversation_id;
+          ensureRow();
+        } else if (payload.type === "delta") {
+          reply += payload.text || "";
+          paint();
+        } else if (payload.type === "done") {
+          if (payload.conversation_id) conversationId = payload.conversation_id;
+          if (payload.reply) reply = payload.reply;
+        } else if (payload.type === "error") {
+          throw new Error(payload.message || "No se pudo generar la respuesta.");
+        }
+      }
+    }
+  } catch (err) {
+    if (err.name === "AbortError") {
+      aborted = true;
+    } else {
+      failure = err;
+    }
+  } finally {
+    if (streamController === controller) streamController = null;
+    updateSendState();
+  }
+
+  const finalReply = finalize();
+  if (finalReply) addMessage("bot", finalReply);
+  if (failure) throw failure;
+  return { reply: finalReply, conversationId, aborted };
+}
+
 async function sendMessage(text) {
   if (!currentUser) {
     renderError("Inicia sesión con Discord para chatear.");
@@ -974,17 +1108,13 @@ async function sendMessage(text) {
       renderChat();
       loadUsage();
     } else {
-      const data = await api("/api/chat", {
-        method: "POST",
-        body: JSON.stringify({ message: text, conversation_id: currentChatId }),
-      });
-      removeTyping();
-      if (data.conversation_id) currentChatId = data.conversation_id;
-      const reply = data.reply || "Sin respuesta.";
-      addMessage("bot", reply);
-      renderChat();
-      if (ttsEnabled) speak(reply);
-      notifyReply(reply);
+      const result = await streamChatMessage(text);
+      if (result.conversationId) currentChatId = result.conversationId;
+      if (result.reply) {
+        if (ttsEnabled) speak(result.reply);
+        notifyReply(result.reply);
+      }
+      if (result.aborted) showToast("Respuesta detenida.");
       await loadConversations();
       loadUsage();
     }
@@ -994,7 +1124,7 @@ async function sendMessage(text) {
   } finally {
     sending = false;
     updateSendState();
-  updateComposerForVerification();
+    updateComposerForVerification();
     inputEl.focus();
   }
 }
@@ -1072,8 +1202,25 @@ function updateComposerForVerification() {
 
 
 function updateSendState() {
+  if (streamController) {
+    // Mientras se genera, el botón de enviar se convierte en "Detener".
+    sendEl.disabled = false;
+    sendEl.classList.add("stopping");
+    sendEl.setAttribute("aria-label", "Detener respuesta");
+    return;
+  }
+  sendEl.classList.remove("stopping");
+  sendEl.setAttribute("aria-label", "Enviar");
   sendEl.disabled =
     sending || inputEl.disabled || founder2faBlocked() || inputEl.value.trim().length === 0;
+}
+
+function stopStreaming() {
+  if (streamController) {
+    streamController.abort();
+    streamController = null;
+    updateSendState();
+  }
 }
 
 function autoResize() {
@@ -1099,6 +1246,21 @@ formEl.addEventListener("submit", (e) => {
   updateSendState();
   updateComposerForVerification();
   sendMessage(text);
+});
+
+// Durante la generación, el botón actúa como "Detener" (o con Escape).
+sendEl.addEventListener("click", (event) => {
+  if (streamController) {
+    event.preventDefault();
+    stopStreaming();
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && streamController) {
+    event.preventDefault();
+    stopStreaming();
+  }
 });
 
 inputEl.addEventListener("input", () => {
