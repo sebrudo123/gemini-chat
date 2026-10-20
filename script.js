@@ -25,6 +25,7 @@ const authSwitchBtn = document.getElementById("auth-switch-btn");
 const authSwitchText = document.getElementById("auth-switch-text");
 const scrollEl = document.getElementById("chat-scroll");
 const historyEl = document.getElementById("history");
+const historySearchEl = document.getElementById("history-search");
 const profileEl = document.getElementById("profile");
 const formEl = document.getElementById("composer");
 const inputEl = document.getElementById("input");
@@ -135,6 +136,8 @@ const twofaLoginRecovery = document.getElementById("twofa-login-recovery");
 let token = localStorage.getItem(TOKEN_KEY) || null;
 let currentUser = null;
 let conversations = [];
+let folders = [];
+let historyResults = null;
 let messages = [];
 let currentChatId = null;
 let sending = false;
@@ -494,59 +497,248 @@ function renderProfile() {
   profileEl.appendChild(card);
 }
 
+function historySection(text, action) {
+  const section = document.createElement("div");
+  section.className = "history-section";
+  const label = document.createElement("span");
+  label.textContent = text;
+  section.appendChild(label);
+  if (action) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "history-section-btn";
+    button.textContent = action.label;
+    button.title = action.title || "";
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      action.onClick();
+    });
+    section.appendChild(button);
+  }
+  return section;
+}
+
+function historyEmpty(text) {
+  const empty = document.createElement("div");
+  empty.className = "history-empty";
+  empty.textContent = text;
+  return empty;
+}
+
+function historyItem(chat) {
+  const item = document.createElement("div");
+  item.className = "history-item" + (chat.id === currentChatId ? " active" : "");
+
+  const dot = document.createElement("span");
+  dot.className = "dot";
+
+  const textWrap = document.createElement("div");
+  textWrap.className = "history-text";
+
+  const label = document.createElement("span");
+  label.className = "history-label";
+  label.textContent = chat.title || "Nuevo chat";
+  textWrap.appendChild(label);
+
+  if (chat.snippet) {
+    const snippet = document.createElement("span");
+    snippet.className = "history-snippet";
+    snippet.textContent = chat.snippet;
+    textWrap.appendChild(snippet);
+  }
+
+  const star = document.createElement("button");
+  star.type = "button";
+  star.className = "history-star" + (chat.is_favorite ? " on" : "");
+  star.title = chat.is_favorite ? "Quitar de favoritos" : "Añadir a favoritos";
+  star.textContent = chat.is_favorite ? "★" : "☆";
+  star.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleFavorite(chat.id);
+  });
+
+  const actions = document.createElement("button");
+  actions.type = "button";
+  actions.className = "history-action";
+  actions.title = "Opciones";
+  actions.textContent = "⋯";
+  actions.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openChatMenu(chat);
+  });
+
+  item.append(dot, textWrap, star, actions);
+  item.addEventListener("click", () => {
+    openConversation(chat.id);
+    closeSidebar();
+  });
+  return item;
+}
+
 function renderHistory() {
   historyEl.innerHTML = "";
   if (!currentUser) {
-    const empty = document.createElement("div");
-    empty.className = "history-item";
-    empty.style.cursor = "default";
-    empty.textContent = "Inicia sesión para guardar chats";
-    historyEl.appendChild(empty);
+    historyEl.appendChild(historyEmpty("Inicia sesión para guardar chats"));
     return;
   }
 
-  if (!conversations.length) {
-    const empty = document.createElement("div");
-    empty.className = "history-item";
-    empty.style.cursor = "default";
-    empty.textContent = "Sin conversaciones todavía";
-    historyEl.appendChild(empty);
+  const query = (historySearchEl.value || "").trim();
+  if (query) {
+    const results = historyResults || [];
+    if (!results.length) {
+      historyEl.appendChild(historyEmpty("Sin resultados"));
+      return;
+    }
+    historyEl.appendChild(historySection(`Resultados · ${results.length}`));
+    results.forEach((chat) => historyEl.appendChild(historyItem(chat)));
     return;
   }
 
-  conversations.forEach((chat) => {
-    const item = document.createElement("div");
-    item.className = "history-item" + (chat.id === currentChatId ? " active" : "");
+  const favorites = conversations.filter((chat) => chat.is_favorite);
+  if (favorites.length) {
+    historyEl.appendChild(historySection("Favoritos"));
+    favorites.forEach((chat) => historyEl.appendChild(historyItem(chat)));
+  }
 
-    const dot = document.createElement("span");
-    dot.className = "dot";
-
-    const label = document.createElement("span");
-    label.className = "history-label";
-    label.textContent = chat.title || "Nuevo chat";
-
-    const actions = document.createElement("button");
-    actions.className = "history-action";
-    actions.title = "Opciones";
-    actions.textContent = "⋯";
-    actions.addEventListener("click", (event) => {
-      event.stopPropagation();
-      const choice = window.prompt(
-        "Escribe 'r' para renombrar o 'x' para eliminar esta conversación:",
-        "r"
+  historyEl.appendChild(
+    historySection("Carpetas", {
+      label: "＋",
+      title: "Nueva carpeta",
+      onClick: createFolder,
+    })
+  );
+  if (!folders.length) {
+    historyEl.appendChild(historyEmpty("Sin carpetas"));
+  } else {
+    folders.forEach((folder) => {
+      const items = conversations.filter((chat) => chat.folder_id === folder.id);
+      historyEl.appendChild(
+        historySection(`${folder.name} · ${items.length}`, {
+          label: "⋯",
+          title: "Opciones de carpeta",
+          onClick: () => openFolderMenu(folder),
+        })
       );
-      if (choice === null) return;
-      if (choice.trim().toLowerCase() === "x") deleteConversation(chat.id);
-      else if (choice.trim().toLowerCase() === "r") renameConversation(chat.id);
+      items.forEach((chat) => historyEl.appendChild(historyItem(chat)));
     });
+  }
 
-    item.append(dot, label, actions);
-    item.addEventListener("click", () => {
-      openConversation(chat.id);
-      closeSidebar();
+  const rest = conversations.filter((chat) => !chat.is_favorite && !chat.folder_id);
+  historyEl.appendChild(historySection("Recientes"));
+  if (!rest.length) {
+    historyEl.appendChild(historyEmpty("Sin conversaciones todavía"));
+  } else {
+    rest.forEach((chat) => historyEl.appendChild(historyItem(chat)));
+  }
+}
+
+function openChatMenu(chat) {
+  const choice = (
+    window.prompt(
+      "r = renombrar · x = eliminar · f = favorito · m = mover a carpeta",
+      "r"
+    ) || ""
+  )
+    .trim()
+    .toLowerCase();
+  if (!choice) return;
+  if (choice === "r") renameConversation(chat.id);
+  else if (choice === "x") deleteConversation(chat.id);
+  else if (choice === "f") toggleFavorite(chat.id);
+  else if (choice === "m") moveToFolderPrompt(chat);
+}
+
+function openFolderMenu(folder) {
+  const choice = (
+    window.prompt("r = renombrar · x = eliminar carpeta", "r") || ""
+  )
+    .trim()
+    .toLowerCase();
+  if (choice === "r") renameFolder(folder);
+  else if (choice === "x") deleteFolder(folder);
+}
+
+async function toggleFavorite(id) {
+  try {
+    const data = await api(`/api/conversations/${id}/favorite`, { method: "POST" });
+    const chat = conversations.find((item) => item.id === id);
+    if (chat) chat.is_favorite = data.is_favorite;
+    renderHistory();
+  } catch (err) {
+    renderError(err.message);
+  }
+}
+
+async function createFolder() {
+  const name = window.prompt("Nombre de la carpeta");
+  if (!name || !name.trim()) return;
+  try {
+    await api("/api/folders", {
+      method: "POST",
+      body: JSON.stringify({ name: name.trim() }),
     });
-    historyEl.appendChild(item);
-  });
+    await loadConversations();
+  } catch (err) {
+    renderError(err.message);
+  }
+}
+
+async function renameFolder(folder) {
+  const name = window.prompt("Nuevo nombre de la carpeta", folder.name);
+  if (!name || !name.trim() || name.trim() === folder.name) return;
+  try {
+    await api(`/api/folders/${folder.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    await loadConversations();
+  } catch (err) {
+    renderError(err.message);
+  }
+}
+
+async function deleteFolder(folder) {
+  const ok = window.confirm(
+    `¿Eliminar la carpeta "${folder.name}"? Las conversaciones se conservan.`
+  );
+  if (!ok) return;
+  try {
+    await api(`/api/folders/${folder.id}`, { method: "DELETE" });
+    await loadConversations();
+  } catch (err) {
+    renderError(err.message);
+  }
+}
+
+function moveToFolderPrompt(chat) {
+  const options = [
+    "0 = Sin carpeta",
+    ...folders.map((folder, index) => `${index + 1} = ${folder.name}`),
+  ];
+  const answer = window.prompt(
+    `¿Mover a qué carpeta?\n${options.join("\n")}`,
+    "0"
+  );
+  if (answer === null) return;
+  const index = parseInt(answer.trim(), 10);
+  if (Number.isNaN(index)) return;
+  const folderId =
+    index === 0 ? null : folders[index - 1] ? folders[index - 1].id : null;
+  moveToFolder(chat.id, folderId);
+}
+
+async function moveToFolder(id, folderId) {
+  try {
+    await api(`/api/conversations/${id}/folder`, {
+      method: "PUT",
+      body: JSON.stringify({ folder_id: folderId }),
+    });
+    const chat = conversations.find((item) => item.id === id);
+    if (chat) chat.folder_id = folderId;
+    renderHistory();
+  } catch (err) {
+    renderError(err.message);
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -555,10 +747,28 @@ function renderHistory() {
 
 async function loadConversations() {
   try {
-    const data = await api("/api/conversations");
-    conversations = data.conversations || [];
+    const conversationData = await api("/api/conversations");
+    conversations = conversationData.conversations || [];
   } catch (err) {
     conversations = [];
+  }
+  try {
+    const folderData = await api("/api/folders");
+    folders = folderData.folders || [];
+  } catch (err) {
+    folders = [];
+  }
+  if (!(historySearchEl.value || "").trim()) historyResults = null;
+  renderHistory();
+}
+
+async function searchConversations(query) {
+  try {
+    const data = await api(`/api/conversations?q=${encodeURIComponent(query)}`);
+    if ((historySearchEl.value || "").trim() !== query) return;
+    historyResults = data.conversations || [];
+  } catch (err) {
+    historyResults = [];
   }
   renderHistory();
 }
@@ -569,6 +779,7 @@ async function openConversation(id) {
     const conversation = data.conversation;
     currentChatId = conversation.id;
     messages = (conversation.items || []).map((m) => ({
+      id: m.id,
       role: m.role === "assistant" ? "bot" : "user",
       text: m.content,
     }));
@@ -616,7 +827,9 @@ function startNewChat() {
 }
 
 function addMessage(role, text, image = null) {
-  messages.push({ role, text, image: image || undefined });
+  const message = { role, text, image: image || undefined };
+  messages.push(message);
+  return message;
 }
 
 function renderChat() {
@@ -627,7 +840,9 @@ function renderChat() {
 
   if (!hasMessages) return;
 
-  messages.forEach((m) => chatEl.appendChild(buildMessage(m.role, m.text, m.image)));
+  messages.forEach((m, index) =>
+    chatEl.appendChild(buildMessage(m.role, m.text, m.image, { index }))
+  );
   scrollToBottom();
 }
 
@@ -883,7 +1098,7 @@ function renderRich(container, text) {
   }
 }
 
-function buildMessage(role, text, image) {
+function buildMessage(role, text, image, meta = {}) {
   const row = document.createElement("div");
   row.className = `msg ${role}`;
 
@@ -893,6 +1108,9 @@ function buildMessage(role, text, image) {
     icon.textContent = "C";
     row.appendChild(icon);
   }
+
+  const body = document.createElement("div");
+  body.className = "msg-body";
 
   const bubble = document.createElement("div");
   bubble.className = "bubble";
@@ -910,9 +1128,53 @@ function buildMessage(role, text, image) {
     img.alt = text || "Imagen generada";
     bubble.appendChild(img);
   }
-  row.appendChild(bubble);
+  body.appendChild(bubble);
 
+  if (meta.index !== undefined) {
+    attachMessageActions(body, { role, text, index: meta.index });
+  }
+
+  row.appendChild(body);
   return row;
+}
+
+function attachMessageActions(container, message) {
+  const actions = document.createElement("div");
+  actions.className = "msg-actions";
+
+  if (message.role === "bot") {
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "msg-action";
+    copy.textContent = "Copiar";
+    copy.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(message.text || "");
+        copy.textContent = "Copiado";
+        setTimeout(() => {
+          copy.textContent = "Copiar";
+        }, 1200);
+      } catch (_) {
+        copy.textContent = "Error";
+      }
+    });
+
+    const regenerate = document.createElement("button");
+    regenerate.type = "button";
+    regenerate.className = "msg-action";
+    regenerate.textContent = "Regenerar";
+    regenerate.addEventListener("click", () => regenerateMessage(message.index));
+    actions.append(copy, regenerate);
+  } else {
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "msg-action";
+    edit.textContent = "Editar";
+    edit.addEventListener("click", () => editUserMessage(message.index));
+    actions.append(edit);
+  }
+
+  container.appendChild(actions);
 }
 
 function appendTyping() {
@@ -957,15 +1219,17 @@ function isNearBottom() {
   return scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 140;
 }
 
-async function streamChatMessage(text) {
+async function streamChatMessage(text, options = {}) {
   const controller = new AbortController();
   streamController = controller;
   updateSendState();
 
   let row = null;
+  let bodyEl = null;
   let bubble = null;
   let reply = "";
   let conversationId = currentChatId;
+  let assistantId = null;
 
   function ensureRow() {
     if (row) return;
@@ -975,9 +1239,12 @@ async function streamChatMessage(text) {
     const icon = document.createElement("div");
     icon.className = "role-icon";
     icon.textContent = "C";
+    bodyEl = document.createElement("div");
+    bodyEl.className = "msg-body";
     bubble = document.createElement("div");
     bubble.className = "bubble streaming";
-    row.append(icon, bubble);
+    bodyEl.appendChild(bubble);
+    row.append(icon, bodyEl);
     chatEl.appendChild(row);
     welcomeEl.style.display = "none";
   }
@@ -1012,7 +1279,11 @@ async function streamChatMessage(text) {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ message: text, conversation_id: currentChatId }),
+      body: JSON.stringify({
+        message: text,
+        conversation_id: currentChatId,
+        ...options,
+      }),
       signal: controller.signal,
     });
 
@@ -1053,12 +1324,21 @@ async function streamChatMessage(text) {
         }
         if (payload.type === "start") {
           if (payload.conversation_id) conversationId = payload.conversation_id;
+          if (payload.user_message_id) {
+            for (let i = messages.length - 1; i >= 0; i -= 1) {
+              if (messages[i].role === "user") {
+                messages[i].id = payload.user_message_id;
+                break;
+              }
+            }
+          }
           ensureRow();
         } else if (payload.type === "delta") {
           reply += payload.text || "";
           paint();
         } else if (payload.type === "done") {
           if (payload.conversation_id) conversationId = payload.conversation_id;
+          if (payload.assistant_message_id) assistantId = payload.assistant_message_id;
           if (payload.reply) reply = payload.reply;
         } else if (payload.type === "error") {
           throw new Error(payload.message || "No se pudo generar la respuesta.");
@@ -1077,24 +1357,37 @@ async function streamChatMessage(text) {
   }
 
   const finalReply = finalize();
-  if (finalReply) addMessage("bot", finalReply);
+  if (finalReply) {
+    const botMessage = addMessage("bot", finalReply);
+    if (assistantId) botMessage.id = assistantId;
+    if (bodyEl) {
+      attachMessageActions(bodyEl, {
+        role: "bot",
+        text: finalReply,
+        index: messages.length - 1,
+      });
+    }
+  }
   if (failure) throw failure;
-  return { reply: finalReply, conversationId, aborted };
+  return { reply: finalReply, conversationId, aborted, assistantId };
 }
 
-async function sendMessage(text) {
+async function sendMessage(text, options = {}) {
   if (!currentUser) {
     renderError("Inicia sesión con Discord para chatear.");
     return;
   }
   if (sending) return;
 
+  const { skipUserMessage = false, ...streamOptions } = options;
   sending = true;
   updateSendState();
   updateComposerForVerification();
 
-  addMessage("user", text);
-  renderChat();
+  if (!skipUserMessage) {
+    addMessage("user", text);
+    renderChat();
+  }
   appendTyping();
 
   try {
@@ -1108,7 +1401,7 @@ async function sendMessage(text) {
       renderChat();
       loadUsage();
     } else {
-      const result = await streamChatMessage(text);
+      const result = await streamChatMessage(text, streamOptions);
       if (result.conversationId) currentChatId = result.conversationId;
       if (result.reply) {
         if (ttsEnabled) speak(result.reply);
@@ -1127,6 +1420,62 @@ async function sendMessage(text) {
     updateComposerForVerification();
     inputEl.focus();
   }
+}
+
+async function regenerateMessage(index) {
+  if (sending) return;
+  const target = messages[index];
+  if (!target || target.role !== "bot") return;
+
+  let userIndex = index - 1;
+  while (userIndex >= 0 && messages[userIndex].role !== "user") userIndex -= 1;
+  if (userIndex < 0) return;
+
+  if (index < messages.length - 1) {
+    const ok = window.confirm(
+      "Regenerar aquí descarta los mensajes posteriores. ¿Continuar?"
+    );
+    if (!ok) return;
+  }
+
+  const userMessage = messages[userIndex];
+  if (!userMessage.id) {
+    renderError("Recarga la conversación para regenerar esta respuesta.");
+    return;
+  }
+
+  messages = messages.slice(0, index);
+  renderChat();
+
+  await sendMessage(userMessage.text, {
+    skipUserMessage: true,
+    regenerate: true,
+    edit_message_id: userMessage.id,
+  });
+}
+
+async function editUserMessage(index) {
+  if (sending) return;
+  const target = messages[index];
+  if (!target || target.role !== "user") return;
+  if (!target.id) {
+    renderError("Recarga la conversación para editar este mensaje.");
+    return;
+  }
+
+  const next = window.prompt("Editar mensaje", target.text);
+  if (next === null) return;
+  const text = next.trim();
+  if (!text || text === target.text) return;
+
+  messages = messages.slice(0, index + 1);
+  messages[index] = { ...target, text };
+  renderChat();
+
+  await sendMessage(text, {
+    skipUserMessage: true,
+    edit_message_id: target.id,
+  });
 }
 
 function renderError(message) {
@@ -1277,6 +1626,18 @@ inputEl.addEventListener("keydown", (e) => {
 });
 
 document.getElementById("new-chat").addEventListener("click", startNewChat);
+
+let historySearchTimer = null;
+historySearchEl.addEventListener("input", () => {
+  clearTimeout(historySearchTimer);
+  const query = historySearchEl.value.trim();
+  if (!query) {
+    historyResults = null;
+    renderHistory();
+    return;
+  }
+  historySearchTimer = setTimeout(() => searchConversations(query), 300);
+});
 
 document.querySelectorAll(".suggestion").forEach((btn) => {
   btn.addEventListener("click", () => {

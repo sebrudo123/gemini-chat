@@ -87,6 +87,43 @@ class Message(Base):
     conversation: Mapped["Conversation"] = relationship(back_populates="messages")
 
 
+class Folder(Base):
+    """Carpeta del usuario para organizar conversaciones."""
+
+    __tablename__ = "folders"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(60), default="Carpeta")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ConversationFolder(Base):
+    """Asigna una conversación a una carpeta (una carpeta por conversación)."""
+
+    __tablename__ = "conversation_folders"
+
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), primary_key=True
+    )
+    folder_id: Mapped[int] = mapped_column(
+        ForeignKey("folders.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+
+
+class ConversationFavorite(Base):
+    """Marca una conversación como favorita para el usuario."""
+
+    __tablename__ = "conversation_favorites"
+
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Document(Base):
     """Documento de conocimiento subido por el usuario (base para RAG)."""
 

@@ -48,7 +48,7 @@ from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
-from sqlalchemy import func, text as sa_text
+from sqlalchemy import func, or_, text as sa_text
 from sqlalchemy.orm import Session
 
 try:
@@ -67,9 +67,12 @@ from models import (
     AppSetting,
     AuditLog,
     Conversation,
+    ConversationFavorite,
+    ConversationFolder,
     Document,
     DocumentChunk,
     FeatureFlag,
+    Folder,
     Message,
     Notice,
     Usage,
@@ -751,6 +754,13 @@ class ChatResponse(BaseModel):
     sources: int = 0
 
 
+class ChatStreamRequest(ChatRequest):
+    """Petición de streaming: también permite editar/regenerar un turno."""
+
+    regenerate: bool = False
+    edit_message_id: int | None = None
+
+
 class UserResponse(BaseModel):
     user: dict[str, Any]
 
@@ -783,6 +793,14 @@ class SettingsRequest(BaseModel):
 
 class ConversationRenameRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=120)
+
+
+class FolderRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=60)
+
+
+class FolderAssignRequest(BaseModel):
+    folder_id: int | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -1611,15 +1629,67 @@ def prepare_chat(
             )
             .first()
         )
-    if conversation is None:
-        conversation = Conversation(user_id=user.id, title=message[:60] or "Nuevo chat")
-        db.add(conversation)
-        db.commit()
-        db.refresh(conversation)
 
-    db.add(Message(conversation_id=conversation.id, role="user", content=message))
-    conversation.updated_at = datetime.now(timezone.utc)
-    db.commit()
+    edit_message_id = getattr(payload, "edit_message_id", None)
+    regenerate = bool(getattr(payload, "regenerate", False))
+    user_message_id: int | None = None
+
+    if edit_message_id is not None:
+        if conversation is None:
+            raise HTTPException(status_code=400, detail="Conversaci\u00f3n no indicada.")
+        target = (
+            db.query(Message)
+            .filter(
+                Message.id == edit_message_id,
+                Message.conversation_id == conversation.id,
+            )
+            .first()
+        )
+        if target is None or target.role != "user":
+            raise HTTPException(status_code=404, detail="Mensaje no encontrado.")
+        # Editar un mensaje descarta el resto del hilo (rama nueva).
+        db.query(Message).filter(
+            Message.conversation_id == conversation.id,
+            Message.id > target.id,
+        ).delete(synchronize_session=False)
+        target.content = message
+        user_message_id = target.id
+        conversation.updated_at = datetime.now(timezone.utc)
+        db.commit()
+    elif regenerate:
+        if conversation is None:
+            raise HTTPException(status_code=400, detail="Conversaci\u00f3n no indicada.")
+        last_user = (
+            db.query(Message)
+            .filter(
+                Message.conversation_id == conversation.id,
+                Message.role == "user",
+            )
+            .order_by(Message.id.desc())
+            .first()
+        )
+        if last_user is None:
+            raise HTTPException(status_code=400, detail="No hay mensaje que regenerar.")
+        db.query(Message).filter(
+            Message.conversation_id == conversation.id,
+            Message.id > last_user.id,
+        ).delete(synchronize_session=False)
+        message = last_user.content
+        user_message_id = last_user.id
+        conversation.updated_at = datetime.now(timezone.utc)
+        db.commit()
+    else:
+        if conversation is None:
+            conversation = Conversation(user_id=user.id, title=message[:60] or "Nuevo chat")
+            db.add(conversation)
+            db.commit()
+            db.refresh(conversation)
+        row = Message(conversation_id=conversation.id, role="user", content=message)
+        db.add(row)
+        conversation.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(row)
+        user_message_id = row.id
 
     use_rag = user_settings.use_rag if payload.use_rag is None else payload.use_rag
     context = retrieve_context(db, user, message) if use_rag else ""
@@ -1647,21 +1717,25 @@ def prepare_chat(
         "system_prompt": system_prompt,
         "temperature": temperature,
         "model": user_settings.preferred_model or default_model,
+        "user_message_id": user_message_id,
     }
 
 
-def save_assistant_reply(db: Session, conversation: Conversation, reply: str) -> None:
+def save_assistant_reply(db: Session, conversation: Conversation, reply: str) -> Message:
     """Guarda la respuesta del asistente y actualiza la conversación."""
-    db.add(Message(conversation_id=conversation.id, role="assistant", content=reply))
+    row = Message(conversation_id=conversation.id, role="assistant", content=reply)
+    db.add(row)
     conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
+    db.refresh(row)
+    return row
 
 
 @app.post("/api/chat/stream")
 @limiter.limit(settings.rate_limit)
 def chat_stream(
     request: Request,
-    payload: ChatRequest,
+    payload: ChatStreamRequest,
     profile: dict[str, Any] = Depends(require_founder_2fa),
     _: dict[str, Any] = Depends(require_email_verified),
     db: Session = Depends(get_db),
@@ -1683,11 +1757,13 @@ def chat_stream(
     def generate() -> Iterator[str]:
         parts: list[str] = []
         saved = False
+        assistant_message_id: int | None = None
         try:
             yield event(
                 {
                     "type": "start",
                     "conversation_id": conversation.id,
+                    "user_message_id": prepared.get("user_message_id"),
                     "sources": prepared["sources"],
                 }
             )
@@ -1702,7 +1778,8 @@ def chat_stream(
 
             reply = "".join(parts).strip()
             if reply:
-                save_assistant_reply(db, conversation, reply)
+                saved_row = save_assistant_reply(db, conversation, reply)
+                assistant_message_id = saved_row.id
                 bump_usage(db, get_usage_row(db, prepared["user"]), "message")
                 saved = True
             else:
@@ -1711,6 +1788,7 @@ def chat_stream(
                 {
                     "type": "done",
                     "conversation_id": conversation.id,
+                    "assistant_message_id": assistant_message_id,
                     "reply": reply,
                     "sources": prepared["sources"],
                 }
@@ -2037,20 +2115,113 @@ def _serialize_conversation(conversation: Conversation, detailed: bool = False) 
     return data
 
 
+def _conversation_meta(
+    db: Session, user: User, conversation_ids: list[int]
+) -> tuple[set[int], dict[int, int]]:
+    """Favoritos y carpeta de varias conversaciones (sin N+1)."""
+    if not conversation_ids:
+        return set(), {}
+    favorites = {
+        row[0]
+        for row in db.query(ConversationFavorite.conversation_id).filter(
+            ConversationFavorite.user_id == user.id,
+            ConversationFavorite.conversation_id.in_(conversation_ids),
+        )
+    }
+    folder_map = {
+        row[0]: row[1]
+        for row in db.query(
+            ConversationFolder.conversation_id, ConversationFolder.folder_id
+        ).filter(
+            ConversationFolder.user_id == user.id,
+            ConversationFolder.conversation_id.in_(conversation_ids),
+        )
+    }
+    return favorites, folder_map
+
+
+def _search_snippets(
+    db: Session, conversation_ids: list[int], query: str
+) -> dict[int, str]:
+    """Primer fragmento que coincide con la búsqueda, por conversación."""
+    if not conversation_ids or not query:
+        return {}
+    like = f"%{query}%"
+    rows = (
+        db.query(Message.conversation_id, Message.content)
+        .filter(
+            Message.conversation_id.in_(conversation_ids),
+            Message.content.ilike(like),
+        )
+        .order_by(Message.id)
+        .all()
+    )
+    snippets: dict[int, str] = {}
+    needle = query.lower()
+    for conversation_id, content in rows:
+        if conversation_id in snippets:
+            continue
+        index = content.lower().find(needle)
+        start = max(0, index - 50)
+        piece = content[start : start + 150].replace("\n", " ")
+        prefix = "…" if start else ""
+        suffix = "…" if start + 150 < len(content) else ""
+        snippets[conversation_id] = f"{prefix}{piece}{suffix}".strip()
+    return snippets
+
+
 @app.get("/api/conversations")
 def list_conversations(
+    q: str | None = None,
+    folder_id: int | None = None,
+    favorite: bool | None = None,
     profile: dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Lista las conversaciones del usuario (más recientes primero)."""
+    """Lista las conversaciones con búsqueda y filtros por carpeta/favorito."""
     user = upsert_user(db, profile)
-    conversations = (
-        db.query(Conversation)
-        .filter(Conversation.user_id == user.id)
-        .order_by(Conversation.updated_at.desc())
-        .all()
-    )
-    return {"conversations": [_serialize_conversation(c) for c in conversations]}
+    query = db.query(Conversation).filter(Conversation.user_id == user.id)
+
+    if folder_id is not None:
+        assigned = db.query(ConversationFolder.conversation_id).filter(
+            ConversationFolder.user_id == user.id
+        )
+        if folder_id == 0:
+            query = query.filter(~Conversation.id.in_(assigned))
+        else:
+            query = query.filter(
+                Conversation.id.in_(
+                    assigned.filter(ConversationFolder.folder_id == folder_id)
+                )
+            )
+
+    if favorite:
+        favs = db.query(ConversationFavorite.conversation_id).filter(
+            ConversationFavorite.user_id == user.id
+        )
+        query = query.filter(Conversation.id.in_(favs))
+
+    text = (q or "").strip()
+    if text:
+        like = f"%{text}%"
+        matches = db.query(Message.conversation_id).filter(Message.content.ilike(like))
+        query = query.filter(
+            or_(Conversation.title.ilike(like), Conversation.id.in_(matches))
+        )
+
+    conversations = query.order_by(Conversation.updated_at.desc()).limit(100).all()
+    favorites, folder_map = _conversation_meta(db, user, [c.id for c in conversations])
+    snippets = _search_snippets(db, [c.id for c in conversations], text)
+
+    items: list[dict[str, Any]] = []
+    for conversation in conversations:
+        item = _serialize_conversation(conversation)
+        item["is_favorite"] = conversation.id in favorites
+        item["folder_id"] = folder_map.get(conversation.id)
+        if text:
+            item["snippet"] = snippets.get(conversation.id)
+        items.append(item)
+    return {"conversations": items}
 
 
 @app.get("/api/conversations/{conversation_id}")
@@ -2068,7 +2239,11 @@ def get_conversation(
     )
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversación no encontrada.")
-    return {"conversation": _serialize_conversation(conversation, detailed=True)}
+    favorites, folder_map = _conversation_meta(db, user, [conversation.id])
+    data = _serialize_conversation(conversation, detailed=True)
+    data["is_favorite"] = conversation.id in favorites
+    data["folder_id"] = folder_map.get(conversation.id)
+    return {"conversation": data}
 
 
 @app.patch("/api/conversations/{conversation_id}")
@@ -2109,9 +2284,184 @@ def delete_conversation(
     )
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversación no encontrada.")
+    db.query(ConversationFavorite).filter(
+        ConversationFavorite.conversation_id == conversation.id
+    ).delete(synchronize_session=False)
+    db.query(ConversationFolder).filter(
+        ConversationFolder.conversation_id == conversation.id
+    ).delete(synchronize_session=False)
     db.delete(conversation)
     db.commit()
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+# Carpetas y favoritos
+# --------------------------------------------------------------------------- #
+
+def _owned_conversation(
+    db: Session, user: User, conversation_id: int
+) -> Conversation:
+    conversation = (
+        db.query(Conversation)
+        .filter(Conversation.id == conversation_id, Conversation.user_id == user.id)
+        .first()
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversación no encontrada.")
+    return conversation
+
+
+def _owned_folder(db: Session, user: User, folder_id: int) -> Folder:
+    folder = (
+        db.query(Folder)
+        .filter(Folder.id == folder_id, Folder.user_id == user.id)
+        .first()
+    )
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Carpeta no encontrada.")
+    return folder
+
+
+@app.get("/api/folders")
+def list_folders(
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Lista las carpetas del usuario con su número de conversaciones."""
+    user = upsert_user(db, profile)
+    folders = (
+        db.query(Folder).filter(Folder.user_id == user.id).order_by(Folder.name).all()
+    )
+    counts = dict(
+        db.query(ConversationFolder.folder_id, func.count())
+        .filter(ConversationFolder.user_id == user.id)
+        .group_by(ConversationFolder.folder_id)
+        .all()
+    )
+    return {
+        "folders": [
+            {"id": folder.id, "name": folder.name, "count": counts.get(folder.id, 0)}
+            for folder in folders
+        ]
+    }
+
+
+@app.post("/api/folders")
+def create_folder(
+    payload: FolderRequest,
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Crea una carpeta nueva."""
+    user = upsert_user(db, profile)
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="El nombre no puede estar vacío.")
+    exists = (
+        db.query(Folder)
+        .filter(Folder.user_id == user.id, func.lower(Folder.name) == name.lower())
+        .first()
+    )
+    if exists is not None:
+        raise HTTPException(
+            status_code=409, detail="Ya tienes una carpeta con ese nombre."
+        )
+    folder = Folder(user_id=user.id, name=name)
+    db.add(folder)
+    db.commit()
+    db.refresh(folder)
+    return {"folder": {"id": folder.id, "name": folder.name, "count": 0}}
+
+
+@app.patch("/api/folders/{folder_id}")
+def rename_folder(
+    folder_id: int,
+    payload: FolderRequest,
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Renombra una carpeta del usuario."""
+    user = upsert_user(db, profile)
+    folder = _owned_folder(db, user, folder_id)
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="El nombre no puede estar vacío.")
+    folder.name = name
+    db.commit()
+    return {"folder": {"id": folder.id, "name": folder.name}}
+
+
+@app.delete("/api/folders/{folder_id}")
+def delete_folder(
+    folder_id: int,
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    """Elimina una carpeta (las conversaciones quedan sin carpeta)."""
+    user = upsert_user(db, profile)
+    folder = _owned_folder(db, user, folder_id)
+    db.query(ConversationFolder).filter(
+        ConversationFolder.folder_id == folder.id
+    ).delete(synchronize_session=False)
+    db.delete(folder)
+    db.commit()
+    return {"ok": True}
+
+
+@app.put("/api/conversations/{conversation_id}/folder")
+def assign_folder(
+    conversation_id: int,
+    payload: FolderAssignRequest,
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Mueve una conversación a una carpeta (o la deja sin carpeta)."""
+    user = upsert_user(db, profile)
+    conversation = _owned_conversation(db, user, conversation_id)
+    mapping = db.get(ConversationFolder, conversation.id)
+
+    if payload.folder_id is None:
+        if mapping is not None:
+            db.delete(mapping)
+            db.commit()
+        return {"folder_id": None}
+
+    folder = _owned_folder(db, user, payload.folder_id)
+    if mapping is None:
+        db.add(
+            ConversationFolder(
+                conversation_id=conversation.id,
+                folder_id=folder.id,
+                user_id=user.id,
+            )
+        )
+    else:
+        mapping.folder_id = folder.id
+    db.commit()
+    return {"folder_id": folder.id}
+
+
+@app.post("/api/conversations/{conversation_id}/favorite")
+def toggle_favorite(
+    conversation_id: int,
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    """Marca o desmarca una conversación como favorita."""
+    user = upsert_user(db, profile)
+    conversation = _owned_conversation(db, user, conversation_id)
+    existing = db.get(ConversationFavorite, conversation.id)
+    if existing is None:
+        db.add(
+            ConversationFavorite(conversation_id=conversation.id, user_id=user.id)
+        )
+        is_favorite = True
+    else:
+        db.delete(existing)
+        is_favorite = False
+    db.commit()
+    return {"is_favorite": is_favorite}
 
 
 # --------------------------------------------------------------------------- #
