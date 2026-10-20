@@ -130,6 +130,13 @@ const adminTopList = document.getElementById("admin-top-list");
 const adminModelList = document.getElementById("admin-model-list");
 const adminHealth = document.getElementById("admin-health");
 const adminDocs = document.getElementById("admin-docs");
+const adminBotStatus = document.getElementById("admin-bot-status");
+const adminBotStart = document.getElementById("admin-bot-start");
+const adminBotStop = document.getElementById("admin-bot-stop");
+const adminBotRefresh = document.getElementById("admin-bot-refresh");
+const adminBotWake = document.getElementById("admin-bot-wake");
+const adminBotCopy = document.getElementById("admin-bot-copy");
+const adminBotHint = document.getElementById("admin-bot-hint");
 const aiSystemPrompt = document.getElementById("ai-system-prompt");
 const aiDefaultModel = document.getElementById("ai-default-model");
 const aiTemperature = document.getElementById("ai-temperature");
@@ -190,7 +197,7 @@ let providers = null;
 let flags = { chat: true, image_generation: true, rag: true };
 let twofaState = { enabled: false, pending: false, recovery_codes_remaining: 0 };
 let pendingTwofaToken = null;
-let adminData = { stats: null, users: [], notices: [], audit: [] };
+let adminData = { stats: null, users: [], notices: [], audit: [], bot: null };
 
 const splashStart = performance.now();
 let splashHidden = false;
@@ -3071,7 +3078,7 @@ function adminStatsRange() {
 async function loadAdmin() {
   setAdminLoading(true);
   try {
-    const [statsData, usersData, flagsData, noticesData, auditData, healthData, settingsData, docsData] =
+    const [statsData, usersData, flagsData, noticesData, auditData, healthData, settingsData, docsData, botData] =
       await Promise.all([
         api(`/api/admin/stats?range=${encodeURIComponent(adminStatsRange())}`),
         api("/api/admin/users"),
@@ -3081,11 +3088,13 @@ async function loadAdmin() {
         api("/api/admin/health"),
         api("/api/admin/settings"),
         api("/api/admin/documents"),
+        api("/api/admin/discord-bot").catch(() => ({ bot: null })),
       ]);
     adminData.stats = statsData;
     adminData.users = usersData.users || [];
     adminData.notices = noticesData.notices || [];
     adminData.audit = auditData.logs || [];
+    adminData.bot = botData.bot || null;
     renderAdminStats(statsData);
     renderAdminChart(statsData.series || []);
     renderAdminTopUsers(statsData.top_users || []);
@@ -3095,6 +3104,7 @@ async function loadAdmin() {
     renderAdminNotices(adminData.notices);
     renderAdminAudit(adminData.audit);
     renderAdminHealth(healthData);
+    renderAdminBot(adminData.bot);
     renderAdminSettings(settingsData.settings || {});
     renderAdminDocs(docsData.documents || []);
     if (adminUpdated) {
@@ -3539,6 +3549,156 @@ function renderAdminHealth(health) {
     ["2FA fundador", health.founder_2fa_required ? "Obligatoria" : "Opcional"],
   ];
   rows.forEach(([key, value]) => adminKvRow(adminHealth, key, value));
+}
+
+function renderAdminBot(bot) {
+  if (!adminBotStatus) return;
+  adminBotStatus.innerHTML = "";
+  if (!bot) {
+    adminKvRow(adminBotStatus, "Estado", "Sin datos");
+    if (adminBotStart) adminBotStart.disabled = true;
+    if (adminBotStop) adminBotStop.disabled = true;
+    return;
+  }
+  let state = "Apagado";
+  if (bot.ready) state = "En línea";
+  else if (bot.running) state = "Conectando…";
+  else if (bot.last_error) state = "Error";
+  else if (!bot.configured) state = "Sin token";
+
+  const started = bot.started_at && bot.running
+    ? new Date(bot.started_at).toLocaleString("es-ES")
+    : "—";
+  const rows = [
+    ["Estado", state],
+    ["Token", bot.configured ? "Configurado" : "Falta DISCORD_BOT_TOKEN"],
+    ["Cuenta", bot.user || "—"],
+    ["Servidor", bot.guild_id || "Comandos globales"],
+    ["Canales", bot.restricted_channels ? `${bot.restricted_channels} permitidos` : "Todos"],
+    ["Autoarranque", bot.autostart ? "Sí" : "No"],
+    ["Encendido desde", started],
+  ];
+  if (bot.last_error) rows.push(["Último error", bot.last_error]);
+  rows.forEach(([key, value]) => adminKvRow(adminBotStatus, key, value));
+
+  if (adminBotStart) adminBotStart.disabled = !!bot.running;
+  if (adminBotStop) adminBotStop.disabled = !bot.running;
+  if (adminBotWake) adminBotWake.value = bot.wake_url || "";
+
+  if (adminBotHint) {
+    if (!bot.configured) {
+      adminBotHint.textContent =
+        "Falta DISCORD_BOT_TOKEN en Render. Añádelo en Environment y redespliega para poder encenderlo.";
+    } else if (bot.last_error) {
+      adminBotHint.textContent =
+        "El último intento falló. Revisa el token en el portal de Discord y vuelve a encenderlo.";
+    } else {
+      adminBotHint.textContent =
+        "El botón despierta Render si está dormido y luego enciende el bot (puede tardar hasta 90 s). " +
+        "Para mantenerlo en línea, pon esta URL en un monitor gratuito como UptimeRobot o cron-job.org cada 5 minutos, " +
+        "o ábrela desde un atajo del teléfono.";
+    }
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function wakeBackendIfNeeded() {
+  const deadline = Date.now() + 95000;
+  while (Date.now() < deadline) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
+    try {
+      const res = await fetch(`${BACKEND_URL}/health`, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (res.ok) return true;
+    } catch (_) {
+      /* Render puede tardar en despertar; se reintenta. */
+    } finally {
+      clearTimeout(timer);
+    }
+    await sleep(4000);
+  }
+  return false;
+}
+
+async function refreshDiscordBot() {
+  try {
+    const data = await api("/api/admin/discord-bot");
+    adminData.bot = data.bot || null;
+    renderAdminBot(adminData.bot);
+  } catch (_) {
+    /* el panel ya muestra el error principal */
+  }
+}
+
+function pollDiscordBot(attempt = 0) {
+  if (attempt > 20) return;
+  setTimeout(async () => {
+    await refreshDiscordBot();
+    const bot = adminData.bot;
+    if (bot && bot.running && !bot.ready && !bot.last_error) {
+      pollDiscordBot(attempt + 1);
+    }
+  }, 2000);
+}
+
+async function startDiscordBot() {
+  if (!adminBotStart) return;
+  const label = adminBotStart.textContent;
+  adminBotStart.disabled = true;
+  adminBotStart.textContent = "Despertando…";
+  try {
+    const awake = await wakeBackendIfNeeded();
+    if (!awake) {
+      throw new Error("Render no respondió. Abre la web de Core IA e inténtalo de nuevo.");
+    }
+    adminBotStart.textContent = "Encendiendo…";
+    const data = await api("/api/admin/discord-bot/start", { method: "POST" });
+    adminData.bot = data.bot || null;
+    renderAdminBot(adminData.bot);
+    showToast("Bot encendido. Conectando con Discord…");
+    pollDiscordBot(0);
+  } catch (err) {
+    showToast(err.message);
+    await refreshDiscordBot();
+  } finally {
+    adminBotStart.textContent = label;
+    if (adminData.bot) renderAdminBot(adminData.bot);
+    else adminBotStart.disabled = false;
+  }
+}
+
+async function stopDiscordBot() {
+  if (!adminBotStop) return;
+  adminBotStop.disabled = true;
+  try {
+    const data = await api("/api/admin/discord-bot/stop", { method: "POST" });
+    adminData.bot = data.bot || null;
+    renderAdminBot(adminData.bot);
+    showToast("Bot apagado.");
+  } catch (err) {
+    showToast(err.message);
+  } finally {
+    if (adminData.bot) renderAdminBot(adminData.bot);
+  }
+}
+
+async function copyBotWakeUrl() {
+  const url = adminBotWake ? adminBotWake.value : "";
+  if (!url) return;
+  try {
+    await navigator.clipboard.writeText(url);
+    showToast("URL copiada.");
+  } catch (_) {
+    adminBotWake.select();
+    document.execCommand("copy");
+    showToast("URL copiada.");
+  }
 }
 
 function renderAdminSettings(settings) {
@@ -4570,6 +4730,10 @@ adminTabs.addEventListener("click", (event) => {
 });
 
 adminRefresh.addEventListener("click", () => loadAdmin());
+if (adminBotStart) adminBotStart.addEventListener("click", startDiscordBot);
+if (adminBotStop) adminBotStop.addEventListener("click", stopDiscordBot);
+if (adminBotRefresh) adminBotRefresh.addEventListener("click", refreshDiscordBot);
+if (adminBotCopy) adminBotCopy.addEventListener("click", copyBotWakeUrl);
 adminUserSearch.addEventListener("input", applyUserFilters);
 adminUserPlan.addEventListener("change", applyUserFilters);
 adminUserStatus.addEventListener("change", applyUserFilters);

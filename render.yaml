@@ -33,6 +33,16 @@ services:
         sync: false
       - key: DISCORD_REDIRECT_URI
         value: https://gemini-chat-backend-vyrz.onrender.com/api/auth/discord/callback
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: DISCORD_BOT_GUILD_ID
+        sync: false
+      - key: DISCORD_BOT_CHANNEL_IDS
+        sync: false
+      - key: DISCORD_BOT_AUTOSTART
+        value: "true"
+      - key: DISCORD_BOT_WAKE_KEY
+        sync: false
       - key: AUTH_PROVIDERS
         value: discord
       - key: FOUNDER_DISCORD_IDS

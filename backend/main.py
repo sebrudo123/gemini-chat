@@ -11,13 +11,13 @@ Características:
 Consulta el README para las variables de entorno.
 """
 
-import asyncio
 import base64
 import csv
 import hashlib
 import hmac
 import io
 import json
+import logging
 import os
 import re
 import secrets
@@ -89,6 +89,9 @@ from models import (
     UserSettings,
 )
 from tools import AVAILABLE_TOOLS, extract_memory, maybe_calculate
+
+LOG = logging.getLogger("coreia")
+bot_manager = discord_bot.BotManager()
 
 # --------------------------------------------------------------------------- #
 # Observabilidad (Sentry opcional)
@@ -167,22 +170,22 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         db.close()
 
     # Bot de Discord opcional: convive con la API en el mismo proceso.
-    bot_task = discord_bot.start_bot(
+    bot_manager.configure(
         generate_reply,
         COREIA_IDENTITY,
         token=settings.discord_bot_token,
         guild_id=settings.discord_bot_guild_id,
         channel_ids=settings.discord_bot_channel_ids,
     )
+    if settings.discord_bot_autostart and settings.discord_bot_token:
+        try:
+            await bot_manager.start()
+        except discord_bot.BotError as exc:
+            LOG.warning("No se pudo arrancar el bot de Discord: %s", exc)
     try:
         yield
     finally:
-        if bot_task is not None:
-            bot_task.cancel()
-            try:
-                await bot_task
-            except asyncio.CancelledError:
-                pass
+        await bot_manager.stop()
 
 
 app = FastAPI(title="Core IA API", version="2.1.0", lifespan=lifespan)
@@ -4022,6 +4025,85 @@ def admin_update_settings(
     }
 
 
+def _bot_wake_key() -> str:
+    """Clave de la URL externa que enciende el bot."""
+    if settings.discord_bot_wake_key:
+        return settings.discord_bot_wake_key
+    return hmac.new(
+        settings.session_secret.encode("utf-8"),
+        b"coreia-discord-bot-wake",
+        hashlib.sha256,
+    ).hexdigest()[:32]
+
+
+def _bot_wake_url(request: Request) -> str:
+    base = settings.backend_url.rstrip("/")
+    if not base or "localhost" in base or "127.0.0.1" in base:
+        base = str(request.base_url).rstrip("/")
+    return f"{base}/api/bot/wake?key={_bot_wake_key()}"
+
+
+def _admin_bot_payload(request: Request) -> dict[str, Any]:
+    payload = bot_manager.status()
+    payload["autostart"] = settings.discord_bot_autostart
+    payload["wake_url"] = _bot_wake_url(request)
+    return payload
+
+
+@app.api_route("/api/bot/wake", methods=["GET", "POST"])
+async def bot_wake(request: Request, key: str = "") -> dict[str, Any]:
+    """Despierta Render y enciende el bot; para monitores gratuitos o atajos."""
+    supplied = key or request.headers.get("x-wake-key", "")
+    expected = _bot_wake_key()
+    if not expected or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(status_code=403, detail="Clave de encendido inválida.")
+    try:
+        status = await bot_manager.start()
+    except discord_bot.BotNotConfigured as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except discord_bot.BotError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"ok": True, "bot": status}
+
+
+@app.get("/api/admin/discord-bot")
+def admin_discord_bot(
+    request: Request,
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """Estado del bot y URL para encenderlo desde fuera."""
+    return {"bot": _admin_bot_payload(request)}
+
+
+@app.post("/api/admin/discord-bot/start")
+async def admin_discord_bot_start(
+    request: Request,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Enciende el bot desde el panel de administración."""
+    try:
+        await bot_manager.start()
+    except discord_bot.BotNotConfigured as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except discord_bot.BotError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    record_audit(db, admin, "discord_bot.start", "", "")
+    return {"bot": _admin_bot_payload(request)}
+
+
+@app.post("/api/admin/discord-bot/stop")
+async def admin_discord_bot_stop(
+    request: Request,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Apaga el bot desde el panel de administración."""
+    await bot_manager.stop()
+    record_audit(db, admin, "discord_bot.stop", "", "")
+    return {"bot": _admin_bot_payload(request)}
+
+
 @app.get("/api/admin/health")
 def admin_health(
     _: dict[str, Any] = Depends(require_admin),
@@ -4043,6 +4125,7 @@ def admin_health(
         "engine": llm.provider_name(),
         "email_relay": bool(settings.email_relay_url and settings.email_relay_token),
         "founder_2fa_required": settings.founder_2fa_required,
+        "discord_bot": bot_manager.status(),
     }
 
 

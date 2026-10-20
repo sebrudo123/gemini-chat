@@ -81,6 +81,8 @@ DISCORD_REDIRECT_URI=https://TU-BACKEND.onrender.com/api/auth/discord/callback
 DISCORD_BOT_TOKEN=        # opcional: activa los comandos /coreia en Discord
 DISCORD_BOT_GUILD_ID=     # opcional: ID del servidor para sync instantáneo
 DISCORD_BOT_CHANNEL_IDS=  # opcional: canales permitidos, separados por comas
+DISCORD_BOT_AUTOSTART=true # arranca el bot con el backend; el panel puede apagarlo
+DISCORD_BOT_WAKE_KEY=     # opcional: clave de /api/bot/wake (vacío = derivada)
 AUTH_PROVIDERS=discord
 FOUNDER_DISCORD_IDS=1439761085040427100   # IDs con acceso al panel de administración
 FOUNDER_2FA_REQUIRED=true                  # exige 2FA al fundador antes de usar el chat
@@ -331,6 +333,36 @@ FastAPI (no hace falta otro servicio). Solo se activa si defines
      al instante (sin él, Discord puede tardar hasta una hora en sincronizarlos).
    - `DISCORD_BOT_CHANNEL_IDS`: lista de canales separados por comas donde puede
      responder. Vacío = todos los canales.
+   - `DISCORD_BOT_AUTOSTART`: `true` (por defecto) arranca el bot con el backend;
+     `false` lo deja apagado hasta que lo enciendas desde el panel.
+   - `DISCORD_BOT_WAKE_KEY`: clave de la URL de encendido externo. Si se omite,
+     se deriva de `SESSION_SECRET`.
+
+### Encender y apagar desde el panel
+
+En **Panel de administración → IA → Bot de Discord** hay un botón para
+**Encender** y otro para **Apagar**. El estado muestra si el token está
+configurado, la cuenta conectada, el servidor y el último error.
+
+El botón de encendido primero hace un ping a `/health` para despertar Render si
+el servicio gratuito está dormido (puede tardar hasta 90 segundos) y después
+llama al endpoint protegido que arranca el bot. Si falta `DISCORD_BOT_TOKEN`,
+el panel lo indica y no intenta conectar.
+
+Debajo aparece una **URL de encendido** con clave. Esa URL:
+
+- enciende el bot si está apagado (es idempotente si ya está encendido);
+- despierta Render aunque el panel esté cerrado;
+- se puede poner en un monitor gratuito como
+  [UptimeRobot](https://uptimerobot.com/) o
+  [cron-job.org](https://cron-job.org/) cada 5 minutos para mantener el bot en
+  línea y evitar que Render se duerma;
+- también se puede abrir desde un atajo del teléfono (iOS Shortcuts, HTTP
+  Shortcuts o Tasker).
+
+No publiques esa URL: la clave permite arrancar el bot, aunque no da acceso a
+conversaciones ni al panel. Puedes cambiarla definiendo `DISCORD_BOT_WAKE_KEY`
+y redesplegando.
 
 ### Uso
 
@@ -341,8 +373,10 @@ FastAPI (no hace falta otro servicio). Solo se activa si defines
 - Hay un enfriamiento de 4 segundos por usuario para evitar abusos.
 
 > En Render gratuito el servicio se suspende por inactividad y el bot se
-> desconecta hasta que alguien vuelve a abrir la web o lo despierta. Para que
-> esté siempre en línea necesitas un plan de pago o un ping externo al backend.
+> desconecta hasta que alguien vuelve a abrir la web o lo despierta. La URL de
+> encendido o un monitor cada 5 minutos evitan ese problema. Para que esté
+> siempre en línea sin depender de Render necesitas un plan de pago o moverlo a
+> otro host.
 
 ## Discord Rich Presence (app Android)
 

@@ -59,6 +59,13 @@ class Settings:
             for item in os.environ.get("DISCORD_BOT_CHANNEL_IDS", "").split(",")
             if item.strip()
         ]
+        # Arrancarlo al iniciar el backend. El panel permite apagarlo/encenderlo.
+        self.discord_bot_autostart = os.environ.get(
+            "DISCORD_BOT_AUTOSTART", "true"
+        ).lower() in ("1", "true", "yes")
+        # Clave opcional para la URL pública de encendido. Si se omite, se
+        # deriva de SESSION_SECRET para no tener que configurar otra variable.
+        self.discord_bot_wake_key = os.environ.get("DISCORD_BOT_WAKE_KEY", "").strip()
 
         # --- Proveedores de login OAuth habilitados ---
         # El login por correo/contraseña está siempre disponible.

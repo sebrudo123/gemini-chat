@@ -1,5 +1,7 @@
 """Pruebas del bot de Discord (sin conectar a Discord)."""
 
+import asyncio
+
 import discord_bot
 
 
@@ -32,5 +34,27 @@ def test_channel_allowed():
     assert not discord_bot._channel_allowed(1, {"2"})
 
 
-def test_start_bot_without_token():
-    assert discord_bot.start_bot(lambda *args, **kwargs: "", "sistema", token="") is None
+def test_manager_status_without_token():
+    manager = discord_bot.BotManager()
+    manager.configure(lambda *args, **kwargs: "", "sistema", token="")
+    status = manager.status()
+    assert status["configured"] is False
+    assert status["running"] is False
+    assert status["ready"] is False
+
+
+def test_manager_start_without_token():
+    manager = discord_bot.BotManager()
+    manager.configure(lambda *args, **kwargs: "", "sistema", token="")
+    try:
+        asyncio.run(manager.start())
+    except discord_bot.BotNotConfigured as exc:
+        assert "DISCORD_BOT_TOKEN" in str(exc)
+    else:  # pragma: no cover - solo si cambia el comportamiento
+        raise AssertionError("start() debió rechazar la falta de token")
+
+
+def test_manager_stop_when_off():
+    manager = discord_bot.BotManager()
+    status = asyncio.run(manager.stop())
+    assert status["running"] is False

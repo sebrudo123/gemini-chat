@@ -71,6 +71,23 @@ def test_admin_endpoints_forbidden_for_normal_user(client):
     assert client.get("/api/admin/users", headers=headers).status_code == 403
 
 
+def test_admin_discord_bot_status_and_wake_key(client):
+    founder = auth(FOUNDER_ID)
+    response = client.get("/api/admin/discord-bot", headers=founder)
+    assert response.status_code == 200
+    bot = response.json()["bot"]
+    assert "running" in bot
+    assert "wake_url" in bot
+    assert bot["wake_url"].endswith(f"/api/bot/wake?key={main._bot_wake_key()}")
+
+    assert client.get("/api/bot/wake?key=incorrecta").status_code == 403
+    if not bot["configured"]:
+        assert client.post("/api/admin/discord-bot/start", headers=founder).status_code == 409
+        assert (
+            client.get(f"/api/bot/wake?key={main._bot_wake_key()}").status_code == 409
+        )
+
+
 def test_admin_stats_and_user_management(client, monkeypatch):
     monkeypatch.setattr(main, "generate_reply", lambda message, preferred_model=None, **_: "ok")
     founder = auth(FOUNDER_ID)
