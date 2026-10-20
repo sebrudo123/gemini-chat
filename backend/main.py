@@ -792,7 +792,16 @@ def stream_reply(
     El *automatic function calling* del SDK no está disponible en streaming, así
     que este modo no usa herramientas (el modo no-streaming sí).
     """
-    if llm.available():
+    cfg = llm.resolve()
+    is_image = bool(
+        attachment is not None
+        and (getattr(attachment, "mime", "") or "").startswith("image/")
+    )
+    # El motor gratuito actual no analiza imágenes: para eso usamos Gemini
+    # (si está configurado) y así los adjuntos siguen funcionando.
+    if cfg is not None and not (
+        is_image and not cfg["vision_model"] and genai_client is not None
+    ):
         try:
             yield from _stream_own_model(
                 message, system_instruction, temperature, attachment

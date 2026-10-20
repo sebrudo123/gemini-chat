@@ -43,11 +43,15 @@ def _clear_providers(monkeypatch) -> None:
         monkeypatch.setattr(settings, attr, "")
 
 
-def test_engine_is_disabled_without_keys(monkeypatch):
+def test_auto_falls_back_to_free_engine(monkeypatch):
     _clear_providers(monkeypatch)
-    assert llm.resolve() is None
-    assert llm.available() is False
-    assert llm.provider_name() == "gemini"
+    cfg = llm.resolve()
+    assert cfg is not None
+    assert cfg["provider"] == "pollinations"
+    assert cfg["api_key"] == ""
+    assert cfg["model"] == "openai-fast"
+    assert llm.available() is True
+    assert llm.provider_name() == "pollinations"
 
 
 def test_stream_parses_openai_sse(monkeypatch):
@@ -114,6 +118,14 @@ def test_provider_accepts_custom_base_url(monkeypatch):
     assert cfg is not None
     assert cfg["provider"] == "custom"
     assert cfg["base_url"] == "http://127.0.0.1:11434/v1"
+
+
+def test_image_without_vision_adds_note():
+    attachment = SimpleNamespace(mime="image/png", data=b"x", filename="foto.png")
+    messages = llm.build_messages("mira", attachment=attachment, use_vision=False)
+    content = messages[-1]["content"]
+    assert "mira" in content
+    assert "no admite visión" in content
 
 
 def test_pdf_without_readable_text_adds_note():

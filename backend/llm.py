@@ -9,9 +9,9 @@ a través de cualquier API compatible con OpenAI:
 * Cloudflare  → .../accounts/{id}/ai/v1
 * Ollama      → http://localhost:11434/v1 (modelo autoalojado)
 
-Si no hay ningún proveedor configurado, `resolve()` devuelve `None` y la app
-sigue usando Gemini como respaldo (así el cambio es reversible y no rompe la
-producción mientras se añaden las claves).
+Si no hay ningún proveedor configurado, se usa Pollinations (gratis, sin clave
+ni registro). Si ese motor falla, la app cae automáticamente a Gemini como
+respaldo, así el chat nunca se queda sin respuesta.
 """
 
 from __future__ import annotations
@@ -87,7 +87,8 @@ def resolve() -> dict[str, Any] | None:
         elif settings.llm_base_url:
             provider, key = "custom", key or "local"
         else:
-            return None
+            # Sin claves: motor gratuito y sin registro por defecto.
+            provider, key = "pollinations", ""
     elif not key:
         key = _provider_key(provider)
 
