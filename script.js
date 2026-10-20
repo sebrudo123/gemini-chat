@@ -400,11 +400,17 @@ function applyEngineBadge(engine, model) {
   if (!engine || engine === "gemini") return;
   const badge = document.querySelector(".model-badge");
   if (!badge) return;
-  const name = String(model || "")
+  const modelName = String(model || "")
     .split("/")
     .pop()
-    .replace(/:free$/, "")
-    .slice(0, 24);
+    .replace(/:free$/, "");
+  const labels = {
+    groq: "Llama 3.3",
+    cerebras: "Llama 3.3",
+    pollinations: "GPT-OSS 20B",
+    ollama: "Local",
+  };
+  const name = labels[engine] || modelName.slice(0, 24);
   badge.textContent = "";
   const pulse = document.createElement("span");
   pulse.className = "pulse";

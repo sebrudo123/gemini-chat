@@ -138,6 +138,20 @@ def test_sessions_list_and_revoke(client, monkeypatch):
     )
 
 
+def test_default_system_prompt_is_coreia(client, monkeypatch):
+    headers = auth("600000000000000025")
+    captured = {}
+
+    def fake_reply(message, preferred_model=None, system_instruction=None, **kwargs):
+        captured["system"] = system_instruction
+        return "ok"
+
+    monkeypatch.setattr(main, "generate_reply", fake_reply)
+    response = client.post("/api/chat", json={"message": "¿quién eres?"}, headers=headers)
+    assert response.status_code == 200
+    assert "Core IA" in (captured["system"] or "")
+
+
 def test_account_export_contains_messages(client, monkeypatch):
     headers = auth("600000000000000024")
     monkeypatch.setattr(

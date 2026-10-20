@@ -598,6 +598,16 @@ DEFAULT_APP_SETTINGS = {
     "banned_words": "",
 }
 
+# Identidad por defecto: se usa cuando el panel de administración no define
+# un prompt propio. Evita que el modelo se presente como Gemini/OpenAI/Google.
+COREIA_IDENTITY = (
+    "Eres Core IA, el asistente de inteligencia artificial de Core IA. "
+    "Responde siempre en el idioma del usuario, con claridad, precisión y sin "
+    "inventar datos. No digas que eres Gemini, ChatGPT, OpenAI, Google ni "
+    "ningún otro producto: tu nombre es Core IA. Si te preguntan quién te "
+    "creó, responde que fuiste creada por el equipo de Core IA."
+)
+
 
 def get_setting(db: Session, key: str, default: str = "") -> str:
     """Devuelve el valor de una configuración global (o el valor por defecto)."""
@@ -1821,7 +1831,7 @@ def prepare_chat(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="El chat está desactivado temporalmente por el administrador.",
         )
-    if genai_client is None:
+    if genai_client is None and not llm.available():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="El servidor no tiene configurada AI_API_KEY.",
@@ -1941,7 +1951,7 @@ def prepare_chat(
             f"Contexto:\n{context}\n\nPregunta: {message}"
         )
 
-    system_prompt = get_setting(db, "system_prompt", "").strip() or None
+    system_prompt = get_setting(db, "system_prompt", "").strip() or COREIA_IDENTITY
     default_model = get_setting(db, "default_model", "").strip() or None
     temperature_raw = get_setting(db, "temperature", "").strip()
     try:
@@ -2083,7 +2093,7 @@ def chat(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="El chat está desactivado temporalmente por el administrador.",
         )
-    if genai_client is None:
+    if genai_client is None and not llm.available():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="El servidor no tiene configurada AI_API_KEY.",
@@ -2132,7 +2142,7 @@ def chat(
             f"Contexto:\n{context}\n\nPregunta: {message}"
         )
 
-    system_prompt = get_setting(db, "system_prompt", "").strip() or None
+    system_prompt = get_setting(db, "system_prompt", "").strip() or COREIA_IDENTITY
     default_model = get_setting(db, "default_model", "").strip() or None
     temperature_raw = get_setting(db, "temperature", "").strip()
     try:
