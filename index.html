@@ -495,6 +495,23 @@
       transition: background .15s, color .15s;
     }
     .msg-action:hover { background: var(--surface-hover); color: var(--text); }
+    .msg-sources {
+      display: flex; flex-wrap: wrap; gap: 6px;
+      align-items: center; margin-top: 10px;
+    }
+    .msg-sources-label {
+      font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
+      color: var(--muted);
+    }
+    .msg-sources a {
+      font-size: 11px; color: var(--accent);
+      background: var(--accent-soft);
+      border-radius: 999px; padding: 3px 9px;
+      max-width: 220px; overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap;
+      text-decoration: none;
+    }
+    .msg-sources a:hover { text-decoration: underline; }
     .msg .role-icon {
       width: 30px; height: 30px; flex-shrink: 0;
       border-radius: 50%;
@@ -1730,8 +1747,8 @@
             <button class="tool-btn" id="image-btn" type="button" title="Generar imagen" aria-label="Generar imagen">
               <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>
             </button>
-            <button class="tool-btn" id="kb-btn" type="button" title="Base de conocimiento" aria-label="Base de conocimiento">
-              <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg>
+            <button class="tool-btn" id="web-btn" type="button" title="Buscar en la web" aria-label="Buscar en la web" aria-pressed="false">
+              <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z"/></svg>
             </button>
           </div>
           <button id="send" type="submit" aria-label="Enviar" disabled>
@@ -1756,6 +1773,21 @@
       <textarea id="kb-text" placeholder="Pega aquí el texto o la documentación..."></textarea>
       <button class="primary-btn" id="kb-save" type="button">Guardar documento</button>
       <div class="kb-list" id="kb-list"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="memory-modal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>Memoria</h2>
+        <button class="icon-btn" id="memory-close" type="button" aria-label="Cerrar">✕</button>
+      </div>
+      <p class="modal-sub">Datos que Core IA recordará entre conversaciones. También puedes escribir “recuerda que…” en el chat.</p>
+      <div class="share-link-row">
+        <input id="memory-input" type="text" placeholder="Ej.: me llamo Sebas y prefiero respuestas cortas" maxlength="500" />
+        <button class="primary-btn small" id="memory-save" type="button">Añadir</button>
+      </div>
+      <div class="kb-list" id="memory-list"></div>
     </div>
   </div>
 
@@ -1862,6 +1894,20 @@
             <input type="checkbox" id="settings-rag" />
             <span>Usar mi base de conocimiento (RAG) al responder</span>
           </label>
+          <div class="settings-row">
+            <div class="settings-row-info">
+              <strong>Memoria</strong>
+              <span class="settings-hint">Datos que Core IA recuerda de ti entre conversaciones.</span>
+            </div>
+            <button class="admin-mini small" id="memory-btn" type="button">Gestionar</button>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-info">
+              <strong>Base de conocimiento</strong>
+              <span class="settings-hint">Documentos y textos que usa como contexto.</span>
+            </div>
+            <button class="admin-mini small" id="kb-btn" type="button">Gestionar</button>
+          </div>
         </section>
 
         <section class="settings-section">

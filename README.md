@@ -1,6 +1,6 @@
-# Core IA — FastAPI + Gemini + Discord OAuth2
+# Core IA — FastAPI + motor gratuito (Pollinations) + Gemini de respaldo
 
-Plataforma de chat con IA de nivel enterprise: backend **FastAPI** conectado a **Google Gemini**, autenticación **Discord OAuth2** con sesiones firmadas (`itsdangerous`) y frontend estático estilo ChatGPT/Gemini.
+Plataforma de chat con IA de nivel enterprise: backend **FastAPI** con motor propio compatible con OpenAI (**Pollinations gratis por defecto**, sin clave ni registro) y **Gemini** como respaldo, autenticación **Discord OAuth2** con sesiones firmadas (`itsdangerous`) y frontend estático estilo ChatGPT/Gemini.
 
 ## Estructura
 
@@ -10,8 +10,10 @@ CoreIA/
 │   ├── main.py             # API FastAPI (auth Discord + chat Gemini)
 │   ├── config.py           # Configuración central (settings)
 │   ├── database.py         # Motor y sesiones SQLAlchemy
-│   ├── models.py           # User, Conversation, Message, Document, DocumentChunk, UserSettings, Usage
-│   ├── tools.py            # Herramientas (function calling): hora, cálculo
+│   ├── models.py           # User, Conversation, Message, Document, UserMemory...
+│   ├── tools.py            # Hora, cálculo y detección de memoria
+│   ├── llm.py              # Motor propio compatible con OpenAI (Pollinations por defecto)
+│   ├── websearch.py        # Búsqueda web gratis (DuckDuckGo + Jina Reader)
 │   ├── rag.py              # RAG: chunking, embeddings y búsqueda semántica
 │   ├── plans.py            # Planes y cuotas (free/pro/enterprise)
 │   ├── cache.py            # Caché opcional con Redis
@@ -68,7 +70,7 @@ LLM_VISION_MODEL=         # vacío = llama-4-scout en Groq (imágenes)
 # LLM_BASE_URL=...        # para Ollama u otro servidor compatible con OpenAI
 # LLM_API_KEY=...
 
-IMAGE_MODEL=              # vacío deshabilita la generación de imágenes (modelo de pago)
+IMAGE_MODEL=              # vacío = imágenes gratis con Pollinations (sin clave)
 EMBEDDING_MODEL=gemini-embedding-001
 RAG_ENABLED=true
 RAG_TOP_K=4
@@ -178,15 +180,22 @@ pruebas en cada push y pull request.
 
 ## Funciones de IA (sección 6)
 
-- **Herramientas (function calling)**: el modelo puede invocar `get_current_time`,
-  `calculate` y `get_word_count` por sí solo (SDK `google-genai`).
-- **Generación de imágenes**: `POST /api/image` usa `IMAGE_MODEL`. Si la variable
-  está vacía, el endpoint responde `503` sin romper el resto del servicio.
+- **Motor gratuito por defecto**: Pollinations (`openai-fast`, GPT-OSS 20B) sin
+  clave ni registro. Si falla, Gemini responde como respaldo.
+- **Herramientas**: hora/fecha, cálculo exacto (inyectado en el prompt para que
+  funcione con cualquier motor) y memoria.
+- **Búsqueda web gratis**: DuckDuckGo + Jina Reader, sin API key. Se activa sola
+  para preguntas de actualidad o URLs, o con el botón 🌐 del composer. Las
+  respuestas incluyen las fuentes citadas.
+- **Memoria**: “recuerda que…” guarda el dato y se inyecta en futuras
+  conversaciones. Panel para añadir u olvidar (máximo 50 por usuario).
+- **Generación de imágenes**: `POST /api/image` usa Pollinations (Flux) gratis
+  cuando `IMAGE_MODEL` está vacío; si defines un modelo de Gemini, usa ese.
 - **RAG**: los documentos se dividen en fragmentos, se vectorizan con
   `EMBEDDING_MODEL` y se recuperan por similitud coseno para ampliar el contexto
   del chat. Tablas `documents` y `document_chunks`.
-- **Frontend**: dictado por voz (Web Speech API), lectura en voz alta,
-  modo imagen y gestor de base de conocimiento.
+- **Frontend**: dictado por voz (Web Speech API), lectura en voz alta y botón
+  “Escuchar” por respuesta, modo imagen, base de conocimiento y memoria.
 
 ## Producto (sección 4)
 

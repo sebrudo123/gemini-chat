@@ -7,6 +7,7 @@ cuándo llamarlas. Requieren docstring y anotaciones de tipo.
 
 import ast
 import operator
+import re
 from datetime import datetime, timezone
 
 _OPERATORS = {
@@ -68,3 +69,40 @@ def get_word_count(text: str) -> str:
 
 
 AVAILABLE_TOOLS = [get_current_time, calculate, get_word_count]
+
+_CALC_REQUEST = re.compile(
+    r"(?:cu[áa]nto\s+(?:es|son|da|vale)|calcula(?:r)?|calcul[áa]|"
+    r"resultado\s+de|opera(?:ci[óo]n)?)\s*:?\s*([0-9][0-9\s+\-*/().]*)",
+    re.I,
+)
+_MEMORY_REQUEST = re.compile(
+    r"^\s*(?:recuerda|memoriza|ten en cuenta|no olvides|guarda)\s*"
+    r"(?:que\s+|:\s*)?(.{3,500})$",
+    re.I | re.S,
+)
+
+
+def maybe_calculate(text: str) -> tuple[str, str] | None:
+    """Detecta una operación aritmética explícita y la resuelve sin red."""
+    match = _CALC_REQUEST.search(text)
+    if not match:
+        return None
+    expression = match.group(1).strip().rstrip("=.").strip()
+    expression = expression.replace("×", "*").replace("÷", "/")
+    if len(expression) < 3 or not re.search(r"[0-9]", expression):
+        return None
+    if not re.search(r"[+\-*/]", expression):
+        return None
+    result = calculate(expression)
+    if result.startswith("Error"):
+        return None
+    return expression, result
+
+
+def extract_memory(text: str) -> str | None:
+    """Extrae un dato cuando el usuario pide recordarlo explícitamente."""
+    match = _MEMORY_REQUEST.match(text.strip())
+    if not match:
+        return None
+    fact = match.group(1).strip().strip('"“”')
+    return fact[:500] or None

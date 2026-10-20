@@ -36,7 +36,9 @@ const menuBtn = document.getElementById("menu-btn");
 
 const micBtn = document.getElementById("mic-btn");
 const imageBtn = document.getElementById("image-btn");
+const webBtn = document.getElementById("web-btn");
 const kbBtn = document.getElementById("kb-btn");
+const memoryBtn = document.getElementById("memory-btn");
 const ttsToggle = document.getElementById("tts-toggle");
 const settingsBtn = document.getElementById("settings-btn");
 const plansBtn = document.getElementById("plans-btn");
@@ -48,6 +50,12 @@ const kbTitle = document.getElementById("kb-title");
 const kbText = document.getElementById("kb-text");
 const kbSave = document.getElementById("kb-save");
 const kbList = document.getElementById("kb-list");
+
+const memoryModal = document.getElementById("memory-modal");
+const memoryClose = document.getElementById("memory-close");
+const memoryInput = document.getElementById("memory-input");
+const memorySave = document.getElementById("memory-save");
+const memoryList = document.getElementById("memory-list");
 
 const settingsModal = document.getElementById("settings-modal");
 const settingsClose = document.getElementById("settings-close");
@@ -159,6 +167,7 @@ let currentChatId = null;
 let sending = false;
 let streamController = null;
 let imageMode = false;
+let webSearch = false;
 let ttsEnabled = localStorage.getItem(TTS_KEY) === "1";
 let settings = { theme: "dark", preferred_model: null, use_rag: true };
 let usage = null;
@@ -1224,6 +1233,27 @@ function buildMessage(role, text, image, meta = {}) {
   return row;
 }
 
+function attachWebSources(container, sources) {
+  if (!Array.isArray(sources) || !sources.length) return;
+  const box = document.createElement("div");
+  box.className = "msg-sources";
+  const label = document.createElement("span");
+  label.className = "msg-sources-label";
+  label.textContent = "Fuentes";
+  box.appendChild(label);
+  sources.slice(0, 5).forEach((source) => {
+    if (!source || !source.url) return;
+    const link = document.createElement("a");
+    link.href = source.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = source.title || source.url;
+    link.title = source.url;
+    box.appendChild(link);
+  });
+  container.appendChild(box);
+}
+
 function attachMessageActions(container, message) {
   const actions = document.createElement("div");
   actions.className = "msg-actions";
@@ -1250,7 +1280,14 @@ function attachMessageActions(container, message) {
     regenerate.className = "msg-action";
     regenerate.textContent = "Regenerar";
     regenerate.addEventListener("click", () => regenerateMessage(message.index));
-    actions.append(copy, regenerate);
+
+    const listen = document.createElement("button");
+    listen.type = "button";
+    listen.className = "msg-action";
+    listen.textContent = "Escuchar";
+    listen.addEventListener("click", () => speak(message.text || ""));
+
+    actions.append(copy, listen, regenerate);
   } else {
     const edit = document.createElement("button");
     edit.type = "button";
@@ -1316,6 +1353,7 @@ async function streamChatMessage(text, options = {}) {
   let reply = "";
   let conversationId = currentChatId;
   let assistantId = null;
+  let webSources = [];
 
   function ensureRow() {
     if (row) return;
@@ -1368,6 +1406,7 @@ async function streamChatMessage(text, options = {}) {
       body: JSON.stringify({
         message: text,
         conversation_id: currentChatId,
+        ...(webSearch ? { search: true } : {}),
         ...options,
       }),
       signal: controller.signal,
@@ -1410,6 +1449,9 @@ async function streamChatMessage(text, options = {}) {
         }
         if (payload.type === "start") {
           if (payload.conversation_id) conversationId = payload.conversation_id;
+          if (Array.isArray(payload.web_sources) && payload.web_sources.length) {
+            webSources = payload.web_sources;
+          }
           if (payload.user_message_id) {
             for (let i = messages.length - 1; i >= 0; i -= 1) {
               if (messages[i].role === "user") {
@@ -1425,6 +1467,9 @@ async function streamChatMessage(text, options = {}) {
         } else if (payload.type === "done") {
           if (payload.conversation_id) conversationId = payload.conversation_id;
           if (payload.assistant_message_id) assistantId = payload.assistant_message_id;
+          if (Array.isArray(payload.web_sources) && payload.web_sources.length) {
+            webSources = payload.web_sources;
+          }
           if (payload.reply) reply = payload.reply;
         } else if (payload.type === "error") {
           throw new Error(payload.message || "No se pudo generar la respuesta.");
@@ -1452,6 +1497,7 @@ async function streamChatMessage(text, options = {}) {
         text: finalReply,
         index: messages.length - 1,
       });
+      attachWebSources(bodyEl, webSources);
     }
   }
   if (failure) throw failure;
@@ -1864,6 +1910,120 @@ function toggleImageMode() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Búsqueda web                                                        */
+/* ------------------------------------------------------------------ */
+
+function toggleWebSearch() {
+  webSearch = !webSearch;
+  webBtn.classList.toggle("active", webSearch);
+  webBtn.setAttribute("aria-pressed", String(webSearch));
+  showToast(
+    webSearch
+      ? "Buscaré en la web en cada mensaje."
+      : "Búsqueda web automática (solo cuando haga falta)."
+  );
+  inputEl.focus();
+}
+
+/* ------------------------------------------------------------------ */
+/* Memoria                                                             */
+/* ------------------------------------------------------------------ */
+
+function openMemory() {
+  if (!currentUser) {
+    renderError("Inicia sesión para usar la memoria.");
+    return;
+  }
+  closeSettings();
+  memoryModal.classList.add("show");
+  loadMemories();
+}
+
+function closeMemory() {
+  memoryModal.classList.remove("show");
+}
+
+async function loadMemories() {
+  memoryList.innerHTML = "";
+  const loading = document.createElement("div");
+  loading.className = "kb-empty";
+  loading.textContent = "Cargando...";
+  memoryList.appendChild(loading);
+  try {
+    const data = await api("/api/memory");
+    renderMemories(data.memories || []);
+  } catch (err) {
+    memoryList.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "kb-empty";
+    empty.textContent = err.message;
+    memoryList.appendChild(empty);
+  }
+}
+
+function renderMemories(items) {
+  memoryList.innerHTML = "";
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "kb-empty";
+    empty.textContent =
+      "Aún no hay nada guardado. Escribe “recuerda que…” o añade un dato arriba.";
+    memoryList.appendChild(empty);
+    return;
+  }
+  items.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "kb-item";
+
+    const meta = document.createElement("div");
+    meta.className = "kb-meta";
+    const text = document.createElement("div");
+    text.className = "kb-name";
+    text.style.whiteSpace = "normal";
+    text.textContent = item.content;
+    meta.appendChild(text);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "icon-btn";
+    remove.title = "Olvidar";
+    remove.setAttribute("aria-label", "Olvidar este dato");
+    remove.textContent = "✕";
+    remove.addEventListener("click", () => deleteMemory(item.id));
+
+    row.append(meta, remove);
+    memoryList.appendChild(row);
+  });
+}
+
+async function saveMemory() {
+  const content = memoryInput.value.trim();
+  if (!content) return;
+  memorySave.disabled = true;
+  try {
+    await api("/api/memory", {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    });
+    memoryInput.value = "";
+    await loadMemories();
+  } catch (err) {
+    renderError(err.message);
+  } finally {
+    memorySave.disabled = false;
+  }
+}
+
+async function deleteMemory(id) {
+  try {
+    await api(`/api/memory/${id}`, { method: "DELETE" });
+    await loadMemories();
+  } catch (err) {
+    renderError(err.message);
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Base de conocimiento (RAG)                                          */
 /* ------------------------------------------------------------------ */
 
@@ -1872,6 +2032,7 @@ function openKb() {
     renderError("Inicia sesión para usar tu base de conocimiento.");
     return;
   }
+  closeSettings();
   kbModal.classList.add("show");
   loadDocuments();
 }
@@ -4047,6 +4208,20 @@ kbClose.addEventListener("click", closeKb);
 kbSave.addEventListener("click", saveDocument);
 kbModal.addEventListener("click", (event) => {
   if (event.target === kbModal) closeKb();
+});
+
+webBtn.addEventListener("click", toggleWebSearch);
+memoryBtn.addEventListener("click", openMemory);
+memoryClose.addEventListener("click", closeMemory);
+memorySave.addEventListener("click", saveMemory);
+memoryInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    saveMemory();
+  }
+});
+memoryModal.addEventListener("click", (event) => {
+  if (event.target === memoryModal) closeMemory();
 });
 
 settingsBtn.addEventListener("click", openSettings);
