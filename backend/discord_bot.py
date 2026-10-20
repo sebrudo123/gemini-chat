@@ -801,16 +801,14 @@ class BotManager:
             await asyncio.to_thread(save_guild_config, interaction.guild.id, values)
             config = await asyncio.to_thread(load_guild_config, interaction.guild.id)
 
-            panel_channel = (
-                canal_verificacion
-                or _resolve_channel(
-                    interaction.guild, config, "verify_channel_id"
-                )
-                or interaction.channel
+            panel_channel = canal_verificacion or _resolve_channel(
+                interaction.guild, config, "verify_channel_id"
             )
             panel_message = ""
-            if config.get("verify_role_id") and isinstance(
-                panel_channel, (discord.TextChannel, discord.Thread)
+            if (
+                canal_verificacion is not None
+                and config.get("verify_role_id")
+                and isinstance(panel_channel, (discord.TextChannel, discord.Thread))
             ):
                 try:
                     await self._send_verify_panel(panel_channel, interaction.guild.id)
@@ -820,6 +818,10 @@ class BotManager:
                 except Exception:  # noqa: BLE001 - no romper la configuración
                     LOG.exception("No se pudo publicar el panel de verificación")
                     panel_message = "\nNo pude publicar el panel; revisa mis permisos."
+            elif config.get("verify_role_id"):
+                panel_message = (
+                    "\nUsa `/verificacion panel` para publicar o actualizar el panel."
+                )
 
             await interaction.followup.send(
                 "✅ Configuración guardada." + panel_message,
