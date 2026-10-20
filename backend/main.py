@@ -32,7 +32,7 @@ from urllib.parse import urlencode, urlparse
 
 import httpx
 import pyotp
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     FileResponse,
@@ -60,23 +60,28 @@ except Exception:  # noqa: BLE001 - métricas opcionales
 
 import plans
 import rag
+import llm
 from cache import is_enabled as cache_is_enabled
 from config import settings
 from database import SessionLocal, get_db, init_db
 from models import (
     AppSetting,
+    Attachment,
     AuditLog,
     Conversation,
     ConversationFavorite,
     ConversationFolder,
+    ConversationShare,
     Document,
     DocumentChunk,
     FeatureFlag,
     Folder,
+    MessageAttachment,
     Message,
     Notice,
     Usage,
     User,
+    UserSession,
     UserSettings,
 )
 from tools import AVAILABLE_TOOLS
@@ -249,13 +254,36 @@ def resolve_return_url(state: str | None) -> str:
         return f"{settings.frontend_url}/"
 
 
-def create_session_token(profile: dict[str, Any], epoch: int = 0) -> str:
+def create_session_token(
+    profile: dict[str, Any], epoch: int = 0, sid: str | None = None
+) -> str:
     """Genera un token firmado con los datos públicos del usuario.
 
     `epoch` permite invalidar todas las sesiones de un usuario incrementando
     `User.session_epoch` (por ejemplo, al cerrar sesión en todos los dispositivos).
+    `sid` identifica la sesión concreta para poder revocarla individualmente.
     """
-    return serializer.dumps({"user": profile, "epoch": int(epoch or 0)})
+    data: dict[str, Any] = {"user": profile, "epoch": int(epoch or 0)}
+    if sid:
+        data["sid"] = sid
+    return serializer.dumps(data)
+
+
+def issue_session(
+    db: Session, profile: dict[str, Any], request: Request | None = None
+) -> str:
+    """Crea una sesión revocable y devuelve el token firmado."""
+    user = upsert_user(db, profile)
+    sid = secrets.token_urlsafe(24)
+    user_agent = ""
+    ip = ""
+    if request is not None:
+        user_agent = (request.headers.get("user-agent") or "")[:255]
+        client = getattr(request, "client", None)
+        ip = (client.host if client else "")[:64]
+    db.add(UserSession(sid=sid, user_id=user.id, user_agent=user_agent, ip=ip))
+    db.commit()
+    return create_session_token(profile, user.session_epoch, sid=sid)
 
 
 def session_epoch_for(db: Session, profile: dict[str, Any]) -> int:
@@ -319,6 +347,22 @@ def get_current_user(
             status_code=401,
             detail="La sesión se ha cerrado. Vuelve a iniciar sesión.",
         )
+    sid = payload.get("sid")
+    if sid:
+        session = db.get(UserSession, sid)
+        if session is None:
+            raise HTTPException(
+                status_code=401,
+                detail="La sesión se ha revocado. Vuelve a iniciar sesión.",
+            )
+        now = datetime.now(timezone.utc)
+        try:
+            stale = (now - session.last_seen).total_seconds() > 3600
+        except TypeError:
+            stale = True
+        if stale:
+            session.last_seen = now
+            db.commit()
     return user
 
 
@@ -396,10 +440,33 @@ def delete_user_data(db: Session, user: User) -> None:
     """Elimina todos los datos asociados a un usuario (y el propio usuario)."""
     conv_ids = [row[0] for row in db.query(Conversation.id).filter(Conversation.user_id == user.id)]
     if conv_ids:
+        message_ids = [
+            row[0]
+            for row in db.query(Message.id).filter(Message.conversation_id.in_(conv_ids))
+        ]
+        if message_ids:
+            db.query(MessageAttachment).filter(
+                MessageAttachment.message_id.in_(message_ids)
+            ).delete(synchronize_session=False)
         db.query(Message).filter(Message.conversation_id.in_(conv_ids)).delete(
             synchronize_session=False
         )
+        db.query(ConversationShare).filter(
+            ConversationShare.conversation_id.in_(conv_ids)
+        ).delete(synchronize_session=False)
+        db.query(ConversationFavorite).filter(
+            ConversationFavorite.conversation_id.in_(conv_ids)
+        ).delete(synchronize_session=False)
+        db.query(ConversationFolder).filter(
+            ConversationFolder.conversation_id.in_(conv_ids)
+        ).delete(synchronize_session=False)
     db.query(Conversation).filter(Conversation.user_id == user.id).delete(
+        synchronize_session=False
+    )
+    db.query(Attachment).filter(Attachment.user_id == user.id).delete(
+        synchronize_session=False
+    )
+    db.query(UserSession).filter(UserSession.user_id == user.id).delete(
         synchronize_session=False
     )
 
@@ -619,6 +686,13 @@ def generate_reply(
     degradar la experiencia. `system_instruction` y `temperature` provienen de
     la configuración del panel de administración.
     """
+    if llm.available():
+        return llm.complete_text(
+            message,
+            system_instruction=system_instruction,
+            temperature=temperature,
+        )
+
     primary = preferred_model or settings.ai_model
     models = [primary] + [
         m for m in ([settings.ai_model] + settings.ai_model_fallbacks) if m != primary
@@ -661,17 +735,59 @@ def generate_reply(
     ) from last_error
 
 
+def _stream_own_model(
+    message: str,
+    system_instruction: str | None,
+    temperature: float | None,
+    attachment: Any | None = None,
+) -> Iterator[str]:
+    """Streaming con el motor propio (Groq/OpenRouter/Ollama...), con reintentos."""
+    attempts = max(1, settings.ai_retries)
+    last_error: Exception | None = None
+
+    for attempt in range(attempts):
+        yielded = False
+        try:
+            for piece in llm.stream_text(
+                message,
+                system_instruction=system_instruction,
+                temperature=temperature,
+                attachment=attachment,
+            ):
+                yielded = True
+                yield piece
+            return
+        except Exception as exc:  # noqa: BLE001 - se decide según el tipo de error
+            last_error = exc
+            if yielded:
+                raise
+            if attempt < attempts - 1:
+                time.sleep(1.2 * (attempt + 1))
+
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail=f"Error al contactar con el motor de Core IA: {last_error}",
+    )
+
+
 def stream_reply(
     message: str,
     preferred_model: str | None = None,
     system_instruction: str | None = None,
     temperature: float | None = None,
+    attachment: Any | None = None,
 ) -> Iterator[str]:
     """Genera una respuesta en streaming, con reintentos y modelos de respaldo.
 
     El *automatic function calling* del SDK no está disponible en streaming, así
     que este modo no usa herramientas (el modo no-streaming sí).
     """
+    if llm.available():
+        yield from _stream_own_model(
+            message, system_instruction, temperature, attachment
+        )
+        return
+
     primary = preferred_model or settings.ai_model
     models = [primary] + [
         m for m in ([settings.ai_model] + settings.ai_model_fallbacks) if m != primary
@@ -689,8 +805,16 @@ def stream_reply(
                 if temperature is not None:
                     config_kwargs["temperature"] = temperature
                 config = types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
+                contents: Any = message
+                if attachment is not None:
+                    contents = [
+                        types.Part.from_bytes(
+                            data=attachment.data, mime_type=attachment.mime
+                        ),
+                        types.Part(text=message),
+                    ]
                 stream = genai_client.models.generate_content_stream(
-                    model=model, contents=message, config=config
+                    model=model, contents=contents, config=config
                 )
                 for chunk in stream:
                     text = getattr(chunk, "text", None)
@@ -759,6 +883,7 @@ class ChatStreamRequest(ChatRequest):
 
     regenerate: bool = False
     edit_message_id: int | None = None
+    attachment_token: str | None = None
 
 
 class UserResponse(BaseModel):
@@ -976,7 +1101,7 @@ def _finish_login(db: Session, profile: dict[str, Any], state_data: dict[str, An
     if user.totp_enabled:
         pending = twofa_serializer.dumps({"user": profile})
         return RedirectResponse(f"{return_url}#pending2fa={pending}")
-    token = create_session_token(profile, user.session_epoch)
+    token = issue_session(db, profile)
     return RedirectResponse(f"{return_url}#token={token}")
 
 
@@ -1330,7 +1455,7 @@ def email_register(
 
     profile = _email_profile(user)
     _send_verification_email(user)
-    return AuthTokenResponse(token=create_session_token(profile, user.session_epoch), user=profile)
+    return AuthTokenResponse(token=issue_session(db, profile), user=profile)
 
 
 @app.post("/api/auth/login")
@@ -1351,7 +1476,7 @@ def email_login(
         pending = twofa_serializer.dumps({"user": _email_profile(user)})
         return {"requires_2fa": True, "pending_token": pending}
     profile = _email_profile(user)
-    return {"token": create_session_token(profile, user.session_epoch), "user": profile}
+    return {"token": issue_session(db, profile), "user": profile}
 
 
 # --------------------------------------------------------------------------- #
@@ -1497,7 +1622,7 @@ def twofa_verify(
         profile = dict(profile)
         profile["is_admin"] = is_admin(profile)
         profile["is_founder"] = is_founder(profile)
-        return AuthTokenResponse(token=create_session_token(profile, user.session_epoch), user=profile)
+        return AuthTokenResponse(token=issue_session(db, profile), user=profile)
 
     code = payload.code.strip()
     verified = pyotp.TOTP(user.totp_secret).verify(code, valid_window=1)
@@ -1510,7 +1635,7 @@ def twofa_verify(
     session_profile = dict(_email_profile(user)) if (profile.get("provider") == "email") else dict(profile)
     session_profile["is_admin"] = is_admin(session_profile)
     session_profile["is_founder"] = is_founder(session_profile)
-    return AuthTokenResponse(token=create_session_token(session_profile, user.session_epoch), user=session_profile)
+    return AuthTokenResponse(token=issue_session(db, session_profile), user=session_profile)
 
 
 # --------------------------------------------------------------------------- #
@@ -1578,9 +1703,100 @@ def auth_logout(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, b
     return {"ok": True}
 
 
+def _current_sid(authorization: str | None) -> str | None:
+    """Extrae el identificador de sesión del token Bearer actual."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        payload = serializer.loads(token, max_age=settings.token_max_age)
+    except (BadSignature, SignatureExpired):
+        return None
+    return payload.get("sid")
+
+
+@app.get("/api/auth/sessions")
+def list_sessions(
+    authorization: str | None = Header(default=None),
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Lista los dispositivos con sesión iniciada y marca el actual."""
+    user = upsert_user(db, profile)
+    current = _current_sid(authorization)
+    rows = (
+        db.query(UserSession)
+        .filter(UserSession.user_id == user.id)
+        .order_by(UserSession.created_at.desc())
+        .all()
+    )
+    return {
+        "sessions": [
+            {
+                "sid": row.sid,
+                "user_agent": row.user_agent,
+                "ip": row.ip,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "last_seen": row.last_seen.isoformat() if row.last_seen else None,
+                "current": row.sid == current,
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.delete("/api/auth/sessions/{sid}")
+def revoke_session(
+    sid: str,
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    """Cierra una sesión concreta (revoca su token)."""
+    user = upsert_user(db, profile)
+    row = db.get(UserSession, sid)
+    if row is None or row.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada.")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/auth/sessions/revoke-others")
+def revoke_other_sessions(
+    authorization: str | None = Header(default=None),
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Cierra todas las sesiones menos la actual."""
+    user = upsert_user(db, profile)
+    current = _current_sid(authorization)
+    query = db.query(UserSession).filter(UserSession.user_id == user.id)
+    if current:
+        query = query.filter(UserSession.sid != current)
+    revoked = query.delete(synchronize_session=False)
+    db.commit()
+    return {"ok": True, "revoked": revoked}
+
+
 # --------------------------------------------------------------------------- #
 # Chat con Gemini
 # --------------------------------------------------------------------------- #
+
+def _attachment_for_user(
+    db: Session, user: User, token: str | None
+) -> Attachment | None:
+    """Busca un adjunto por su token público y comprueba que sea del usuario."""
+    if not token:
+        return None
+    attachment = (
+        db.query(Attachment)
+        .filter(Attachment.token == token, Attachment.user_id == user.id)
+        .first()
+    )
+    if attachment is None:
+        raise HTTPException(status_code=404, detail="Adjunto no encontrado.")
+    return attachment
+
 
 def prepare_chat(
     payload: ChatRequest,
@@ -1691,6 +1907,25 @@ def prepare_chat(
         db.refresh(row)
         user_message_id = row.id
 
+    attachment_token = getattr(payload, "attachment_token", None)
+    attachment: Attachment | None = None
+    if user_message_id is not None:
+        if attachment_token:
+            attachment = _attachment_for_user(db, user, attachment_token)
+            db.query(MessageAttachment).filter(
+                MessageAttachment.message_id == user_message_id
+            ).delete(synchronize_session=False)
+            db.add(
+                MessageAttachment(
+                    message_id=user_message_id, attachment_id=attachment.id
+                )
+            )
+            db.commit()
+        else:
+            link = db.get(MessageAttachment, user_message_id)
+            if link is not None:
+                attachment = db.get(Attachment, link.attachment_id)
+
     use_rag = user_settings.use_rag if payload.use_rag is None else payload.use_rag
     context = retrieve_context(db, user, message) if use_rag else ""
     prompt = message
@@ -1718,6 +1953,7 @@ def prepare_chat(
         "temperature": temperature,
         "model": user_settings.preferred_model or default_model,
         "user_message_id": user_message_id,
+        "attachment": attachment,
     }
 
 
@@ -1772,6 +2008,7 @@ def chat_stream(
                 preferred_model=prepared["model"],
                 system_instruction=system_prompt,
                 temperature=prepared["temperature"],
+                attachment=prepared.get("attachment"),
             ):
                 parts.append(piece)
                 yield event({"type": "delta", "text": piece})
@@ -2094,7 +2331,11 @@ def delete_document(
 # Conversaciones (historial en servidor)
 # --------------------------------------------------------------------------- #
 
-def _serialize_conversation(conversation: Conversation, detailed: bool = False) -> dict[str, Any]:
+def _serialize_conversation(
+    conversation: Conversation,
+    detailed: bool = False,
+    attachments: dict[int, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Convierte una conversación en un diccionario JSON-serializable."""
     data: dict[str, Any] = {
         "id": conversation.id,
@@ -2103,16 +2344,50 @@ def _serialize_conversation(conversation: Conversation, detailed: bool = False) 
         "messages": len(conversation.messages),
     }
     if detailed:
-        data["items"] = [
-            {
+        items: list[dict[str, Any]] = []
+        for message in conversation.messages:
+            item = {
                 "id": message.id,
                 "role": message.role,
                 "content": message.content,
                 "created_at": message.created_at.isoformat() if message.created_at else None,
             }
-            for message in conversation.messages
-        ]
+            attachment = (attachments or {}).get(message.id)
+            if attachment:
+                item["attachment"] = attachment
+            items.append(item)
+        data["items"] = items
     return data
+
+
+def _message_attachments(
+    db: Session, message_ids: list[int]
+) -> dict[int, dict[str, Any]]:
+    """Adjuntos de una lista de mensajes, indexados por id de mensaje."""
+    if not message_ids:
+        return {}
+    rows = (
+        db.query(
+            MessageAttachment.message_id,
+            Attachment.token,
+            Attachment.mime,
+            Attachment.filename,
+            Attachment.size,
+        )
+        .join(Attachment, Attachment.id == MessageAttachment.attachment_id)
+        .filter(MessageAttachment.message_id.in_(message_ids))
+        .all()
+    )
+    return {
+        message_id: {
+            "token": token,
+            "mime": mime,
+            "filename": filename,
+            "size": size,
+            "url": f"{settings.backend_url}/api/attachments/{token}",
+        }
+        for message_id, token, mime, filename, size in rows
+    }
 
 
 def _conversation_meta(
@@ -2240,7 +2515,12 @@ def get_conversation(
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversación no encontrada.")
     favorites, folder_map = _conversation_meta(db, user, [conversation.id])
-    data = _serialize_conversation(conversation, detailed=True)
+    attachments = _message_attachments(
+        db, [message.id for message in conversation.messages]
+    )
+    data = _serialize_conversation(
+        conversation, detailed=True, attachments=attachments
+    )
     data["is_favorite"] = conversation.id in favorites
     data["folder_id"] = folder_map.get(conversation.id)
     return {"conversation": data}
@@ -2289,6 +2569,14 @@ def delete_conversation(
     ).delete(synchronize_session=False)
     db.query(ConversationFolder).filter(
         ConversationFolder.conversation_id == conversation.id
+    ).delete(synchronize_session=False)
+    db.query(ConversationShare).filter(
+        ConversationShare.conversation_id == conversation.id
+    ).delete(synchronize_session=False)
+    db.query(MessageAttachment).filter(
+        MessageAttachment.message_id.in_(
+            db.query(Message.id).filter(Message.conversation_id == conversation.id)
+        )
     ).delete(synchronize_session=False)
     db.delete(conversation)
     db.commit()
@@ -2465,6 +2753,160 @@ def toggle_favorite(
 
 
 # --------------------------------------------------------------------------- #
+# Adjuntos (imágenes y PDF)
+# --------------------------------------------------------------------------- #
+
+MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
+ALLOWED_ATTACHMENT_TYPES = {
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/gif",
+    "application/pdf",
+}
+
+
+@app.post("/api/attachments")
+async def upload_attachment(
+    file: UploadFile = File(...),
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Sube una imagen o PDF y devuelve su token público."""
+    user = upsert_user(db, profile)
+    _ensure_email_verified(user)
+    mime = (file.content_type or "").lower().split(";")[0]
+    if mime not in ALLOWED_ATTACHMENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="Solo se admiten imágenes (PNG, JPG, WebP, GIF) o PDF.",
+        )
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="El archivo está vacío.")
+    if len(data) > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(status_code=413, detail="El archivo supera los 8 MB.")
+
+    token = secrets.token_urlsafe(24)
+    attachment = Attachment(
+        token=token,
+        user_id=user.id,
+        filename=(file.filename or "archivo")[:255],
+        mime=mime,
+        size=len(data),
+        data=data,
+    )
+    db.add(attachment)
+    db.commit()
+    db.refresh(attachment)
+    return {
+        "attachment": {
+            "token": token,
+            "mime": mime,
+            "filename": attachment.filename,
+            "size": len(data),
+            "url": f"{settings.backend_url}/api/attachments/{token}",
+        }
+    }
+
+
+@app.get("/api/attachments/{token}")
+def get_attachment(token: str, db: Session = Depends(get_db)) -> Response:
+    """Sirve un adjunto por su token (no adivinable) para poder mostrarlo."""
+    attachment = db.query(Attachment).filter(Attachment.token == token).first()
+    if attachment is None:
+        raise HTTPException(status_code=404, detail="Adjunto no encontrado.")
+    return Response(
+        content=attachment.data,
+        media_type=attachment.mime,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Compartir conversaciones (enlace público de solo lectura)
+# --------------------------------------------------------------------------- #
+
+@app.post("/api/conversations/{conversation_id}/share")
+def create_share(
+    conversation_id: int,
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Crea (o devuelve) el enlace público de una conversación."""
+    user = upsert_user(db, profile)
+    conversation = _owned_conversation(db, user, conversation_id)
+    share = db.get(ConversationShare, conversation.id)
+    if share is None:
+        share = ConversationShare(
+            conversation_id=conversation.id,
+            token=secrets.token_urlsafe(24),
+            user_id=user.id,
+        )
+        db.add(share)
+        db.commit()
+        db.refresh(share)
+    return {
+        "token": share.token,
+        "url": f"{settings.frontend_url}/?share={share.token}",
+    }
+
+
+@app.delete("/api/conversations/{conversation_id}/share")
+def revoke_share(
+    conversation_id: int,
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    """Revoca el enlace público de una conversación."""
+    user = upsert_user(db, profile)
+    conversation = _owned_conversation(db, user, conversation_id)
+    share = db.get(ConversationShare, conversation.id)
+    if share is not None:
+        db.delete(share)
+        db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/share/{token}")
+@limiter.limit(settings.rate_limit)
+def public_share(
+    request: Request,
+    token: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Vista pública de solo lectura de una conversación compartida."""
+    share = (
+        db.query(ConversationShare)
+        .filter(ConversationShare.token == token)
+        .first()
+    )
+    if share is None:
+        raise HTTPException(
+            status_code=404, detail="Este enlace no es válido o se ha revocado."
+        )
+    conversation = db.get(Conversation, share.conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversación no encontrada.")
+    share.views = int(share.views or 0) + 1
+    db.commit()
+    attachments = _message_attachments(
+        db, [message.id for message in conversation.messages]
+    )
+    data = _serialize_conversation(
+        conversation, detailed=True, attachments=attachments
+    )
+    return {
+        "conversation": {
+            "title": data["title"],
+            "items": data["items"],
+            "views": share.views,
+            "shared_at": share.created_at.isoformat() if share.created_at else None,
+        }
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Ajustes, planes y cuotas
 # --------------------------------------------------------------------------- #
 
@@ -2531,6 +2973,72 @@ def get_usage(
         },
         "day": today_str(),
     }
+
+
+@app.get("/api/account/export")
+def export_account(
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Devuelve todos los datos del usuario en JSON descargable."""
+    user = upsert_user(db, profile)
+    conversations = (
+        db.query(Conversation)
+        .filter(Conversation.user_id == user.id)
+        .order_by(Conversation.id)
+        .all()
+    )
+    documents = (
+        db.query(Document).filter(Document.user_id == user.id).order_by(Document.id).all()
+    )
+    data = {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "account": {
+            "id": user.id,
+            "username": user.username,
+            "display_name": user.display_name,
+            "email": user.email,
+            "email_verified": bool(user.email_verified),
+            "plan": user.plan,
+            "role": user.role,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+        },
+        "conversations": [
+            {
+                "id": conversation.id,
+                "title": conversation.title,
+                "created_at": conversation.created_at.isoformat()
+                if conversation.created_at
+                else None,
+                "updated_at": conversation.updated_at.isoformat()
+                if conversation.updated_at
+                else None,
+                "messages": [
+                    {
+                        "role": message.role,
+                        "content": message.content,
+                        "created_at": message.created_at.isoformat()
+                        if message.created_at
+                        else None,
+                    }
+                    for message in conversation.messages
+                ],
+            }
+            for conversation in conversations
+        ],
+        "documents": [
+            {"title": document.title, "created_at": document.created_at.isoformat()}
+            for document in documents
+        ],
+    }
+    payload = json.dumps(data, ensure_ascii=False, indent=2, default=str)
+    return Response(
+        content=payload,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": 'attachment; filename="coreia-mis-datos.json"'
+        },
+    )
 
 
 @app.delete("/api/account")
@@ -3124,6 +3632,7 @@ def admin_health(
         "database": "ok" if database_ok else "error",
         "redis": cache_is_enabled(),
         "gemini": genai_client is not None,
+        "engine": llm.provider_name(),
         "email_relay": bool(settings.email_relay_url and settings.email_relay_token),
         "founder_2fa_required": settings.founder_2fa_required,
     }
@@ -3257,7 +3766,12 @@ def admin_delete_notice(
 def public_config(db: Session = Depends(get_db)) -> dict[str, Any]:
     """Configuración pública para el frontend (feature flags activas)."""
     flags = {row.key: bool(row.enabled) for row in db.query(FeatureFlag).all()}
-    return {"flags": flags}
+    cfg = llm.resolve()
+    return {
+        "flags": flags,
+        "engine": llm.provider_name(),
+        "model": cfg["model"] if cfg else "",
+    }
 
 
 @app.get("/api/notices")

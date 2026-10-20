@@ -1540,6 +1540,77 @@
 .update-content { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
 .update-btn { background: var(--accent); color: #fff; border: none; padding: 4px 8px; border-radius: 999px; cursor: pointer; font-size: 12px; }
 .update-btn:disabled { opacity: .5; }
+
+    /* Adjuntos en el compositor y en los mensajes */
+    .attachment-preview { display: flex; gap: 8px; padding: 0 0 8px; flex-wrap: wrap; }
+    .attachment-preview.hidden { display: none; }
+    .attachment-chip {
+      display: flex; align-items: center; gap: 8px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 11px; padding: 6px 8px; max-width: 100%;
+    }
+    .attachment-chip img { width: 38px; height: 38px; border-radius: 8px; object-fit: cover; }
+    .attachment-chip span {
+      font-size: 12.5px; color: var(--muted);
+      max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .attachment-chip button {
+      background: transparent; border: none; color: var(--faint);
+      cursor: pointer; font-size: 13px; padding: 2px 5px; border-radius: 6px;
+    }
+    .attachment-chip button:hover { background: var(--surface-hover); color: var(--text); }
+    .msg-attachment { margin: 2px 0 8px; }
+    .msg-attachment img {
+      display: block; max-width: min(360px, 100%); max-height: 320px;
+      border-radius: 12px; border: 1px solid var(--border); object-fit: cover;
+    }
+    .msg-file {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 8px 11px;
+      color: var(--text); text-decoration: none; font-size: 13px;
+    }
+    .msg-file:hover { background: var(--surface-hover); }
+
+    /* Compartir */
+    .share-link-row { display: flex; gap: 8px; align-items: center; }
+    .share-link-row input {
+      flex: 1; min-width: 0; padding: 10px 12px; border-radius: 10px;
+      border: 1px solid var(--border); background: var(--surface);
+      color: var(--text); font-size: 13px;
+    }
+    .share-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+    .share-actions a { text-decoration: none; }
+    .share-banner {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 10px 16px; background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      font-size: 13px; color: var(--muted);
+    }
+    .share-banner.hidden { display: none; }
+    .share-banner a { color: var(--accent); font-weight: 600; text-decoration: none; }
+    .share-error {
+      margin: 60px auto; max-width: 420px; text-align: center;
+      color: var(--muted); font-size: 14.5px; line-height: 1.6;
+    }
+    body.share-view .sidebar,
+    body.share-view .topbar,
+    body.share-view .composer,
+    body.share-view .overlay,
+    body.share-view .menu-btn,
+    body.share-view #welcome { display: none !important; }
+    body.share-view .chat-scroll { padding-top: 20px; }
+
+    /* Sesiones activas */
+    .sessions-list { display: flex; flex-direction: column; gap: 8px; }
+    .session-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      padding: 9px 11px; border-radius: 10px;
+      background: var(--surface); border: 1px solid var(--border);
+    }
+    .session-info { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+    .session-info strong { font-size: 13px; }
+    .session-info span { font-size: 11.5px; color: var(--faint); }
   </style>
 </head>
 <body>
@@ -1602,6 +1673,10 @@
     </aside>
 
     <main class="main">
+      <div class="share-banner hidden" id="share-banner">
+        <span>Conversación compartida · Solo lectura</span>
+        <a href="./">Abrir Core IA</a>
+      </div>
       <header class="topbar">
         <button class="icon-btn menu-btn" id="menu-btn" aria-label="Menú">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
@@ -1615,6 +1690,9 @@
         </button>
         <button class="plan-badge" id="plans-btn" type="button" title="Ver plan y consumo">
           <span id="plan-badge">Plan</span>
+        </button>
+        <button class="icon-btn" id="share-btn" type="button" title="Compartir conversación" aria-label="Compartir conversación" hidden>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4"/><path d="m15.4 6.5-6.8 4"/></svg>
         </button>
         <button class="icon-btn" id="settings-btn" type="button" title="Ajustes de usuario" aria-label="Ajustes">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
@@ -1639,12 +1717,16 @@
       </div>
 
       <form class="composer" id="composer">
+        <div class="attachment-preview hidden" id="attachment-preview"></div>
         <div class="composer-inner">
           <button class="tool-btn" id="mic-btn" type="button" title="Dictar por voz" aria-label="Dictar">
             <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
           </button>
           <textarea id="input" rows="1" placeholder="Escribe un mensaje a Core IA..." autocomplete="off"></textarea>
           <div class="composer-tools">
+            <button class="tool-btn" id="attach-btn" type="button" title="Adjuntar imagen o PDF" aria-label="Adjuntar archivo">
+              <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.4 11.6-8.5 8.5a6 6 0 0 1-8.5-8.5l8.5-8.5a4 4 0 0 1 5.7 5.7l-8.5 8.5a2 2 0 0 1-2.8-2.8l7.8-7.8"/></svg>
+            </button>
             <button class="tool-btn" id="image-btn" type="button" title="Generar imagen" aria-label="Generar imagen">
               <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>
             </button>
@@ -1659,6 +1741,7 @@
         </div>
         <div class="composer-hint">Core IA puede cometer errores. Verifica la información importante.</div>
       </form>
+      <input type="file" id="attach-input" accept="image/png,image/jpeg,image/webp,image/gif,application/pdf" hidden />
     </main>
   </div>
 
@@ -1673,6 +1756,25 @@
       <textarea id="kb-text" placeholder="Pega aquí el texto o la documentación..."></textarea>
       <button class="primary-btn" id="kb-save" type="button">Guardar documento</button>
       <div class="kb-list" id="kb-list"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="share-modal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>Compartir conversación</h2>
+        <button class="icon-btn" id="share-close" type="button" aria-label="Cerrar">✕</button>
+      </div>
+      <p class="modal-sub">Cualquier persona con el enlace podrá leer esta conversación en modo solo lectura.</p>
+      <div class="share-link-row">
+        <input id="share-link" type="text" readonly placeholder="Generando enlace…" />
+        <button class="primary-btn small" id="share-copy" type="button">Copiar</button>
+      </div>
+      <div class="share-actions">
+        <a class="admin-mini" id="share-open" target="_blank" rel="noopener">Abrir vista pública</a>
+        <button class="admin-mini" id="share-revoke" type="button">Revocar enlace</button>
+      </div>
+      <p class="settings-hint" id="share-status"></p>
     </div>
   </div>
 
@@ -1725,6 +1827,13 @@
             <p class="settings-hint">Guarda estos códigos de respaldo en un lugar seguro. No se volverán a mostrar.</p>
             <ul id="twofa-recovery-list"></ul>
           </div>
+        </section>
+
+        <section class="settings-section">
+          <h3>Sesiones activas</h3>
+          <p class="settings-hint">Dispositivos con la sesión iniciada. Puedes cerrar cualquiera de ellos.</p>
+          <div class="sessions-list" id="sessions-list">Cargando…</div>
+          <button class="admin-mini" id="sessions-revoke-others" type="button">Cerrar el resto de sesiones</button>
         </section>
 
         <section class="settings-section">
@@ -1832,6 +1941,7 @@
 
         <section class="settings-section danger-zone">
           <h3>Zona peligrosa</h3>
+          <button class="admin-mini" id="export-data" type="button">Descargar mis datos (JSON)</button>
           <button class="danger-btn" id="delete-account" type="button">Eliminar mi cuenta</button>
         </section>
       </div>

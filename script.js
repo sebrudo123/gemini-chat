@@ -66,6 +66,22 @@ const settingsRpcFounderState = document.getElementById("settings-rpc-founder-st
 const discordRpcStatus = document.getElementById("discord-rpc-status");
 const settingsRpcToggle = document.getElementById("settings-rpc-toggle");
 
+const shareBtn = document.getElementById("share-btn");
+const shareModal = document.getElementById("share-modal");
+const shareClose = document.getElementById("share-close");
+const shareLinkEl = document.getElementById("share-link");
+const shareCopy = document.getElementById("share-copy");
+const shareOpen = document.getElementById("share-open");
+const shareRevoke = document.getElementById("share-revoke");
+const shareStatus = document.getElementById("share-status");
+
+const attachBtn = document.getElementById("attach-btn");
+const attachInput = document.getElementById("attach-input");
+const attachmentPreview = document.getElementById("attachment-preview");
+
+let pendingAttachment = null;
+let shareMode = false;
+
 const plansModal = document.getElementById("plans-modal");
 const plansClose = document.getElementById("plans-close");
 const usageList = document.getElementById("usage-list");
@@ -373,10 +389,29 @@ async function loadConfig() {
   try {
     const data = await api("/api/config");
     flags = { ...flags, ...(data.flags || {}) };
+    applyEngineBadge(data.engine, data.model);
   } catch (_) {
     /* mantener valores por defecto */
   }
   applyFlags();
+}
+
+function applyEngineBadge(engine, model) {
+  if (!engine || engine === "gemini") return;
+  const badge = document.querySelector(".model-badge");
+  if (!badge) return;
+  const name = String(model || "")
+    .split("/")
+    .pop()
+    .replace(/:free$/, "")
+    .slice(0, 24);
+  badge.textContent = "";
+  const pulse = document.createElement("span");
+  pulse.className = "pulse";
+  badge.appendChild(pulse);
+  badge.appendChild(document.createTextNode(name ? ` Core IA · ${name}` : " Core IA"));
+  const field = settingsModel ? settingsModel.closest(".field") : null;
+  if (field) field.hidden = true;
 }
 
 function applyFlags() {
@@ -778,10 +813,12 @@ async function openConversation(id) {
     const data = await api(`/api/conversations/${id}`);
     const conversation = data.conversation;
     currentChatId = conversation.id;
+    updateShareButton();
     messages = (conversation.items || []).map((m) => ({
       id: m.id,
       role: m.role === "assistant" ? "bot" : "user",
       text: m.content,
+      attachment: m.attachment,
     }));
     renderHistory();
     renderChat();
@@ -820,14 +857,20 @@ function startNewChat() {
   if (!currentUser) return;
   currentChatId = null;
   messages = [];
+  updateShareButton();
   renderHistory();
   renderChat();
   inputEl.focus();
   closeSidebar();
 }
 
-function addMessage(role, text, image = null) {
-  const message = { role, text, image: image || undefined };
+function addMessage(role, text, image = null, attachment = null) {
+  const message = {
+    role,
+    text,
+    image: image || undefined,
+    attachment: attachment || undefined,
+  };
   messages.push(message);
   return message;
 }
@@ -841,7 +884,12 @@ function renderChat() {
   if (!hasMessages) return;
 
   messages.forEach((m, index) =>
-    chatEl.appendChild(buildMessage(m.role, m.text, m.image, { index }))
+    chatEl.appendChild(
+      buildMessage(m.role, m.text, m.image, {
+        index: shareMode ? undefined : index,
+        attachment: m.attachment,
+      })
+    )
   );
   scrollToBottom();
 }
@@ -1098,6 +1146,35 @@ function renderRich(container, text) {
   }
 }
 
+function attachmentUrl(attachment) {
+  if (!attachment) return "";
+  if (attachment.token) {
+    return `${BACKEND_URL}/api/attachments/${attachment.token}`;
+  }
+  return attachment.url || "";
+}
+
+function buildAttachmentView(attachment) {
+  const wrap = document.createElement("div");
+  wrap.className = "msg-attachment";
+  if ((attachment.mime || "").startsWith("image/")) {
+    const img = document.createElement("img");
+    img.src = attachmentUrl(attachment);
+    img.alt = attachment.filename || "Imagen adjunta";
+    img.loading = "lazy";
+    wrap.appendChild(img);
+  } else {
+    const link = document.createElement("a");
+    link.href = attachmentUrl(attachment);
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.className = "msg-file";
+    link.textContent = `📄 ${attachment.filename || "Documento PDF"}`;
+    wrap.appendChild(link);
+  }
+  return wrap;
+}
+
 function buildMessage(role, text, image, meta = {}) {
   const row = document.createElement("div");
   row.className = `msg ${role}`;
@@ -1114,6 +1191,9 @@ function buildMessage(role, text, image, meta = {}) {
 
   const bubble = document.createElement("div");
   bubble.className = "bubble";
+  if (meta.attachment) {
+    bubble.appendChild(buildAttachmentView(meta.attachment));
+  }
   if (text) {
     if (role === "bot") {
       renderRich(bubble, text);
@@ -1380,13 +1460,18 @@ async function sendMessage(text, options = {}) {
   if (sending) return;
 
   const { skipUserMessage = false, ...streamOptions } = options;
+  const attachment = skipUserMessage ? null : pendingAttachment;
   sending = true;
   updateSendState();
   updateComposerForVerification();
 
   if (!skipUserMessage) {
-    addMessage("user", text);
+    addMessage("user", text, null, attachment);
     renderChat();
+    if (attachment) {
+      pendingAttachment = null;
+      renderAttachmentPreview();
+    }
   }
   appendTyping();
 
@@ -1401,8 +1486,12 @@ async function sendMessage(text, options = {}) {
       renderChat();
       loadUsage();
     } else {
-      const result = await streamChatMessage(text, streamOptions);
+      const result = await streamChatMessage(text, {
+        ...streamOptions,
+        ...(attachment ? { attachment_token: attachment.token } : {}),
+      });
       if (result.conversationId) currentChatId = result.conversationId;
+      updateShareButton();
       if (result.reply) {
         if (ttsEnabled) speak(result.reply);
         notifyReply(result.reply);
@@ -1561,7 +1650,10 @@ function updateSendState() {
   sendEl.classList.remove("stopping");
   sendEl.setAttribute("aria-label", "Enviar");
   sendEl.disabled =
-    sending || inputEl.disabled || founder2faBlocked() || inputEl.value.trim().length === 0;
+    sending ||
+    inputEl.disabled ||
+    founder2faBlocked() ||
+    (inputEl.value.trim().length === 0 && !pendingAttachment);
 }
 
 function stopStreaming() {
@@ -1588,7 +1680,9 @@ formEl.addEventListener("submit", (e) => {
     openSettings();
     return;
   }
-  const text = inputEl.value.trim();
+  const text =
+    inputEl.value.trim() ||
+    (pendingAttachment ? "Analiza el archivo adjunto." : "");
   if (!text || sending) return;
   inputEl.value = "";
   autoResize();
@@ -1616,6 +1710,17 @@ inputEl.addEventListener("input", () => {
   autoResize();
   updateSendState();
   updateComposerForVerification();
+});
+
+inputEl.addEventListener("paste", (event) => {
+  const files = (event.clipboardData && event.clipboardData.files) || [];
+  const file = Array.from(files).find(
+    (item) => item.type.startsWith("image/") || item.type === "application/pdf"
+  );
+  if (file) {
+    event.preventDefault();
+    uploadAttachment(file);
+  }
 });
 
 inputEl.addEventListener("keydown", (e) => {
@@ -1968,6 +2073,7 @@ function openSettings() {
   renderDiscordRpcSettings();
   settingsModal.classList.add("show");
   loadTwofaStatus();
+  loadSessions();
 }
 
 function closeSettings() {
@@ -2004,6 +2110,209 @@ async function deleteAccount() {
     await api("/api/account", { method: "DELETE" });
     closeSettings();
     clearSession();
+  } catch (err) {
+    renderError(err.message);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Compartir conversaciones                                            */
+/* ------------------------------------------------------------------ */
+
+function updateShareButton() {
+  if (shareBtn) shareBtn.hidden = !currentChatId || shareMode;
+}
+
+async function openShare() {
+  if (!currentChatId) {
+    showToast("Abre una conversación para compartirla.");
+    return;
+  }
+  shareModal.classList.add("show");
+  shareLinkEl.value = "";
+  shareLinkEl.placeholder = "Generando enlace…";
+  shareOpen.removeAttribute("href");
+  shareStatus.textContent = "";
+  try {
+    const data = await api(`/api/conversations/${currentChatId}/share`, {
+      method: "POST",
+    });
+    shareLinkEl.value = data.url;
+    shareOpen.href = data.url;
+  } catch (err) {
+    shareStatus.textContent = err.message;
+  }
+}
+
+function closeShare() {
+  shareModal.classList.remove("show");
+}
+
+async function copyShareLink() {
+  if (!shareLinkEl.value) return;
+  try {
+    await navigator.clipboard.writeText(shareLinkEl.value);
+    shareCopy.textContent = "Copiado";
+    setTimeout(() => {
+      shareCopy.textContent = "Copiar";
+    }, 1200);
+  } catch (_) {
+    shareLinkEl.select();
+    shareStatus.textContent = "Copia el enlace manualmente.";
+  }
+}
+
+async function revokeShareLink() {
+  if (!currentChatId) return;
+  const ok = window.confirm(
+    "¿Revocar el enlace? Quien lo tenga dejará de poder ver la conversación."
+  );
+  if (!ok) return;
+  try {
+    await api(`/api/conversations/${currentChatId}/share`, { method: "DELETE" });
+    shareLinkEl.value = "";
+    shareOpen.removeAttribute("href");
+    shareStatus.textContent = "Enlace revocado.";
+  } catch (err) {
+    shareStatus.textContent = err.message;
+  }
+}
+
+async function initShareView(shareToken) {
+  shareMode = true;
+  document.body.classList.add("share-view");
+  const banner = document.getElementById("share-banner");
+  if (banner) banner.classList.remove("hidden");
+  try {
+    const res = await fetch(
+      `${BACKEND_URL}/api/share/${encodeURIComponent(shareToken)}`
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || "Enlace no válido.");
+    const conversation = data.conversation;
+    document.title = `${conversation.title || "Conversación"} · Core IA`;
+    messages = (conversation.items || []).map((m) => ({
+      id: m.id,
+      role: m.role === "assistant" ? "bot" : "user",
+      text: m.content,
+      attachment: m.attachment,
+    }));
+    renderChat();
+  } catch (err) {
+    chatEl.innerHTML = "";
+    const box = document.createElement("div");
+    box.className = "share-error";
+    box.textContent =
+      err.message || "Este enlace no es válido o se ha revocado.";
+    chatEl.appendChild(box);
+  } finally {
+    hideSplash();
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Sesiones activas y exportación de datos                             */
+/* ------------------------------------------------------------------ */
+
+function formatSessionDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString();
+}
+
+function describeSession(session) {
+  const agent = (session.user_agent || "").slice(0, 90);
+  if (!agent) return "Dispositivo desconocido";
+  if (/android/i.test(agent)) return "Android · " + agent;
+  if (/iphone|ipad/i.test(agent)) return "iOS · " + agent;
+  return agent;
+}
+
+async function loadSessions() {
+  const list = document.getElementById("sessions-list");
+  if (!list) return;
+  list.textContent = "Cargando…";
+  try {
+    const data = await api("/api/auth/sessions");
+    list.innerHTML = "";
+    if (!data.sessions.length) {
+      list.textContent = "No hay sesiones registradas.";
+      return;
+    }
+    data.sessions.forEach((session) => {
+      const row = document.createElement("div");
+      row.className = "session-row";
+
+      const info = document.createElement("div");
+      info.className = "session-info";
+      const title = document.createElement("strong");
+      title.textContent = session.current
+        ? "Este dispositivo"
+        : describeSession(session);
+      info.appendChild(title);
+
+      const meta = document.createElement("span");
+      const parts = [];
+      if (session.created_at) parts.push(formatSessionDate(session.created_at));
+      if (session.ip) parts.push(session.ip);
+      meta.textContent = parts.join(" · ") || "—";
+      info.appendChild(meta);
+
+      row.appendChild(info);
+
+      if (!session.current) {
+        const revoke = document.createElement("button");
+        revoke.type = "button";
+        revoke.className = "admin-mini small";
+        revoke.textContent = "Cerrar";
+        revoke.addEventListener("click", () => revokeUserSession(session.sid));
+        row.appendChild(revoke);
+      }
+
+      list.appendChild(row);
+    });
+  } catch (err) {
+    list.textContent = err.message;
+  }
+}
+
+async function revokeUserSession(sid) {
+  try {
+    await api(`/api/auth/sessions/${encodeURIComponent(sid)}`, {
+      method: "DELETE",
+    });
+    await loadSessions();
+  } catch (err) {
+    renderError(err.message);
+  }
+}
+
+async function revokeOtherSessions() {
+  try {
+    await api("/api/auth/sessions/revoke-others", { method: "POST" });
+    await loadSessions();
+    showToast("Se cerraron las demás sesiones.");
+  } catch (err) {
+    renderError(err.message);
+  }
+}
+
+async function exportAccountData() {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/account/export`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error("No se pudieron exportar tus datos.");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "coreia-mis-datos.json";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
   } catch (err) {
     renderError(err.message);
   }
@@ -3577,8 +3886,96 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+const ATTACHMENT_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+  "application/pdf",
+];
+const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
+
+async function uploadAttachment(file) {
+  if (!file) return;
+  if (!currentUser) {
+    showAuthGate();
+    return;
+  }
+  if (!ATTACHMENT_TYPES.includes(file.type)) {
+    renderError("Solo puedo adjuntar imágenes (PNG, JPG, WebP, GIF) o PDF.");
+    return;
+  }
+  if (file.size > ATTACHMENT_MAX_BYTES) {
+    renderError("El archivo supera el máximo de 8 MB.");
+    return;
+  }
+  attachBtn.disabled = true;
+  try {
+    const body = new FormData();
+    body.append("file", file);
+    const res = await fetch(`${BACKEND_URL}/api/attachments`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body,
+    });
+    if (res.status === 401) {
+      clearSession();
+      return;
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || "No se pudo subir el archivo.");
+    pendingAttachment = data.attachment;
+    renderAttachmentPreview();
+    updateSendState();
+  } catch (err) {
+    renderError(err.message);
+  } finally {
+    attachBtn.disabled = false;
+    attachInput.value = "";
+  }
+}
+
+function renderAttachmentPreview() {
+  if (!attachmentPreview) return;
+  attachmentPreview.innerHTML = "";
+  if (!pendingAttachment) {
+    attachmentPreview.classList.add("hidden");
+    return;
+  }
+  attachmentPreview.classList.remove("hidden");
+  const chip = document.createElement("div");
+  chip.className = "attachment-chip";
+
+  if ((pendingAttachment.mime || "").startsWith("image/")) {
+    const img = document.createElement("img");
+    img.src = attachmentUrl(pendingAttachment);
+    img.alt = pendingAttachment.filename || "Adjunto";
+    chip.appendChild(img);
+  }
+
+  const name = document.createElement("span");
+  name.textContent = pendingAttachment.filename || "Archivo";
+  chip.appendChild(name);
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.textContent = "✕";
+  remove.title = "Quitar adjunto";
+  remove.addEventListener("click", () => {
+    pendingAttachment = null;
+    renderAttachmentPreview();
+    updateSendState();
+  });
+  chip.appendChild(remove);
+  attachmentPreview.appendChild(chip);
+}
+
 function handleDroppedFile(file) {
   if (!file) return;
+  if (file.type.startsWith("image/") || file.type === "application/pdf") {
+    uploadAttachment(file);
+    return;
+  }
   const name = (file.name || "").toLowerCase();
   const isText =
     file.type.startsWith("text/") ||
@@ -3647,6 +4044,22 @@ kbModal.addEventListener("click", (event) => {
 });
 
 settingsBtn.addEventListener("click", openSettings);
+shareBtn.addEventListener("click", openShare);
+shareClose.addEventListener("click", closeShare);
+shareModal.addEventListener("click", (event) => {
+  if (event.target === shareModal) closeShare();
+});
+shareCopy.addEventListener("click", copyShareLink);
+shareRevoke.addEventListener("click", revokeShareLink);
+attachBtn.addEventListener("click", () => attachInput.click());
+attachInput.addEventListener("change", () => {
+  const file = attachInput.files && attachInput.files[0];
+  if (file) uploadAttachment(file);
+});
+document
+  .getElementById("sessions-revoke-others")
+  .addEventListener("click", revokeOtherSessions);
+document.getElementById("export-data").addEventListener("click", exportAccountData);
 settingsClose.addEventListener("click", closeSettings);
 settingsSave.addEventListener("click", saveSettings);
 deleteAccountBtn.addEventListener("click", deleteAccount);
@@ -3772,6 +4185,11 @@ authSwitchBtn.addEventListener("click", () => {
 (async function init() {
   applyTheme(localStorage.getItem(THEME_KEY) || "dark");
   captureTokenFromUrl();
+  const shareParam = new URLSearchParams(window.location.search).get("share");
+  if (shareParam) {
+    await initShareView(shareParam);
+    return;
+  }
   const params = new URLSearchParams(window.location.search);
   if (params.get("auth") === "error") {
     window.history.replaceState(null, "", window.location.pathname);
@@ -3793,6 +4211,7 @@ authSwitchBtn.addEventListener("click", () => {
   setAuthMode("login");
   initDragAndDrop();
   registerServiceWorker();
+  updateShareButton();
   await Promise.all([loadProviders(), loadConfig(), loadNotices()]);
   if (authProvidersEl) renderLoginButtons(authProvidersEl, "auth-login");
   try {

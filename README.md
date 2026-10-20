@@ -52,6 +52,18 @@ AI_API_KEY=...            # https://aistudio.google.com/apikey
 AI_MODEL=gemini-3.8-flash
 AI_MODEL_FALLBACKS=gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.7-flash,gemini-flash-latest
 AI_RETRIES=2
+
+# Motor de chat propio (opcional). Si defines una clave, las respuestas de
+# texto salen del modelo abierto y Gemini queda solo como respaldo/embeddings.
+# Proveedores: groq, openrouter, cerebras, cloudflare, ollama o custom.
+LLM_PROVIDER=auto         # auto detecta la primera clave disponible
+GROQ_API_KEY=             # https://console.groq.com/keys (gratis, sin tarjeta)
+LLM_MODEL=                # vacío = llama-3.3-70b-versatile en Groq
+LLM_VISION_MODEL=         # vacío = llama-4-scout en Groq (imágenes)
+# OPENROUTER_API_KEY=...  # alternativa: https://openrouter.ai/keys
+# LLM_BASE_URL=...        # para Ollama u otro servidor compatible con OpenAI
+# LLM_API_KEY=...
+
 IMAGE_MODEL=              # vacío deshabilita la generación de imágenes (modelo de pago)
 EMBEDDING_MODEL=gemini-embedding-001
 RAG_ENABLED=true

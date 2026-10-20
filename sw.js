@@ -1,5 +1,5 @@
 /* Service worker de Core IA: shell offline ligero con actualización inmediata. */
-const CACHE = "coreia-shell-v5";
+const CACHE = "coreia-shell-v6";
 const ASSETS = [
   "./",
   "./index.html",

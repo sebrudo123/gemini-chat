@@ -4,13 +4,16 @@ import android.annotation.SuppressLint;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.webkit.PermissionRequest;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -49,6 +52,8 @@ public class MainActivity extends AppCompatActivity {
     private PermissionRequest pendingAudioRequest;
 
     private static final int REQUEST_MIC = 9002;
+    private static final int REQUEST_FILE_CHOOSER = 9003;
+    private ValueCallback<Uri[]> filePathCallback;
 
     private static WeakReference<WebView> webViewRef = new WeakReference<>(null);
 
@@ -158,6 +163,26 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onPermissionRequest(final PermissionRequest request) {
                 grantWebPermissions(request);
+            }
+
+            @Override
+            public boolean onShowFileChooser(
+                    WebView view,
+                    ValueCallback<Uri[]> callback,
+                    FileChooserParams params) {
+                if (filePathCallback != null) {
+                    filePathCallback.onReceiveValue(null);
+                }
+                filePathCallback = callback;
+                try {
+                    Intent intent = params.createIntent();
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    startActivityForResult(intent, FILE_CHOOSER_REQUEST);
+                    return true;
+                } catch (Exception error) {
+                    filePathCallback = null;
+                    return false;
+                }
             }
         });
         webView.addJavascriptInterface(new DiscordBridge(), "DiscordRPC");
@@ -323,6 +348,30 @@ public class MainActivity extends AppCompatActivity {
 
     private boolean hasPermission(String permission) {
         return checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == REQUEST_FILE_CHOOSER) {
+            if (filePathCallback != null) {
+                Uri[] results = null;
+                if (resultCode == RESULT_OK && data != null) {
+                    ClipData clipData = data.getClipData();
+                    if (clipData != null) {
+                        results = new Uri[clipData.getItemCount()];
+                        for (int i = 0; i < clipData.getItemCount(); i++) {
+                            results[i] = clipData.getItemAt(i).getUri();
+                        }
+                    } else if (data.getData() != null) {
+                        results = new Uri[] {data.getData()};
+                    }
+                }
+                filePathCallback.onReceiveValue(results);
+                filePathCallback = null;
+            }
+            return;
+        }
+        super.onActivityResult(requestCode, resultCode, data);
     }
 
     @Override

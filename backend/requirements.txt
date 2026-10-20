@@ -14,3 +14,6 @@ alembic
 prometheus-client
 pyotp
 qrcode
+
+pypdf
+python-multipart

@@ -26,6 +26,21 @@ class Settings:
             if model.strip()
         ]
         self.ai_retries = int(os.environ.get("AI_RETRIES", "2"))
+
+        # --- Motor de chat propio (API compatible con OpenAI) ---
+        # Proveedores admitidos: groq, openrouter, cerebras, cloudflare, ollama,
+        # custom. Con "auto" se elige el primero que tenga clave configurada.
+        self.llm_provider = os.environ.get("LLM_PROVIDER", "auto").strip().lower()
+        self.llm_base_url = os.environ.get("LLM_BASE_URL", "").strip()
+        self.llm_api_key = os.environ.get("LLM_API_KEY", "").strip()
+        self.llm_model = os.environ.get("LLM_MODEL", "").strip()
+        self.llm_vision_model = os.environ.get("LLM_VISION_MODEL", "").strip()
+        self.groq_api_key = os.environ.get("GROQ_API_KEY", "").strip()
+        self.openrouter_api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+        self.cerebras_api_key = os.environ.get("CEREBRAS_API_KEY", "").strip()
+        self.cloudflare_account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+        self.cloudflare_api_token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+
         self.image_model = os.environ.get("IMAGE_MODEL", "")
         self.embedding_model = os.environ.get("EMBEDDING_MODEL", "gemini-embedding-001")
         self.rag_enabled = os.environ.get("RAG_ENABLED", "true").lower() in ("1", "true", "yes")
