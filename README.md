@@ -424,10 +424,13 @@ registran en `canal_logs` si lo configuras.
 ### Panel web (móvil)
 
 El backend sirve un panel dedicado en `https://gemini-chat-backend-vyrz.onrender.com/bot`.
-Es una app móvil con el theme de Core IA que reinicia el token de sesión admin
-de Core IA y, desde ahí, permite configurar todo el bot de Discord.
+Es una app móvil con un diseño propio (cabecera con logo, tarjetas grandes
+con icono, lista de servidores y barra de navegación inferior flotante),
+diferente del panel de administración del asistente, con la paleta morada de
+Core IA. Sus pestañas son: **Resumen · Servidores · Mensajes · Comandos ·
+Anuncios · Ajustes** (la última se abre con el ⚙️ de la cabecera).
 
-El acceso solo está disponible para el **fundador** (los IDs de
+El inicio de sesión solo está disponible para el **fundador** (los IDs de
 `FOUNDER_DISCORD_IDS`): el botón **Entrar con Discord** lanza el OAuth de
 Discord marcado para el panel; si el ID que entra no es fundador se le muestra
 "No tienes permisos para usar este panel" y no se crea ninguna sesión. También
@@ -436,16 +439,16 @@ restricción de admin.
 
 El panel permite configurar todo el bot de Discord:
 
-- **Resumen**: encender/apagar el bot, sincronizar los comandos de barra y
-  enviar un mensaje de prueba a un canal real.
+- **Resumen**: encender/apagar el bot y enviar un mensaje de prueba a un canal real.
 - **Servidores**: lista de servidores donde está el bot (leída de Discord), con
-  conteo de miembros.
-- **Canales**: todos los canales de texto reales del servidor, para asignar el
-  de verificación, bienvenida, despedida y registros.
-- **Roles**: todos los roles reales del servidor, para el rol de verificado y
-  el inicial; aquí también se ajusta la antigüedad mínima de la cuenta.
-- **Mensajes**: plantillas de bienvenida y despedida con sus placeholders
-  tocables (`{user}`, `{name}`, `{server}`, `{count}`…).
+  icono y conteo de miembros.
+- **Ajustes**: roles verificado e inicial, antigüedad mínima de la cuenta,
+  lista completa de roles recargados en vivo, estado del bot y cerrar sesión.
+- **Comandos**: lista de comandos instalados (`/coreia`, `/coreia-reset`,
+  `/verificacion …`) y botón para sincronizarlos en Discord.
+- **Anuncios**: redactar y publicar un anuncio del bot en cualquier canal real.
+- **Mensajes**: plantillas de bienvenida y despedida con placeholders tocables,
+  y los canales reales de verificación, bienvenida, despedida y registros.
 
 Los datos se leen en vivo desde la API de Discord con el token del bot
 (`DISCORD_BOT_TOKEN`), nunca desde el repositorio. Cada servidor guarda su

@@ -27,12 +27,12 @@
   function busy(button, on) {
     if (!button) return;
     if (on) {
-      button.dataset.label = button.textContent;
+      button.dataset.label = button.innerHTML;
       button.disabled = true;
       button.innerHTML = '<span class="spinner"></span>';
     } else {
       button.disabled = false;
-      if (button.dataset.label) button.textContent = button.dataset.label;
+      if (button.dataset.label) button.innerHTML = button.dataset.label;
     }
   }
 
@@ -46,9 +46,10 @@
     }
     return fetch(path, options).then(function (res) {
       return res
-        .json()
-        .catch(function () { return {}; })
-        .then(function (data) {
+        .text()
+        .then(function (text) {
+          var data = {};
+          try { data = text ? JSON.parse(text) : {}; } catch (e) { data = { detail: text && text.slice ? text.slice(0, 200) : "" }; }
           if (!res.ok) throw new Error(data.detail || res.statusText || "Error " + res.status);
           return data;
         });
@@ -57,7 +58,7 @@
 
   function showApp(logged) {
     $("loginView").style.display = logged ? "none" : "flex";
-    $("appView").style.display = logged ? "flex" : "none";
+    $("appView").style.display = logged ? "block" : "none";
     if (logged) refreshAll();
   }
 
@@ -106,7 +107,9 @@
     api("/api/admin/discord-bot")
       .then(function () { handleAuthSuccess(value); })
       .catch(function (err) {
-        $("loginMsg").textContent = "El token no es válido para usar el panel. " + (err.message || "");
+        $("loginMsg").textContent = /403|fundador|permisos/i.test(err.message || "")
+          ? "No tienes permisos para usar este panel. Solo el fundador de Core IA."
+          : "El token no es válido para usar el panel. " + (err.message || "");
         $("loginMsg").className = "msgbox err show";
       })
       .finally(function () { busy($("tokenBtn"), false); });
@@ -125,8 +128,13 @@
   /* Navegación                                                  */
   /* ---------------------------------------------------------- */
   function switchView(name) {
-    document.querySelectorAll("nav.tabs button").forEach(function (btn) {
-      btn.classList.toggle("active", btn.dataset.view === name);
+    document.querySelectorAll("nav.tabs button, .gear-btn").forEach(function (btn) {
+      if (btn.classList.contains("gear-btn") && btn.dataset.goto === name) {
+        btn.classList.add("active");
+      } else {
+        btn.classList.remove("active");
+        if (!btn.classList.contains("gear-btn")) btn.classList.toggle("active", btn.dataset.view === name);
+      }
     });
     document.querySelectorAll("section.view").forEach(function (view) {
       view.classList.toggle("active", view.id === "view-" + name);
@@ -164,7 +172,7 @@
         renderChannelSelects();
         renderRoleSelects();
         renderRoleList();
-        renderTestChannels();
+        renderTextSelects();
         renderStats();
         renderConfigTexts();
       });
@@ -176,6 +184,7 @@
   }
 
   function refreshAll() {
+    switchView("resumen");
     refreshBot()
       .then(refreshGuilds)
       .then(refreshInventory)
@@ -207,13 +216,25 @@
     var dot = $("botStatusDot");
     dot.className = "dot " + (ready ? "on" : running ? "idle" : "off");
     $("botStatusText").textContent = ready ? "EN LÍNEA" : running ? "CONECTANDO" : "APAGADO";
-    $("botSub").textContent = state.bot && state.bot.user ? (state.bot.user + " · Core IA") : "Bot de Discord · panel de control";
+
+    $("heroName").textContent = (state.bot && state.bot.user && state.bot.user.split("#")[0]) || "Core IA";
+    $("heroUser").textContent = ready ? state.bot.user : "Bot de Discord";
+    $("botSub").textContent = ready
+      ? "Bot listo y respondiendo comandos"
+      : running ? "Conectando con Discord…" : "Bot apagado";
+
+    var start = $("btnStart");
+    var stop = $("btnStop");
+    start.classList.toggle("on-active", !running);
+    stop.classList.toggle("on-active", running);
+    stop.classList.toggle("ghostish", !running);
+
     var hint = state.bot
       ? (ready
-        ? "El bot está conectado y respondiendo comandos."
+        ? "El bot está conectado y responde a los comandos."
         : running
-          ? "Conectando con Discord… si tarda, revisa el Server Members Intent."
-          : "El bot está apagado. Enciéndelo con el botón de abajo.")
+          ? "Conectando… si se queda así, revisa el Server Members Intent en el portal de Discord."
+          : "Pulsa Encender para conectar el bot.")
       : "—";
     if (state.bot && state.bot.last_error) hint += " Último error: " + state.bot.last_error;
     $("botHint").textContent = hint;
@@ -221,9 +242,9 @@
   }
 
   function renderStats() {
-    $("statGuilds").textContent = state.guilds.length;
     var channels = state.inventory ? state.inventory.channels || [] : [];
     var roles = state.inventory ? state.inventory.roles || [] : [];
+    $("statGuilds").textContent = state.guilds.length;
     $("statChannels").textContent = channels.length;
     $("statRoles").textContent = roles.length;
     $("statVerify").textContent = state.config && state.config.verify_role_id ? "ACTIVA" : "—";
@@ -232,68 +253,64 @@
     $("guildTitle").textContent = guild ? guild.name : "Core IA Bot";
   }
 
-  function guildIcon(guild) {
-    if (guild.icon) return "https://cdn.discordapp.com/icons/" + guild.id + "/" + guild.icon + ".png?size=64";
-    return "";
-  }
-
   function renderGuilds() {
     var wrap = $("guildList");
     wrap.innerHTML = "";
     if (!state.guilds.length) {
-      wrap.innerHTML = "<div class='empty'>El bot aún no está en ningún servidor. Invítalo primero.</div>";
+      wrap.innerHTML = "<div class='empty'>El bot aún no está en ningún servidor. Invítalo primero desde la app de Discord.</div>";
       return;
     }
     state.guilds.forEach(function (guild) {
       var item = document.createElement("div");
-      item.className = "item" + (guild.id === state.guildId ? " sel" : "");
+      item.className = "row-item" + (guild.id === state.guildId ? " sel" : "");
       item.onclick = function () {
         state.guildId = guild.id;
         localStorage.setItem("coreia_bot_guild", guild.id);
         renderStats();
         refreshInventory();
-        toast("Servidor cambiado a " + guild.name, "ok");
+        switchView("resumen");
+        toast("Servidor activo: " + guild.name, "ok");
       };
-      var icon = guildIcon(guild);
+      var icon = guild.icon
+        ? "<img src='https://cdn.discordapp.com/icons/" + guild.id + "/" + guild.icon + ".png?size=64' alt=''/>"
+        : "🏰";
+      var members = guild.member_count ? guild.member_count + " miembros" : guild.id;
       item.innerHTML =
-        "<div class='ico'>" + (icon ? "<img src='" + icon + "' style='width:100%;height:100%;border-radius:10px'/>" : "🏰") + "</div>" +
-        "<div class='meta'><b>" + escapeHtml(guild.name) + "</b>" +
-        "<span>" + (guild.member_count ? guild.member_count + " miembros" : guild.id) + "</span></div>" +
-        "<div class='right'>" + guild.id + (guild.id === state.guildId ? "<br><span class='badge-check'>✓ activo</span>" : "") + "</div>";
+        "<div class='ico'>" + icon + "</div>" +
+        "<div class='meta'><b>" + escapeHtml(guild.name) + "</b><span>" + escapeHtml(members) + "</span></div>" +
+        "<div class='end'>" + (guild.id === state.guildId ? "<span class='check'>✓</span>" : "⁝") + "</div>";
       wrap.appendChild(item);
     });
   }
 
-  function channelOptions(kind, selectedId) {
+  function channelOptions(selectedId) {
     var channels = (state.inventory && state.inventory.channels) || [];
-    var text = channels.filter(function (c) { return c.text; });
     var options = "<option value=''>— sin canal —</option>";
-    text.forEach(function (channel) {
-      var isNumber = kind === "number";
+    channels.filter(function (c) { return c.text; }).forEach(function (channel) {
       options +=
-        "<option value='" + channel.id + "'" +
-        (channel.id === selectedId ? " selected" : "") + ">" +
-        "#" + escapeHtml(channel.name) +
-        (isNumber ? " (" + channel.id + ")" : "") + "</option>";
+        "<option value='" + channel.id + "'" + (channel.id === selectedId ? " selected" : "") + ">" +
+        "#" + escapeHtml(channel.name) + "</option>";
     });
     return options;
   }
 
   function renderChannelSelects() {
     if (!state.inventory) return;
-    $("cfgVerifyChannel").innerHTML = channelOptions("name", state.config.verify_channel_id);
-    $("cfgWelcomeChannel").innerHTML = channelOptions("name", state.config.welcome_channel_id);
-    $("cfgGoodbyeChannel").innerHTML = channelOptions("name", state.config.goodbye_channel_id);
-    $("cfgLogChannel").innerHTML = channelOptions("name", state.config.log_channel_id);
-    $("noChannels").style.display = "none";
-    $("channelConfig").style.display = "block";
+    $("cfgVerifyChannel").innerHTML = channelOptions(state.config.verify_channel_id);
+    $("cfgWelcomeChannel").innerHTML = channelOptions(state.config.welcome_channel_id);
+    $("cfgGoodbyeChannel").innerHTML = channelOptions(state.config.goodbye_channel_id);
+    $("cfgLogChannel").innerHTML = channelOptions(state.config.log_channel_id);
   }
 
-  function renderTestChannels() {
+  function renderTextSelects() {
     if (!state.inventory) return;
     if (!$("testChannel").dataset.ready) {
-      $("testChannel").innerHTML = channelOptions("name", null);
+      $("testChannel").innerHTML = channelOptions(null);
       $("testChannel").dataset.ready = "1";
+    }
+    if (!$("announceChannel").dataset.ready) {
+      $("announceChannel").innerHTML = channelOptions(null);
+      $("announceChannel").dataset.ready = "1";
     }
   }
 
@@ -303,10 +320,8 @@
     roles.forEach(function (role) {
       if (role.default) return;
       options +=
-        "<option value='" + role.id + "'" +
-        (role.id === selectedId ? " selected" : "") + ">" +
-        "@" + escapeHtml(role.name) +
-        (role.managed ? " 🔒" : "") + "</option>";
+        "<option value='" + role.id + "'" + (role.id === selectedId ? " selected" : "") + ">" +
+        "@" + escapeHtml(role.name) + (role.managed ? " 🔒" : "") + "</option>";
     });
     return options;
   }
@@ -329,15 +344,16 @@
     if (!roles.length) { wrap.innerHTML = "<div class='empty'>No hay roles en el servidor.</div>"; return; }
     roles.forEach(function (role) {
       var item = document.createElement("div");
+      item.className = "row-item";
       var color = role.color ? "#" + role.color.toString(16).padStart(6, "0") : "";
-      item.className = "item";
       item.innerHTML =
-        "<div class='role-dot' " + (color ? "style='background:" + color + "'" : "") + "></div>" +
+        "<div class='ico'><span class=\"role-dot\" style=\"width:12px;height:12px;border-radius:50%;background:" +
+        (color || "var(--faint)") + "\"></span></div>" +
         "<div class='meta'><b>" + escapeHtml(role.name) +
         (role.managed ? "<span class='tag'>integración</span>" : "") +
-        (role.default ? "<span class='tag muted'>@everyone</span>" : "") + "</b>" +
+        (role.default ? "<span class='tag gray'>@everyone</span>" : "") + "</b>" +
         "<span>" + role.id + "</span></div>" +
-        "<div class='right'>" + (state.config.verify_role_id === role.id ? "✅ verificado" : "") + "</div>";
+        "<div class='end'>" + (state.config.verify_role_id === role.id ? "<span class='check'>✓</span>" : "") + "</div>";
       wrap.appendChild(item);
     });
   }
@@ -354,7 +370,7 @@
   }
 
   /* ---------------------------------------------------------- */
-  /* Acciones del bot                                            */
+  /* Acciones                                                    */
   /* ---------------------------------------------------------- */
   function botAction(path, method) {
     return api("/api/admin/discord-bot/" + path, { method: method || "POST" }).then(function (data) {
@@ -380,31 +396,43 @@
 
   function sync() {
     busy($("btnSync"), true);
-    botAction("sync").then(function () { toast("Comandos de barra sincronizados.", "ok"); })
+    botAction("sync").then(function () { toast("Comandos sincronizados.", "ok"); })
       .catch(function (err) { toast(err.message || "No se pudo sincronizar.", "err"); })
       .finally(function () { busy($("btnSync"), false); });
   }
 
-  function sendMessage() {
+  function sendTest() {
     var channel = $("testChannel").value;
     var content = $("testContent").value.trim();
-    if (!channel) return toast("Elige un canal de texto para la prueba.", "err");
-    if (!content) return toast("Escribe el contenido del mensaje.", "err");
+    if (!channel) return toast("Elige un canal de texto.", "err");
+    if (!content) return toast("Escribe el contenido.", "err");
     busy($("btnTest"), true);
     api("/api/admin/discord-bot/guilds/" + state.guildId + "/test-message", {
       method: "POST",
       body: { channel_id: channel, content: content },
     })
-      .then(function () {
-        toast("Mensaje enviado.", "ok");
-        $("testContent").value = "";
-      })
+      .then(function () { toast("Mensaje enviado.", "ok"); $("testContent").value = ""; })
       .catch(function (err) { toast(err.message || "No se pudo enviar.", "err"); })
       .finally(function () { busy($("btnTest"), false); });
   }
 
+  function sendAnnouncement() {
+    var channel = $("announceChannel").value;
+    var content = $("announceContent").value.trim();
+    if (!channel) return toast("Elige un canal para el anuncio.", "err");
+    if (!content) return toast("Escribe el anuncio.", "err");
+    busy($("btnAnnounce"), true);
+    api("/api/admin/discord-bot/guilds/" + state.guildId + "/test-message", {
+      method: "POST",
+      body: { channel_id: channel, content: content },
+    })
+      .then(function () { toast("Anuncio publicado.", "ok"); $("announceContent").value = ""; })
+      .catch(function (err) { toast(err.message || "No se pudo publicar el anuncio.", "err"); })
+      .finally(function () { busy($("btnAnnounce"), false); });
+  }
+
   /* ---------------------------------------------------------- */
-  /* Arranque                                                    */
+  /* Login con Discord, 2FA y hash de retorno                    */
   /* ---------------------------------------------------------- */
   function handlePending2fa(pendingToken) {
     var code = prompt("Introduce el código de 2 pasos (TOTP):");
@@ -430,7 +458,6 @@
     var token = hash.match(/#token=([^&]+)/);
     var pending = hash.match(/#pending2fa=([^&]+)/);
 
-    // Limpia el hash para que el token no quede en la barra ni en el historial.
     history.replaceState(null, "", window.location.pathname + window.location.search);
 
     if (hash.indexOf("#denied=1") !== -1) {
@@ -449,12 +476,15 @@
       return;
     }
     if (token && token[1]) {
-      // Solo guarda el token: el bloque de arranque valida la sesión contra el backend.
+      // Solo guarda el token: la validación ocurre contra el backend al arrancar.
       state.token = decodeURIComponent(token[1]);
       localStorage.setItem(TOKEN_KEY, state.token);
     }
   }
 
+  /* ---------------------------------------------------------- */
+  /* Bindings                                                    */
+  /* ---------------------------------------------------------- */
   function bind() {
     $("discordBtn").onclick = function () {
       window.location.href = "/api/admin/discord-bot/login";
@@ -465,7 +495,8 @@
     $("btnStart").onclick = start;
     $("btnStop").onclick = stop;
     $("btnSync").onclick = sync;
-    $("btnTest").onclick = sendMessage;
+    $("btnTest").onclick = sendTest;
+    $("btnAnnounce").onclick = sendAnnouncement;
 
     $("btnSaveChannels").onclick = function () {
       saveConfig({
@@ -473,9 +504,7 @@
         welcome_channel_id: $("cfgWelcomeChannel").value,
         goodbye_channel_id: $("cfgGoodbyeChannel").value,
         log_channel_id: $("cfgLogChannel").value,
-      }, "Canales guardados.").then(function () {
-        renderStats();
-      });
+      }, "Canales guardados.").then(renderStats);
     };
 
     $("btnSaveRoles").onclick = function () {
@@ -502,8 +531,10 @@
       refreshAll().finally(function () { busy($("btnReload"), false); });
     };
 
-    document.querySelectorAll("nav.tabs button").forEach(function (btn) {
-      btn.onclick = function () { switchView(btn.dataset.view); };
+    document.querySelectorAll("nav.tabs button, .gear-btn").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        switchView(btn.dataset.view || btn.dataset.goto);
+      });
     });
 
     document.querySelectorAll(".chips").forEach(function (group) {
@@ -511,8 +542,9 @@
       if (!target) return;
       group.querySelectorAll(".chip").forEach(function (chip) {
         chip.onclick = function () {
-          var start = target.selectionStart || target.value.length;
-          target.value = target.value.slice(0, start) + chip.textContent + target.value.slice(target.selectionEnd || target.value.length);
+          var start2 = target.selectionStart || target.value.length;
+          target.value = target.value.slice(0, start2) + chip.textContent +
+            target.value.slice(target.selectionEnd || target.value.length);
           target.focus();
           toast("Placeholder " + chip.textContent + " añadido.", "ok");
         };
@@ -520,6 +552,9 @@
     });
 
     $("loginPass").addEventListener("keydown", function (e) {
+      if (e.key === "Enter") loginEmail();
+    });
+    $("loginEmail").addEventListener("keydown", function (e) {
       if (e.key === "Enter") loginEmail();
     });
   }
