@@ -1215,7 +1215,8 @@
   /* ---------------------------------------------------------- */
   function bind() {
     $("discordBtn").onclick = function () {
-      window.location.href = API_BASE + "/api/admin/discord-bot/login";
+      window.location.href =
+        API_BASE + "/api/admin/discord-bot/login?panel_origin=" + encodeURIComponent(window.location.origin);
     };
     $("loginBtn").onclick = loginEmail;
     $("tokenBtn").onclick = loginToken;

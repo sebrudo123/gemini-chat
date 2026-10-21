@@ -212,3 +212,28 @@ def test_bot_discord_login_redirects_with_panel_state(client):
     response = client.get("/api/admin/discord-bot/login", follow_redirects=False)
     assert response.status_code == 307
     assert "discord.com" in response.headers["location"]
+
+
+def test_panel_login_honors_whitelisted_origin(client, monkeypatch):
+    """El login del panel vuelve al host del panel si está en ALLOWED_ORIGINS."""
+    monkeypatch.setattr(main.settings, "allowed_origins", ["https://panel-vercel.ejemplo"])
+
+    state = main._trusted_panel_origin("https://panel-vercel.ejemplo")
+    assert state == "https://panel-vercel.ejemplo"
+
+    _fake_oauth(monkeypatch, FOUNDER_ID)
+    signed = main._panel_oauth_state("https://panel-vercel.ejemplo")
+    response = client.get(
+        "/api/auth/discord/callback",
+        params={"code": "abc", "state": signed},
+        follow_redirects=False,
+    )
+    assert response.status_code == 307
+    assert response.headers["location"].startswith("https://panel-vercel.ejemplo/bot/")
+    assert "#token=" in response.headers["location"]
+
+
+def test_panel_login_rejects_unknown_origin(client, monkeypatch):
+    """Un origen no listado no puede robar la redirección del panel."""
+    monkeypatch.setattr(main.settings, "allowed_origins", [])
+    assert main._trusted_panel_origin("https://malicioso.ejemplo") == main._panel_origin()

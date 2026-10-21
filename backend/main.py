@@ -4354,17 +4354,34 @@ def _panel_oauth_state(origin: str) -> str:
     )
 
 
+def _trusted_panel_origin(candidate: str | None) -> str:
+    """Origen del panel que firmará el OAuth (confiando solo en listados).
+
+    Acepta el origen que pide el frontend si figura en `ALLOWED_ORIGINS` o
+    si es el propio backend; cualquier otro valor se reemplaza por el del
+    backend para no redirigir la sesión a un host no controlado.
+    """
+    candidate = (candidate or "").strip().rstrip("/")
+    if candidate.startswith("http"):
+        parsed = urlparse(candidate)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        if origin in settings.allowed_origins:
+            return origin
+    return _panel_origin()
+
+
 @app.get("/api/admin/discord-bot/login")
-def admin_discord_bot_login() -> RedirectResponse:
+def admin_discord_bot_login(panel_origin: str | None = None) -> RedirectResponse:
     """Login con Discord para el panel del bot (solo fundadores).
 
-    El `state` firmado incluye `panel_origin` (el host del propio backend),
-    así el callback puede volver al panel aunque ese host no esté en
-    `ALLOWED_ORIGINS` (que solo lista los frontends).
+    El `state` firmado incluye `panel_origin` (el host desde el que se pidió,
+    validado contra `ALLOWED_ORIGINS`, o el propio backend por defecto), así el
+    callback puede volver al panel que lanzó el login aunque ese host no sea
+    el del backend.
     """
     client_id = require_config(settings.discord_client_id, "DISCORD_CLIENT_ID")
     redirect_uri = require_config(settings.discord_redirect_uri, "DISCORD_REDIRECT_URI")
-    origin = _panel_origin()
+    origin = _trusted_panel_origin(panel_origin)
     params = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
