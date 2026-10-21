@@ -164,19 +164,20 @@ def test_bot_discord_login_redirects_to_discord(client):
 
 def test_bot_discord_login_denied_for_non_founder(client, monkeypatch):
     _fake_oauth(monkeypatch, "999888777666555444")
-    state = main._oauth_state("https://testserver/bot/", {"panel": True})
+    state = main._panel_oauth_state("https://testserver")
     response = client.get(
         "/api/auth/discord/callback",
         params={"code": "abc", "state": state},
         follow_redirects=False,
     )
     assert response.status_code == 307
+    assert response.headers["location"].startswith("https://testserver/bot/")
     assert "denied=1" in response.headers["location"]
 
 
 def test_bot_discord_login_grants_founder(client, monkeypatch):
     _fake_oauth(monkeypatch, FOUNDER_ID)
-    state = main._oauth_state("https://testserver/bot/", {"panel": True})
+    state = main._panel_oauth_state("https://testserver")
     response = client.get(
         "/api/auth/discord/callback",
         params={"code": "abc", "state": state},
@@ -184,4 +185,12 @@ def test_bot_discord_login_grants_founder(client, monkeypatch):
     )
     assert response.status_code == 307
     location = response.headers["location"]
+    assert location.startswith("https://testserver/bot/")
     assert "#token=" in location
+
+
+def test_bot_discord_login_redirects_with_panel_state(client):
+    # El login del panel pasa por el OAuth global y comparte redirect_uri.
+    response = client.get("/api/admin/discord-bot/login", follow_redirects=False)
+    assert response.status_code == 307
+    assert "discord.com" in response.headers["location"]

@@ -1287,7 +1287,8 @@ async def discord_callback(
 
     # Login exclusivo para el panel del bot: solo los fundadores entran.
     if state_data.get("panel"):
-        panel_url = state_data.get("return_to") or f"{settings.frontend_url}/"
+        origin = state_data.get("panel_origin") or settings.backend_url.rstrip("/")
+        panel_url = f"{origin.rstrip('/')}/bot/"
         if not is_admin(profile):
             return RedirectResponse(f"{panel_url}#denied=1")
         user = upsert_user(db, profile)
@@ -4169,22 +4170,44 @@ BOT_CONFIG_KEYS = (
 )
 
 
+def _panel_origin() -> str:
+    """Origen del backend para volver del OAuth al panel del bot.
+
+    Se usa BACKEND_URL (el host público donde también se sirve /bot). El
+    callback confía en `panel_origin` porque lo firma el propio backend.
+    """
+    return (settings.backend_url or "").strip().rstrip("/")
+
+
+def _panel_oauth_state(origin: str) -> str:
+    """State firmado del OAuth exclusivo del panel del bot."""
+    return serializer.dumps(
+        {
+            "nonce": secrets.token_urlsafe(16),
+            "panel": True,
+            "panel_origin": origin.rstrip("/"),
+            "return_to": f"{origin.rstrip('/')}/bot/",
+        }
+    )
+
+
 @app.get("/api/admin/discord-bot/login")
-def admin_discord_bot_login(request: Request) -> RedirectResponse:
+def admin_discord_bot_login() -> RedirectResponse:
     """Login con Discord para el panel del bot (solo fundadores).
 
-    Reutiliza el mismo redirect_uri registrado en la app de Discord y marca el
-    `state` con `panel` para que el callback restrinja el acceso al retorno.
+    El `state` firmado incluye `panel_origin` (el host del propio backend),
+    así el callback puede volver al panel aunque ese host no esté en
+    `ALLOWED_ORIGINS` (que solo lista los frontends).
     """
     client_id = require_config(settings.discord_client_id, "DISCORD_CLIENT_ID")
     redirect_uri = require_config(settings.discord_redirect_uri, "DISCORD_REDIRECT_URI")
-    origin = str(request.base_url).rstrip("/")
+    origin = _panel_origin()
     params = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
         "scope": "identify",
-        "state": _oauth_state(f"{origin}/bot/", {"panel": True}),
+        "state": _panel_oauth_state(origin),
         "prompt": "consent",
     }
     return RedirectResponse(f"{DISCORD_AUTHORIZE_URL}?{urlencode(params)}")

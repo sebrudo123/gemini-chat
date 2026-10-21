@@ -39,7 +39,7 @@
   function api(path, options) {
     options = options || {};
     options.headers = options.headers || {};
-    if (state.token) options.headers.Authorization = "Bearer " + state.token;
+    if (state.token) options.headers.Authorization = options.headers.Authorization || ("Bearer " + state.token);
     if (options.body && typeof options.body !== "string") {
       options.body = JSON.stringify(options.body);
       options.headers["Content-Type"] = "application/json";
@@ -104,8 +104,14 @@
     if (!value) return toast("Pega primero un token.", "err");
     $("loginMsg").className = "msgbox";
     busy($("tokenBtn"), true);
-    api("/api/admin/discord-bot")
-      .then(function () { handleAuthSuccess(value); })
+    // Valida SIEMPRE el token que acaba de pegar el usuario, no el antiguo.
+    api("/api/admin/discord-bot", { headers: { Authorization: "Bearer " + value } })
+      .then(function (data) {
+        state.token = value;
+        state.bot = data.bot;
+        localStorage.setItem(TOKEN_KEY, value);
+        showApp(true);
+      })
       .catch(function (err) {
         $("loginMsg").textContent = /403|fundador|permisos/i.test(err.message || "")
           ? "No tienes permisos para usar este panel. Solo el fundador de Core IA."
