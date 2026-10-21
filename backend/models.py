@@ -186,6 +186,26 @@ class Usage(Base):
     images: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class BotSchedule(Base):
+    """Mensaje programado del bot (diario o semanal) a un canal."""
+
+    __tablename__ = "bot_schedules"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    guild_id: Mapped[str] = mapped_column(String(32), index=True)
+    channel_id: Mapped[str] = mapped_column(String(32))
+    content: Mapped[str] = mapped_column(Text, default="")
+    kind: Mapped[str] = mapped_column(String(10), default="daily")  # daily | weekly
+    weekday: Mapped[int] = mapped_column(Integer, default=0)  # 0=lunes (solo weekly)
+    hour_utc: Mapped[int] = mapped_column(Integer, default=12)
+    minute_utc: Mapped[int] = mapped_column(Integer, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_run_day: Mapped[str] = mapped_column(String(10), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class AuditLog(Base):
     """Registro de acciones administrativas (auditoría)."""
 

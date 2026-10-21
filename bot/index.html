@@ -225,6 +225,12 @@
     .row-item .meta span { display:block; font-size:11px; color:var(--faint); margin-top:2px; }
     .row-item .end { flex:none; color:var(--faint); display:grid; place-items:center; }
     .row-item.sel .end { color:var(--ok); }
+    .checkrow { display:flex; align-items:center; gap:10px; padding:9px 12px; border-radius:12px; border:1px solid var(--line); cursor:pointer; font-size:13px; }
+    .checkrow input { width:16px; height:16px; accent-color:#6D5DFC; flex:none; }
+    .switch { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:13px 0 4px; font-size:13px; font-weight:650; }
+    .switch input { width:20px; height:20px; accent-color:#6D5DFC; }
+    .optrow { display:grid; grid-template-columns:1fr 64px; gap:8px; margin-bottom:8px; }
+    .mini { font-size:11px; color:var(--faint); margin-top:2px; }
     .tag {
       display:inline-block; margin-left:6px; padding:2px 7px; border-radius:999px;
       font-size:9.5px; font-weight:700; letter-spacing:.3px;
@@ -422,6 +428,18 @@
     <symbol id="ic-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></symbol>
     <symbol id="ic-flag" viewBox="0 0 24 24"><path d="M4 22V4c0-.6.4-1 1-1h14l-3 5 3 5H6"/><path d="M4 3v19"/></symbol>
     <symbol id="ic-download" viewBox="0 0 24 24"><path d="M12 3v11"/><path d="m7 9 5 5 5-5"/><path d="M21 15v3a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3v-3"/></symbol>
+
+    <symbol id="ic-layers" viewBox="0 0 24 24"><path d="m12 2 10 5-10 5L2 7l10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></symbol>
+
+    <symbol id="ic-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+
+    <symbol id="ic-list" viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></symbol>
+
+    <symbol id="ic-box" viewBox="0 0 24 24"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></symbol>
+
+    <symbol id="ic-poll" viewBox="0 0 24 24"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></symbol>
+
+    <symbol id="ic-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/></symbol>
   </svg>
 
   <!-- Pantalla de actualización (estilo app: navy + dorado, animada) -->
@@ -512,6 +530,16 @@
           </div>
 
           <div class="card" style="margin-top:14px">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-list"/></svg></span>Actividad de hoy</h2>
+            <div class="stats" style="grid-template-columns:1fr 1fr;margin-top:6px">
+              <div class="stat"><div class="tile"><svg class="ic"><use href="#ic-message"/></svg></div><div><b id="stMessages">—</b><span class="lbl">Mensajes IA</span></div></div>
+              <div class="stat"><div class="tile"><svg class="ic"><use href="#ic-shield"/></svg></div><div><b id="stVerifications">—</b><span class="lbl">Verificados</span></div></div>
+              <div class="stat"><div class="tile"><svg class="ic"><use href="#ic-userplus"/></svg></div><div><b id="stWelcomes">—</b><span class="lbl">Bienvenidas</span></div></div>
+              <div class="stat"><div class="tile"><svg class="ic"><use href="#ic-clock"/></svg></div><div><b id="stScheduled">—</b><span class="lbl">Programados</span></div></div>
+            </div>
+          </div>
+
+          <div class="card" style="margin-top:14px">
             <h2><span class="tile"><svg class="ic"><use href="#ic-send"/></svg></span>Canal de prueba</h2>
             <p class="sub">Envía un mensaje real con el bot para comprobar los permisos del canal.</p>
             <select id="testChannel"></select>
@@ -555,6 +583,8 @@
               <span class="chip">{verify_channel}</span>
             </div>
             <textarea id="cfgWelcomeMsg" placeholder="¡Bienvenido a {server}, {user}!"></textarea>
+            <label class="switch"><span>Tarjeta de bienvenida con imagen generada</span><input type="checkbox" id="cfgWelcomeImage"></label>
+            <p class="mini">El bot genera una tarjeta con el avatar y el número de miembro al entrar alguien.</p>
             <button class="btn primary wide" id="btnSaveWelcome" style="margin-top:10px"><svg class="ic"><use href="#ic-check"/></svg><span>Guardar bienvenida</span></button>
           </div>
           <div class="card">
@@ -587,6 +617,43 @@
           </div>
         </section>
 
+        <!-- EXTRAS -->
+        <section class="view" id="view-extras">
+          <div class="card">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-layers"/></svg></span>Menú de roles</h2>
+            <p class="sub">Publica un mensaje con un menú de selección: quien lo toque elige sus roles (y los quita tocando de nuevo).</p>
+            <label class="fl">Canal</label>
+            <select id="rmChannel"></select>
+            <label class="fl">Título del menú</label>
+            <input id="rmTitle" placeholder="Elige tus roles" />
+            <label class="fl">Roles disponibles del servidor</label>
+            <div class="list" id="rmRoleList" style="max-height:250px;overflow:auto"></div>
+            <button class="btn primary wide" id="btnPostRoleMenu" style="margin-top:12px"><svg class="ic"><use href="#ic-layers"/></svg><span>Publicar menú de roles</span></button>
+            <label class="fl">Menús publicados</label>
+            <div class="list" id="roleMenuList"><div class="skeleton">Cargando…</div></div>
+          </div>
+
+          <div class="card" style="margin-top:14px">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-poll"/></svg></span>Encuesta con botones</h2>
+            <p class="sub">El mensaje muestra el recuento de votos actualizado en vivo; cada persona puede cambiar su voto.</p>
+            <label class="fl">Canal</label>
+            <select id="pollChannel"></select>
+            <label class="fl">Pregunta</label>
+            <input id="pollQuestion" placeholder="¿Jugamos a algo este finde?" />
+            <label class="fl">Opciones (2 a 5) — con emoji opcional</label>
+            <div id="pollOptions">
+              <div class="optrow"><input class="polLabel" placeholder="Opción 1"><input class="polEmoji" placeholder="Emoji"></div>
+              <div class="optrow"><input class="polLabel" placeholder="Opción 2"><input class="polEmoji" placeholder="Emoji"></div>
+              <div class="optrow"><input class="polLabel" placeholder="Opción 3"><input class="polEmoji" placeholder="Emoji"></div>
+              <div class="optrow"><input class="polLabel" placeholder="Opción 4"><input class="polEmoji" placeholder="Emoji"></div>
+              <div class="optrow"><input class="polLabel" placeholder="Opción 5"><input class="polEmoji" placeholder="Emoji"></div>
+            </div>
+            <button class="btn primary wide" id="btnPostPoll" style="margin-top:12px"><svg class="ic"><use href="#ic-poll"/></svg><span>Publicar encuesta</span></button>
+            <label class="fl">Encuestas activas</label>
+            <div class="list" id="pollList"><div class="skeleton">Cargando…</div></div>
+          </div>
+        </section>
+
         <!-- ANUNCIOS -->
         <section class="view" id="view-anuncios">
           <div class="card">
@@ -595,6 +662,34 @@
             <select id="announceChannel"></select>
             <textarea id="announceContent" style="margin-top:10px" placeholder="Escribe aquí el anuncio. Puedes usar formato de Discord: **negrita**, enlaces…"></textarea>
             <button class="btn primary wide" id="btnAnnounce" style="margin-top:12px"><svg class="ic"><use href="#ic-megaphone"/></svg><span>Publicar anuncio</span></button>
+          </div>
+
+          <div class="card" style="margin-top:14px">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-clock"/></svg></span>Mensajes programados</h2>
+            <p class="sub">El bot publica estos mensajes solos: a diario o un día fijo de la semana.</p>
+            <label class="fl">Canal</label>
+            <select id="schChannel"></select>
+            <label class="fl">Repeticion</label>
+            <select id="schKind">
+              <option value="daily">Todos los días</option>
+              <option value="weekly">Una vez por semana</option>
+            </select>
+            <select id="schWeekday" hidden>
+              <option value="0">Lunes</option>
+              <option value="1">Martes</option>
+              <option value="2">Miércoles</option>
+              <option value="3">Jueves</option>
+              <option value="4">Viernes</option>
+              <option value="5">Sábado</option>
+              <option value="6">Domingo</option>
+            </select>
+            <label class="fl">Hora (UTC)</label>
+            <select id="schHour"></select>
+            <label class="fl">Mensaje</label>
+            <textarea id="schContent" style="min-height:70px" placeholder="Contenido del mensaje diario…"></textarea>
+            <button class="btn primary wide" id="btnSchedule" style="margin-top:12px"><svg class="ic"><use href="#ic-clock"/></svg><span>Programar mensaje</span></button>
+            <label class="fl">Programaciones activas</label>
+            <div class="list" id="scheduleList"><div class="skeleton">Cargando…</div></div>
           </div>
         </section>
 
@@ -616,6 +711,20 @@
             <div class="list" id="roleList"><div class="skeleton">Cargando…</div></div>
           </div>
           <div class="card">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-list"/></svg></span>Registros del bot</h2>
+            <p class="sub">Últimos eventos: bienvenidas, verificaciones, programados, errores…</p>
+            <div class="list" id="eventList"><div class="skeleton">Cargando…</div></div>
+            <button class="btn wide" id="btnEvents" style="margin-top:12px"><svg class="ic"><use href="#ic-refresh"/></svg><span>Actualizar registros</span></button>
+          </div>
+          <div class="card">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-box"/></svg></span>Respaldo de configuración</h2>
+            <p class="sub">Descarga toda la configuración del bot y los extras, o restaura un respaldo anterior. Se guarda también una copia automática cada semana.</p>
+            <button class="btn primary wide" id="btnBackup"><svg class="ic"><use href="#ic-download"/></svg><span>Descargar respaldo</span></button>
+            <label class="fl">Restaurar desde archivo</label>
+            <input type="file" id="backupFile" accept="application/json,.json" style="padding:9px">
+            <button class="btn wide" id="btnBackupRestore" style="margin-top:11px"><svg class="ic"><use href="#ic-sync"/></svg><span>Restaurar respaldo</span></button>
+          </div>
+          <div class="card">
             <h2><span class="tile"><svg class="ic"><use href="#ic-info"/></svg></span>Estado</h2>
             <p class="sub" id="botHint">—</p>
             <div class="stats" style="grid-template-columns:1fr 1fr">
@@ -635,6 +744,7 @@
       <button data-view="servidores"><svg class="ic lg"><use href="#ic-globe"/></svg><span>Servidores</span></button>
       <button data-view="mensajes"><svg class="ic lg"><use href="#ic-message"/></svg><span>Mensajes</span></button>
       <button data-view="comandos"><svg class="ic lg"><use href="#ic-terminal"/></svg><span>Comandos</span></button>
+      <button data-view="extras"><svg class="ic lg"><use href="#ic-layers"/></svg><span>Extras</span></button>
       <button data-view="anuncios"><svg class="ic lg"><use href="#ic-megaphone"/></svg><span>Anuncios</span></button>
     </nav>
   </div>

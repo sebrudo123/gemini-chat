@@ -145,6 +145,10 @@
     document.querySelectorAll("section.view").forEach(function (view) {
       view.classList.toggle("active", view.id === "view-" + name);
     });
+    if (name === "extras") { refreshRoleMenus(); refreshPolls(); }
+    if (name === "anuncios") refreshSchedules();
+    if (name === "ajustes") refreshEvents();
+    if (name === "resumen") refreshBotStats();
   }
 
   /* ---------------------------------------------------------- */
@@ -181,6 +185,8 @@
         renderTextSelects();
         renderStats();
         renderConfigTexts();
+        renderRmRoles();
+        refreshBotStats();
       });
   }
 
@@ -321,6 +327,41 @@
       $("announceChannel").innerHTML = channelOptions(null);
       $("announceChannel").dataset.ready = "1";
     }
+    ["rmChannel", "pollChannel", "schChannel"].forEach(function (id) {
+      if (!$(id).dataset.ready) {
+        $(id).innerHTML = channelOptions(null);
+        $(id).dataset.ready = "1";
+      }
+    });
+    if (!$("schHour").dataset.ready) {
+      var hours = "";
+      for (var h = 0; h < 24; h++) {
+        hours += "<option value='" + h + "'>" + String(h).padStart(2, "0") + ":00 UTC</option>";
+      }
+      $("schHour").innerHTML = hours;
+      $("schHour").dataset.ready = "1";
+    }
+  }
+
+  function renderRmRoles() {
+    var wrap = $("rmRoleList");
+    wrap.innerHTML = "";
+    var roles = ((state.inventory && state.inventory.roles) || []).filter(function (role) {
+      return !role.default && !role.managed;
+    });
+    if (!roles.length) {
+      wrap.innerHTML = "<div class='empty'>No hay roles gestionables (sin integración) en este servidor.</div>";
+      return;
+    }
+    roles.slice(0, 25).forEach(function (role) {
+      var line = document.createElement("label");
+      line.className = "checkrow";
+      line.innerHTML = "<input type='checkbox' value='" + role.id + "'>";
+      var dot = "<span class='role-dot' style='width:11px;height:11px;border-radius:50%;background:#" +
+        (role.color ? role.color.toString(16).padStart(6, "0") : "6b7280") + "'></span>";
+      line.insertAdjacentHTML("beforeend", dot + "<span>" + escapeHtml(role.name) + "</span>");
+      wrap.appendChild(line);
+    });
   }
 
   function roleOptions(selectedId) {
@@ -330,7 +371,7 @@
       if (role.default) return;
       options +=
         "<option value='" + role.id + "'" + (role.id === selectedId ? " selected" : "") + ">" +
-        "@" + escapeHtml(role.name) + (role.managed ? " 🔒" : "") + "</option>";
+        "@" + escapeHtml(role.name) + (role.managed ? " (integración)" : "") + "</option>";
     });
     return options;
   }
@@ -371,6 +412,9 @@
   function renderConfigTexts() {
     $("cfgWelcomeMsg").value = state.config.welcome_message || "";
     $("cfgGoodbyeMsg").value = state.config.goodbye_message || "";
+    $("cfgWelcomeImage").checked = ["1", "true", "on"].includes(
+      String(state.config.welcome_image_enabled || "").toLowerCase()
+    );
   }
 
   function escapeHtml(text) {
@@ -439,6 +483,276 @@
       .then(function () { toast("Anuncio publicado.", "ok"); $("announceContent").value = ""; })
       .catch(function (err) { toast(err.message || "No se pudo publicar el anuncio.", "err"); })
       .finally(function () { busy($("btnAnnounce"), false); });
+  }
+
+  /* ---------------------------------------------------------- */
+  /* Extras: stats, programados, menús de roles, encuestas,       */
+  /* registros y respaldos                                        */
+  /* ---------------------------------------------------------- */
+  function refreshBotStats() {
+    api("/api/admin/discord-bot/stats").then(function (data) {
+      $("stMessages").textContent = data.messages_today;
+      $("stVerifications").textContent = data.verifications;
+      $("stWelcomes").textContent = data.welcomes;
+      $("stScheduled").textContent = data.schedules_active;
+    }).catch(function () { /* silencioso: es decorativo */ });
+  }
+
+  function scheduleLabel(item) {
+    var at = String(item.hour_utc).padStart(2, "0") + ":00 UTC";
+    if (item.kind === "weekly") {
+      var days = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"];
+      return "Semanal · " + (days[item.weekday] || "?") + " " + at;
+    }
+    return "Diario · " + at;
+  }
+
+  function refreshSchedules() {
+    return api("/api/admin/discord-bot/schedules").then(function (data) {
+      var wrap = $("scheduleList");
+      wrap.innerHTML = "";
+      var items = data.schedules || [];
+      if (!items.length) {
+        wrap.innerHTML = "<div class='empty'>Aún no hay mensajes programados.</div>";
+        return;
+      }
+      items.forEach(function (item) {
+        var row = document.createElement("div");
+        row.className = "row-item";
+        row.innerHTML =
+          "<div class='ico'><svg class='ic'><use href='#ic-clock'/></svg></div>" +
+          "<div class='meta'><b>" + escapeHtml(scheduleLabel(item)) + "</b>" +
+          "<span>" + escapeHtml(String(item.content || "").slice(0, 64)) + "</span></div>" +
+          "<button class='btn' style='padding:8px 10px' aria-label='Borrar'>" +
+          "<svg class='ic'><use href='#ic-trash'/></svg></button>";
+        row.querySelector("button").onclick = function () {
+          api("/api/admin/discord-bot/schedules/" + item.id, { method: "DELETE" })
+            .then(function () { toast("Programación borrada.", "ok"); refreshSchedules(); })
+            .catch(function (err) { toast(err.message || "No se pudo borrar.", "err"); });
+        };
+        wrap.appendChild(row);
+      });
+    }).catch(function (err) {
+      $("scheduleList").innerHTML = "<div class='empty'>" + escapeHtml(err.message || "Error") + "</div>";
+    });
+  }
+
+  function createSchedule() {
+    var channel = $("schChannel").value;
+    var content = $("schContent").value.trim();
+    var kind = $("schKind").value;
+    if (!state.guildId) return toast("Selecciona antes un servidor.", "err");
+    if (!channel) return toast("Elige un canal.", "err");
+    if (!content) return toast("Escribe el mensaje.", "err");
+    busy($("btnSchedule"), true);
+    api("/api/admin/discord-bot/schedules", {
+      method: "POST",
+      body: {
+        guild_id: state.guildId,
+        channel_id: channel,
+        content: content,
+        kind: kind,
+        weekday: parseInt($("schWeekday").value || "0", 10),
+        hour_utc: parseInt($("schHour").value || "12", 10),
+      },
+    })
+      .then(function () { toast("Mensaje programado.", "ok"); $("schContent").value = ""; refreshSchedules(); })
+      .catch(function (err) { toast(err.message || "No se pudo programar.", "err"); })
+      .finally(function () { busy($("btnSchedule"), false); });
+  }
+
+  function refreshRoleMenus() {
+    if (!state.guildId) return Promise.resolve();
+    return api("/api/admin/discord-bot/guilds/" + state.guildId + "/role-menu").then(function (data) {
+      var wrap = $("roleMenuList");
+      wrap.innerHTML = "";
+      var items = data.menus || [];
+      if (!items.length) {
+        wrap.innerHTML = "<div class='empty'>Sin menús de roles publicados.</div>";
+        return;
+      }
+      items.forEach(function (menu) {
+        var row = document.createElement("div");
+        row.className = "row-item";
+        row.innerHTML =
+          "<div class='ico'><svg class='ic'><use href='#ic-layers'/></svg></div>" +
+          "<div class='meta'><b>" + escapeHtml(menu.title) + "</b>" +
+          "<span>" + (menu.roles || []).length + " roles</span></div>" +
+          "<button class='btn' style='padding:8px 10px' aria-label='Borrar'>" +
+          "<svg class='ic'><use href='#ic-trash'/></svg></button>";
+        row.querySelector("button").onclick = function () {
+          api("/api/admin/discord-bot/guilds/" + state.guildId + "/role-menu/" + menu.menu_id, { method: "DELETE" })
+            .then(function () { toast("Menú borrado del canal.", "ok"); refreshRoleMenus(); })
+            .catch(function (err) { toast(err.message || "No se pudo borrar.", "err"); });
+        };
+        wrap.appendChild(row);
+      });
+    }).catch(function (err) {
+      $("roleMenuList").innerHTML = "<div class='empty'>" + escapeHtml(err.message || "Error") + "</div>";
+    });
+  }
+
+  function postRoleMenu() {
+    var channel = $("rmChannel").value;
+    var title = $("rmTitle").value.trim();
+    var roleIds = [];
+    $("rmRoleList").querySelectorAll("input:checked").forEach(function (input) {
+      roleIds.push(input.value);
+    });
+    if (!state.guildId) return toast("Selecciona antes un servidor.", "err");
+    if (!channel) return toast("Elige un canal.", "err");
+    if (!title) return toast("Escribe un título para el menú.", "err");
+    if (!roleIds.length) return toast("Elige al menos un rol.", "err");
+    busy($("btnPostRoleMenu"), true);
+    api("/api/admin/discord-bot/guilds/" + state.guildId + "/role-menu", {
+      method: "POST",
+      body: { channel_id: channel, title: title, role_ids: roleIds },
+    })
+      .then(function () { toast("Menú de roles publicado.", "ok"); $("rmTitle").value = ""; refreshRoleMenus(); })
+      .catch(function (err) { toast(err.message || "No se pudo publicar.", "err"); })
+      .finally(function () { busy($("btnPostRoleMenu"), false); });
+  }
+
+  function refreshPolls() {
+    if (!state.guildId) return Promise.resolve();
+    return api("/api/admin/discord-bot/guilds/" + state.guildId + "/polls").then(function (data) {
+      var wrap = $("pollList");
+      wrap.innerHTML = "";
+      var items = data.polls || [];
+      if (!items.length) {
+        wrap.innerHTML = "<div class='empty'>Sin encuestas activas.</div>";
+        return;
+      }
+      items.forEach(function (poll) {
+        var votes = (poll.options || []).reduce(function (sum, option) {
+          return sum + (option.votes || 0);
+        }, 0);
+        var row = document.createElement("div");
+        row.className = "row-item";
+        row.innerHTML =
+          "<div class='ico'><svg class='ic'><use href='#ic-poll'/></svg></div>" +
+          "<div class='meta'><b>" + escapeHtml(poll.question) + "</b>" +
+          "<span>" + votes + " votos · " + (poll.options || []).length + " opciones</span></div>" +
+          "<button class='btn' style='padding:8px 10px' aria-label='Borrar'>" +
+          "<svg class='ic'><use href='#ic-trash'/></svg></button>";
+        row.querySelector("button").onclick = function () {
+          api("/api/admin/discord-bot/guilds/" + state.guildId + "/polls/" + poll.poll_id, { method: "DELETE" })
+            .then(function () { toast("Encuesta cerrada y borrada.", "ok"); refreshPolls(); })
+            .catch(function (err) { toast(err.message || "No se pudo borrar.", "err"); });
+        };
+        wrap.appendChild(row);
+      });
+    }).catch(function (err) {
+      $("pollList").innerHTML = "<div class='empty'>" + escapeHtml(err.message || "Error") + "</div>";
+    });
+  }
+
+  function postPoll() {
+    var channel = $("pollChannel").value;
+    var question = $("pollQuestion").value.trim();
+    var options = [];
+    document.querySelectorAll("#pollOptions .optrow").forEach(function (row2, index) {
+      var label = row2.querySelector(".polLabel").value.trim();
+      var emoji = row2.querySelector(".polEmoji").value.trim();
+      if (label) {
+        options.push({ label: label, emoji: emoji });
+        row2.querySelector(".polLabel").value = "";
+        row2.querySelector(".polEmoji").value = "";
+      }
+    });
+    if (!state.guildId) return toast("Selecciona antes un servidor.", "err");
+    if (!channel) return toast("Elige un canal.", "err");
+    if (!question) return toast("Escribe la pregunta.", "err");
+    if (options.length < 2) return toast("Escribe al menos 2 opciones.", "err");
+    busy($("btnPostPoll"), true);
+    api("/api/admin/discord-bot/guilds/" + state.guildId + "/polls", {
+      method: "POST",
+      body: { channel_id: channel, question: question, options: options },
+    })
+      .then(function () { toast("Encuesta publicada.", "ok"); $("pollQuestion").value = ""; refreshPolls(); })
+      .catch(function (err) { toast(err.message || "No se pudo publicar.", "err"); })
+      .finally(function () { busy($("btnPostPoll"), false); });
+  }
+
+  function refreshEvents() {
+    api("/api/admin/discord-bot/events").then(function (data) {
+      var wrap = $("eventList");
+      wrap.innerHTML = "";
+      var items = data.events || [];
+      if (!items.length) {
+        wrap.innerHTML = "<div class='empty'>Sin eventos todavía.</div>";
+        return;
+      }
+      var labels = {
+        welcome: "Bienvenida",
+        goodbye: "Despedida",
+        verified: "Verificación",
+        rolemenu_create: "Menú de roles creado",
+        rolemenu_delete: "Menú de roles borrado",
+        poll_create: "Encuesta creada",
+        poll_delete: "Encuesta borrada",
+        schedule_create: "Mensaje programado creado",
+        schedule_sent: "Programado enviado",
+        schedule_error: "Error de programado",
+        backup_auto: "Respaldo automático",
+        backup_restore: "Respaldo restaurado",
+      };
+      items.slice(0, 40).forEach(function (event) {
+        var when = String(event.t || "").replace("T", " ").slice(0, 16);
+        var row = document.createElement("div");
+        row.className = "row-item";
+        row.innerHTML =
+          "<div class='ico'><svg class='ic'><use href='#ic-list'/></svg></div>" +
+          "<div class='meta'><b>" + escapeHtml(labels[event.kind] || event.kind) + "</b>" +
+          "<span>" + escapeHtml(event.detail || "—") + " · " + escapeHtml(when) + " UTC</span></div>";
+        wrap.appendChild(row);
+      });
+    }).catch(function (err) {
+      $("eventList").innerHTML = "<div class='empty'>" + escapeHtml(err.message || "Error") + "</div>";
+    });
+  }
+
+  function downloadBackup() {
+    busy($("btnBackup"), true);
+    fetch("/api/admin/discord-bot/backup", { headers: { Authorization: "Bearer " + state.token } })
+      .then(function (res) {
+        if (!res.ok) throw new Error("No se pudo generar el respaldo.");
+        return res.blob();
+      })
+      .then(function (blob) {
+        var link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = "coreia-bot-backup.json";
+        link.click();
+        URL.revokeObjectURL(link.href);
+        toast("Respaldo descargado.", "ok");
+      })
+      .catch(function (err) { toast(err.message || "No se pudo descargar.", "err"); })
+      .finally(function () { busy($("btnBackup"), false); });
+  }
+
+  function restoreBackup() {
+    var file = $("backupFile").files && $("backupFile").files[0];
+    if (!file) return toast("Elige antes el archivo .json del respaldo.", "err");
+    busy($("btnBackupRestore"), true);
+    var reader = new FileReader();
+    reader.onload = function () {
+      var payload;
+      try {
+        payload = JSON.parse(String(reader.result));
+      } catch (err) {
+        busy($("btnBackupRestore"), false);
+        return toast("El archivo no es un respaldo JSON válido.", "err");
+      }
+      api("/api/admin/discord-bot/backup", { method: "POST", body: payload })
+        .then(function (data) {
+          toast("Respaldo restaurado: " + data.restored + " opciones.", "ok");
+          refreshAll();
+        })
+        .catch(function (err) { toast(err.message || "No se pudo restaurar.", "err"); })
+        .finally(function () { busy($("btnBackupRestore"), false); });
+    };
+    reader.readAsText(file);
   }
 
   /* ---------------------------------------------------------- */
@@ -608,8 +922,25 @@
     };
 
     $("btnSaveWelcome").onclick = function () {
-      saveConfig({ welcome_message: $("cfgWelcomeMsg").value }, "Bienvenida guardada.");
+      saveConfig({
+        welcome_message: $("cfgWelcomeMsg").value,
+        welcome_image_enabled: $("cfgWelcomeImage").checked ? "1" : "",
+      }, "Bienvenida guardada.");
     };
+
+    $("btnBackup").onclick = downloadBackup;
+    $("btnBackupRestore").onclick = restoreBackup;
+    $("btnEvents").onclick = function () {
+      busy($("btnEvents"), true);
+      refreshEvents();
+      setTimeout(function () { busy($("btnEvents"), false); }, 500);
+    };
+    $("btnPostRoleMenu").onclick = postRoleMenu;
+    $("btnPostPoll").onclick = postPoll;
+    $("btnSchedule").onclick = createSchedule;
+    $("schKind").addEventListener("change", function () {
+      $("schWeekday").hidden = $("schKind").value !== "weekly";
+    });
 
     $("btnSaveGoodbye").onclick = function () {
       saveConfig({ goodbye_message: $("cfgGoodbyeMsg").value }, "Despedida guardada.");

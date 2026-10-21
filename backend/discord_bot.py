@@ -16,6 +16,7 @@ from contextlib import suppress
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable
 
+import bot_extras
 import websearch
 from config import settings
 from database import SessionLocal
@@ -556,6 +557,8 @@ class BotManager:
             "✅ Verificación completada. Ya tienes acceso al servidor.",
             ephemeral=True,
         )
+        bot_extras.bump_stat("verifications", guild_id=str(guild.id))
+        bot_extras.record_event("verified", str(member), str(guild.id))
         await self._send_log(
             guild,
             "✅ Verificación completada",
@@ -670,13 +673,24 @@ class BotManager:
             embed.set_footer(text="Core IA · Bienvenida")
             view = self._make_verify_view() if verified_role else None
             try:
-                await welcome.send(
-                    content=member.mention,
-                    embed=embed,
-                    view=view,
-                    allowed_mentions=discord.AllowedMentions(
+                send_kwargs: dict[str, Any] = {
+                    "content": member.mention,
+                    "embed": embed,
+                    "allowed_mentions": discord.AllowedMentions(
                         users=True, roles=False, everyone=False
                     ),
+                }
+                if view is not None:
+                    send_kwargs["view"] = view
+                if (config.get("welcome_image_enabled") or "").lower() in ("1", "true", "on"):
+                    welcome_image = await self._build_welcome_image(member)
+                    if welcome_image is not None:
+                        file, embed.image = welcome_image
+                        send_kwargs["files"] = [file]
+                await welcome.send(**send_kwargs)
+                bot_extras.bump_stat("welcomes", guild_id=str(member.guild.id))
+                bot_extras.record_event(
+                    "welcome", member.display_name, str(member.guild.id)
                 )
             except (discord.Forbidden, discord.HTTPException):
                 LOG.exception("No se pudo enviar la bienvenida a %s", member)
@@ -693,6 +707,41 @@ class BotManager:
             f"Cuenta creada {created_text}.",
             0x6D5DFC,
             config=config,
+        )
+
+    async def _build_welcome_image(self, member: Any) -> tuple[Any, str] | None:
+        """Genera (File, URL de adjunto) para la tarjeta de bienvenida."""
+        import io
+
+        avatar_raw: bytes | None = None
+        try:
+            import aiohttp
+
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(str(member.display_avatar.url)) as response:
+                    if response.status < 400:
+                        avatar_raw = await response.read()
+        except Exception:  # noqa: BLE001 - el avatar es decorativo
+            avatar_raw = None
+        image = await asyncio.to_thread(
+            bot_extras.render_welcome_image,
+            member.guild.name,
+            member.display_name,
+            member.guild.member_count or "—",
+            avatar_raw,
+        )
+        if not image:
+            return None
+        from discord import File
+
+        return (
+            File(
+                fp=io.BytesIO(image),
+                filename="coreia-welcome.png",
+                description="Tarjeta de bienvenida de Core IA",
+            ),
+            "attachment://coreia-welcome.png",
         )
 
     async def _on_member_remove(self, member: Any) -> None:
@@ -724,6 +773,7 @@ class BotManager:
                     embed=embed,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
+                bot_extras.bump_stat("goodbyes", guild_id=str(member.guild.id))
             except (discord.Forbidden, discord.HTTPException):
                 LOG.exception("No se pudo enviar la despedida de %s", member)
 
@@ -748,6 +798,116 @@ class BotManager:
         system_prompt = self._system_prompt
 
         client.add_view(self._make_verify_view())
+
+        async def handle_rolemenu(interaction: "discord.Interaction") -> None:
+            """Asigna o retira los roles elegidos en un menú publicado."""
+            guild = interaction.guild
+            if guild is None:
+                return
+            member = guild.get_member(interaction.user.id) or interaction.user
+            values = list((interaction.data or {}).get("values", []))
+            selected = set()
+            for raw in values:
+                try:
+                    selected.add(int(raw))
+                except (TypeError, ValueError):
+                    continue
+            added, removed, denied = [], [], 0
+            me = guild.me
+            for role in member.roles:
+                if role.id in selected:
+                    selected.discard(role.id)
+                    removed.append(role)
+            for raw in selected:
+                role = guild.get_role(raw)
+                if role is None or role.is_default() or role.managed:
+                    denied += 1
+                    continue
+                if me.top_role <= role:
+                    denied += 1
+                    continue
+                added.append(role)
+            if added or removed:
+                try:
+                    if removed:
+                        await member.remove_roles(
+                            *removed, reason="Menú de roles Core IA", atomic=False
+                        )
+                    if added:
+                        await member.add_roles(
+                            *added, reason="Menú de roles Core IA", atomic=False
+                        )
+                except (discord.Forbidden, discord.HTTPException):
+                    LOG.exception("No se pudieron aplicar roles desde el menú")
+                    denied += len(added) + len(removed)
+                    added, removed = [], []
+            bot_extras.bump_stat("role_assigns", guild_id=str(guild.id))
+            names = ", ".join(role.name for role in added or []) or ""
+            leave = ", ".join(role.name for role in removed) or ""
+            parts = []
+            if names:
+                parts.append(f"Roles asignados: **{names}**")
+            if leave:
+                parts.append(f"Roles quitados: **{leave}**")
+            parts.append("Roles gestionados." if added or removed else "Sin cambios en tus roles.")
+            if denied:
+                parts.append(
+                    f"Hay {denied} rol(es) que no puedo gestionar (jerarquía o sistema)."
+                )
+            await interaction.response.send_message("\n".join(parts), ephemeral=True)
+
+        async def handle_poll(interaction: "discord.Interaction") -> None:
+            """Registra o cambia el voto del usuario y actualiza el mensaje."""
+            guild = interaction.guild
+            if guild is None:
+                return
+            _, poll_id, index_raw = str(
+                (interaction.data or {}).get("custom_id", "")
+            ).split(":", 2)
+            polls = await asyncio.to_thread(
+                bot_extras.load_store, guild.id, bot_extras.POLL_STORE
+            )
+            poll = polls.get(poll_id)
+            if not poll:
+                await interaction.response.send_message(
+                    "Esta encuesta ya no existe.", ephemeral=True
+                )
+                return
+            try:
+                index = int(index_raw)
+            except ValueError:
+                return
+            user_id = str(interaction.user.id)
+            for option in poll["options"]:
+                voters = [v for v in option.get("voters", []) if v != user_id]
+                option["voters"] = voters[: bot_extras.MAX_VOTERS_PER_OPTION]
+                option["votes"] = len(voters)
+            chosen = poll["options"][index] if 0 <= index < len(poll["options"]) else None
+            if chosen is not None:
+                chosen["voters"].append(user_id)
+                chosen["votes"] = len(chosen["voters"])
+            await asyncio.to_thread(
+                bot_extras.save_store, guild.id, bot_extras.POLL_STORE, polls
+            )
+            bot_extras.bump_stat("poll_votes", guild_id=str(guild.id))
+            content = bot_extras.poll_message_content(poll)
+            try:
+                await interaction.response.edit_message(content=content)
+            except (discord.Forbidden, discord.HTTPException):
+                LOG.exception("No se pudo actualizar la encuesta")
+
+        async def on_interaction(interaction: "discord.Interaction") -> None:
+            """Rutea las interacciones de componentes propios del bot."""
+            try:
+                custom_id = str((interaction.data or {}).get("custom_id") or "")
+                if custom_id.startswith(bot_extras.ROLEMENU_COMPONENT_PREFIX):
+                    await handle_rolemenu(interaction)
+                elif custom_id.startswith(f"{bot_extras.POLL_COMPONENT_PREFIX}:"):
+                    await handle_poll(interaction)
+            except Exception:  # noqa: BLE001 - nunca romper por una interacción
+                LOG.exception("Error en la interacción de componente")
+
+        client.event(on_interaction)
 
         async def respond(interaction: "discord.Interaction", question: str) -> None:
             if not _channel_allowed(interaction.channel_id, allowed_channels):

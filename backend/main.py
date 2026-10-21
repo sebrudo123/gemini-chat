@@ -59,10 +59,13 @@ try:
 except Exception:  # noqa: BLE001 - métricas opcionales
     PROMETHEUS_AVAILABLE = False
 
+import asyncio
+
 import plans
 import rag
 import llm
 import websearch
+import bot_extras
 import discord_bot
 from cache import is_enabled as cache_is_enabled
 from config import settings
@@ -71,6 +74,7 @@ from models import (
     AppSetting,
     Attachment,
     AuditLog,
+    BotSchedule,
     Conversation,
     ConversationFavorite,
     ConversationFolder,
@@ -177,6 +181,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         guild_id=settings.discord_bot_guild_id,
         channel_ids=settings.discord_bot_channel_ids,
     )
+    housekeeping = asyncio.create_task(_housekeeping_loop())
     if settings.discord_bot_autostart and settings.discord_bot_token:
         try:
             await bot_manager.start()
@@ -185,7 +190,68 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        housekeeping.cancel()
         await bot_manager.stop()
+
+
+async def _housekeeping_loop() -> None:
+    """Cada minuto: publica los mensajes programados; semanal: snapshot."""
+    while True:
+        try:
+            await asyncio.sleep(60)
+            await _process_schedules()
+            await asyncio.to_thread(_update_backup_snapshot)
+        except asyncio.CancelledError:  # pragma: no cover - al apagar el proceso
+            raise
+        except Exception:  # noqa: BLE001 - la tarea supervisa y nunca muere
+            LOG.exception("Error en la tarea de mensajes programados")
+
+
+def _update_backup_snapshot() -> None:
+    """Guarda un respaldo semanal de la configuración en la base de datos."""
+    now = datetime.now(timezone.utc)
+    db = SessionLocal()
+    try:
+        last = get_setting(db, "bot:backup:at", "")
+        if last and (now.timestamp() - 7 * 24 * 3600) < _iso_ts(last):
+            return
+        set_setting(db, "bot:backup:at", now.isoformat(timespec="seconds"))
+        backup = _backup_payload(db)
+        set_setting(db, "bot:backup:snapshot", json.dumps(backup, ensure_ascii=False))
+        bot_extras.record_event("backup_auto", "Respaldo semanal guardado")
+    except Exception:  # noqa: BLE001 - el respaldo nunca rompe el servicio
+        db.rollback()
+        LOG.exception("No se pudo guardar el respaldo automático")
+    finally:
+        db.close()
+
+
+def _iso_ts(value: str) -> float:
+    try:
+        return datetime.fromisoformat(value).timestamp()
+    except ValueError:
+        return 0.0
+
+
+async def _process_schedules() -> None:
+    """Envía los mensajes programados que tocan y marca su ejecución."""
+    now = datetime.now(timezone.utc)
+    due = await asyncio.to_thread(bot_extras.collect_due_schedules, now)
+    for item in due:
+        try:
+            await discord_bot.send_channel_message(int(item["channel_id"]), item["content"])
+            bot_extras.bump_stat("scheduled_sent", guild_id=str(item["guild_id"]))
+            bot_extras.record_event(
+                "schedule_sent",
+                (item.get("content") or "")[:80],
+                str(item.get("guild_id") or ""),
+            )
+        except Exception as exc:  # noqa: BLE001 - un fallo no bloquea los demás
+            bot_extras.record_event(
+                "schedule_error",
+                f"{exc}"[:200],
+                str(item.get("guild_id") or ""),
+            )
 
 
 app = FastAPI(title="Core IA API", version="2.1.0", lifespan=lifespan)
@@ -4174,6 +4240,7 @@ BOT_CONFIG_KEYS = (
     "min_account_age_days",
     "welcome_message",
     "goodbye_message",
+    "welcome_image_enabled",
 )
 
 
@@ -4482,6 +4549,393 @@ def bot_update_latest_apk(db: Session = Depends(get_db)) -> Response:
             "Cache-Control": "no-store",
         },
     )
+
+
+# --------------------------------------------------------------------------- #
+# Extras del bot: stats, registros, programados, menús de roles, encuestas y
+# respaldos de configuración (todo desde el panel móvil de administración).
+# --------------------------------------------------------------------------- #
+
+
+class BotScheduleCreate(BaseModel):
+    guild_id: str = Field(..., min_length=1, max_length=32)
+    channel_id: str = Field(..., min_length=1, max_length=32)
+    content: str = Field(..., min_length=1, max_length=1900)
+    kind: str = Field(default="daily", max_length=10)  # daily | weekly
+    weekday: int = Field(default=0, ge=0, le=6)
+    hour_utc: int = Field(default=12, ge=0, le=23)
+    minute_utc: int = Field(default=0, ge=0, le=59)
+
+
+class BotScheduleUpdate(BaseModel):
+    active: bool | None = None
+
+
+class BotRoleMenuCreate(BaseModel):
+    channel_id: str = Field(..., min_length=1, max_length=32)
+    title: str = Field(..., min_length=1, max_length=150)
+    role_ids: list[str] = Field(..., min_length=1, max_length=25)
+
+
+class BotPollCreate(BaseModel):
+    channel_id: str = Field(..., min_length=1, max_length=32)
+    question: str = Field(..., min_length=1, max_length=150)
+    options: list[dict[str, Any]] = Field(..., min_length=2, max_length=5)
+
+
+def _schedule_payload(row: BotSchedule) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "guild_id": row.guild_id,
+        "channel_id": row.channel_id,
+        "content": row.content,
+        "kind": row.kind,
+        "weekday": row.weekday,
+        "hour_utc": row.hour_utc,
+        "minute_utc": row.minute_utc,
+        "active": bool(row.active),
+        "last_run_day": row.last_run_day,
+    }
+
+
+@app.get("/api/admin/discord-bot/schedules")
+def admin_bot_schedules(
+    guild_id: str = "",
+    _: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Mensajes programados del bot (diarios o semanales)."""
+    query = db.query(BotSchedule).order_by(BotSchedule.id.asc())
+    if guild_id:
+        query = query.filter(BotSchedule.guild_id == str(guild_id))
+    return {"schedules": [_schedule_payload(row) for row in query.all()]}
+
+
+@app.post("/api/admin/discord-bot/schedules")
+def admin_bot_schedule_create(
+    payload: BotScheduleCreate,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Crea un mensaje programado del bot."""
+    kind = "weekly" if payload.kind == "weekly" else "daily"
+    row = BotSchedule(
+        guild_id=str(payload.guild_id),
+        channel_id=str(payload.channel_id),
+        content=payload.content.strip()[:1900],
+        kind=kind,
+        weekday=payload.weekday,
+        hour_utc=payload.hour_utc,
+        minute_utc=payload.minute_utc,
+        active=True,
+    )
+    db.add(row)
+    db.commit()
+    record_audit(db, admin, "bot.schedule_create", payload.guild_id, kind)
+    bot_extras.record_event(
+        "schedule_create", (payload.content or "")[:80], str(payload.guild_id)
+    )
+    return {"schedule": _schedule_payload(row)}
+
+
+@app.patch("/api/admin/discord-bot/schedules/{schedule_id}")
+def admin_bot_schedule_toggle(
+    schedule_id: int,
+    payload: BotScheduleUpdate,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Activa o desactiva un mensaje programado."""
+    row = db.get(BotSchedule, schedule_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Programación no encontrada.")
+    if payload.active is not None:
+        row.active = payload.active
+    db.commit()
+    record_audit(
+        db, admin, "bot.schedule_toggle", row.guild_id, f"active={row.active}"
+    )
+    return {"schedule": _schedule_payload(row)}
+
+
+@app.delete("/api/admin/discord-bot/schedules/{schedule_id}")
+def admin_bot_schedule_delete(
+    schedule_id: int,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Elimina un mensaje programado."""
+    row = db.get(BotSchedule, schedule_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Programación no encontrada.")
+    db.delete(row)
+    db.commit()
+    record_audit(db, admin, "bot.schedule_delete", row.guild_id, f"#{schedule_id}")
+    return {"ok": True}
+
+
+def _admin_bot_stats_payload(db: Session) -> dict[str, Any]:
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    stats = bot_extras.load_stats(today)
+    messages_today = (
+        db.query(func.sum(Usage.messages)).filter(Usage.day == today).scalar()
+    ) or 0
+    images_today = (
+        db.query(func.sum(Usage.images)).filter(Usage.day == today).scalar()
+    ) or 0
+    users_total = db.query(func.count(User.id)).scalar() or 0
+    schedules_active = (
+        db.query(func.count(BotSchedule.id)).filter(BotSchedule.active.is_(True)).scalar()
+    ) or 0
+    return {
+        "day": today,
+        "messages_today": int(messages_today),
+        "images_today": int(images_today),
+        "users_total": int(users_total),
+        "schedules_active": int(schedules_active),
+        "welcomes": stats.get("welcomes", 0),
+        "goodbyes": stats.get("goodbyes", 0),
+        "verifications": stats.get("verifications", 0),
+        "role_assigns": stats.get("role_assigns", 0),
+        "poll_votes": stats.get("poll_votes", 0),
+        "scheduled_sent": stats.get("scheduled_sent", 0),
+    }
+
+
+@app.get("/api/admin/discord-bot/stats")
+def admin_bot_stats(
+    _: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Estadísticas de hoy: IA, verificaciones, bienvenidas e interacciones."""
+    return _admin_bot_stats_payload(db)
+
+
+@app.get("/api/admin/discord-bot/events")
+def admin_bot_events(
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """Últimos eventos del bot (bienvenidas, verificaciones, errores...)."""
+    return {"events": bot_extras.load_events()}
+
+
+def _backup_payload(db: Session) -> dict[str, Any]:
+    """Snapshot JSON de la configuración del bot y de los extras."""
+    settings_rows = (
+        db.query(AppSetting)
+        .filter(~AppSetting.key.startswith("bot:backup:"))
+        .all()
+    )
+    schedules = (
+        db.query(BotSchedule).order_by(BotSchedule.id.asc()).all()
+    )
+    guilds: dict[str, Any] = {}
+    for row in settings_rows:
+        key = row.key or ""
+        if key.startswith("discord:") and key.count(":") == 2:
+            guild_id = key.split(":")[1]
+            name = key.split(":")[2]
+            guilds.setdefault(guild_id, {})[name] = row.value
+    return {
+        "version": 1,
+        "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "settings": {
+            row.key: row.value
+            for row in settings_rows
+            if not (row.key or "").startswith("discord:")
+        },
+        "guilds": guilds,
+        "schedules": [_schedule_payload(row) for row in schedules],
+    }
+
+
+@app.get("/api/admin/discord-bot/backup")
+def admin_bot_backup(
+    _: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Descarga la configuración completa del bot como JSON respaldable."""
+    backup = _backup_payload(db)
+    return Response(
+        json.dumps(backup, ensure_ascii=False, indent=2),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": 'attachment; filename="coreia-bot-backup.json"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@app.post("/api/admin/discord-bot/backup")
+def admin_bot_backup_restore(
+    payload: dict[str, Any],
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Restaura un respaldo JSON desde el panel (fusión, no destruye extras)."""
+    restored = 0
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Respaldo no válido.")
+    for key, value in (payload.get("settings") or {}).items():
+        if not isinstance(key, str) or len(key) > 64 or not isinstance(value, str):
+            continue
+        if key.startswith("bot:update:") or key.startswith("bot:backup:"):
+            continue
+        set_setting(db, key, value[:400_000])
+        restored += 1
+    for guild_id, values in (payload.get("guilds") or {}).items():
+        if not isinstance(values, dict):
+            continue
+        clean = {
+            name: raw
+            for name, raw in values.items()
+            if name in BOT_CONFIG_KEYS and isinstance(raw, str)
+        }
+        if clean:
+            discord_bot.save_guild_config(int(str(guild_id)) if str(guild_id).isdigit() else 0, clean)
+            restored += len(clean)
+    schedules = payload.get("schedules") or []
+    if isinstance(schedules, list):
+        if payload.get("replace_schedules"):
+            db.query(BotSchedule).delete()
+        for item in schedules[:400]:
+            if not isinstance(item, dict):
+                continue
+            try:
+                db.add(
+                    BotSchedule(
+                        guild_id=str(item.get("guild_id", ""))[:32],
+                        channel_id=str(item.get("channel_id", ""))[:32],
+                        content=str(item.get("content", ""))[:1900],
+                        kind=str(item.get("kind", "daily"))[:10],
+                        weekday=int(item.get("weekday", 0)) % 7,
+                        hour_utc=int(item.get("hour_utc", 12)) % 24,
+                        minute_utc=int(item.get("minute_utc", 0)) % 60,
+                        active=bool(item.get("active", True)),
+                    )
+                )
+                restored += 1
+            except (TypeError, ValueError):
+                continue
+    db.commit()
+    record_audit(db, admin, "bot.backup_restore", "", f"{restored} opciones")
+    bot_extras.record_event("backup_restore", f"{restored} opciones restauradas")
+    return {"ok": True, "restored": restored}
+
+
+def _label_roles(
+    role_ids: list[str], inventory: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Une los role_ids con sus nombres del inventario del servidor."""
+    by_id = {str(role["id"]): role for role in inventory.get("roles", [])}
+    labeled = []
+    for role_id in role_ids:
+        role = by_id.get(str(role_id))
+        if role:
+            labeled.append({"id": role["id"], "label": role.get("name", role_id)})
+    return labeled
+
+
+@app.get("/api/admin/discord-bot/guilds/{guild_id}/role-menu")
+def admin_bot_role_menu_list(
+    guild_id: int,
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """Menús de roles publicados en el servidor."""
+    store = bot_extras.load_store(guild_id, bot_extras.ROLEMENU_STORE)
+    return {"menus": list(store.values())}
+
+
+@app.post("/api/admin/discord-bot/guilds/{guild_id}/role-menu")
+async def admin_bot_role_menu_create(
+    guild_id: int,
+    payload: BotRoleMenuCreate,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Publica un menú de roles con select múltiple y lo registra."""
+    labeled = _label_roles(payload.role_ids, await discord_bot.fetch_guild_inventory(guild_id))
+    if not labeled:
+        raise HTTPException(status_code=400, detail="Roles no válidos.")
+    try:
+        entry = await bot_extras.post_role_menu(
+            guild_id, int(payload.channel_id), payload.title, labeled
+        )
+    except Exception as exc:  # noqa: BLE001 - Discord rechazó la publicación
+        raise HTTPException(status_code=503, detail=f"Discord: {str(exc)[:200]}") from exc
+    record_audit(db, admin, "bot.role_menu", str(guild_id), payload.title[:80])
+    return {"menu": entry}
+
+
+@app.delete("/api/admin/discord-bot/guilds/{guild_id}/role-menu/{menu_id}")
+async def admin_bot_role_menu_delete(
+    guild_id: int,
+    menu_id: str,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Borra un menú de roles publicado."""
+    try:
+        removed = await bot_extras.remove_role_menu(guild_id, menu_id[:32])
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"Discord: {str(exc)[:200]}") from exc
+    if not removed:
+        raise HTTPException(status_code=404, detail="Menú no encontrado.")
+    record_audit(db, admin, "bot.role_menu_delete", str(guild_id), menu_id[:32])
+    return {"ok": True}
+
+
+@app.get("/api/admin/discord-bot/guilds/{guild_id}/polls")
+def admin_bot_polls_list(
+    guild_id: int,
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """Encuestas activas del servidor."""
+    store = bot_extras.load_store(guild_id, bot_extras.POLL_STORE)
+    return {"polls": list(store.values())}
+
+
+@app.post("/api/admin/discord-bot/guilds/{guild_id}/polls")
+async def admin_bot_poll_create(
+    guild_id: int,
+    payload: BotPollCreate,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Publica una encuesta con botones (emoji por opción opcional)."""
+    options = (
+        {
+            "label": str(option.get("label", "")).strip(),
+            "emoji": str(option.get("emoji", "")).strip()[:12],
+        }
+        for option in payload.options
+    )
+    try:
+        entry = await bot_extras.post_poll(
+            guild_id, int(payload.channel_id), payload.question, list(options)
+        )
+    except Exception as exc:  # noqa: BLE001 - Discord rechazó la publicación
+        raise HTTPException(status_code=503, detail=f"Discord: {str(exc)[:200]}") from exc
+    record_audit(db, admin, "bot.poll_create", str(guild_id), payload.question[:80])
+    return {"poll": entry}
+
+
+@app.delete("/api/admin/discord-bot/guilds/{guild_id}/polls/{poll_id}")
+async def admin_bot_poll_delete(
+    guild_id: int,
+    poll_id: str,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Cierra y borra una encuesta publicada."""
+    try:
+        removed = await bot_extras.remove_poll(guild_id, poll_id[:32])
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"Discord: {str(exc)[:200]}") from exc
+    if not removed:
+        raise HTTPException(status_code=404, detail="Encuesta no encontrada.")
+    record_audit(db, admin, "bot.poll_delete", str(guild_id), poll_id[:32])
+    return {"ok": True}
 
 
 @app.get("/api/admin/health")
