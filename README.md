@@ -425,7 +425,16 @@ registran en `canal_logs` si lo configuras.
 
 El backend sirve un panel dedicado en `https://gemini-chat-backend-vyrz.onrender.com/bot`.
 Es una app móvil con el theme de Core IA que reinicia el token de sesión admin
-de Core IA y, desde ahí, permite configurar todo el bot de Discord:
+de Core IA y, desde ahí, permite configurar todo el bot de Discord.
+
+El acceso solo está disponible para el **fundador** (los IDs de
+`FOUNDER_DISCORD_IDS`): el botón **Entrar con Discord** lanza el OAuth de
+Discord marcado para el panel; si el ID que entra no es fundador se le muestra
+"No tienes permisos para usar este panel" y no se crea ninguna sesión. También
+sigue funcionando el login por correo o token de la app principal, con la misma
+restricción de admin.
+
+El panel permite configurar todo el bot de Discord:
 
 - **Resumen**: encender/apagar el bot, sincronizar los comandos de barra y
   enviar un mensaje de prueba a un canal real.
@@ -446,6 +455,7 @@ configuración en la tabla `app_settings` bajo la clave
 ### Endpoints de administración (requieren sesión admin)
 
 - `GET  /api/admin/discord-bot` — estado del bot.
+- `GET  /api/admin/discord-bot/login` — OAuth de Discord solo para fundadores.
 - `POST /api/admin/discord-bot/start` · `…/stop` · `…/sync`.
 - `GET  /api/admin/discord-bot/guilds` — servidores del bot.
 - `GET  /api/admin/discord-bot/guilds/{id}/inventory` — canales y roles reales.
@@ -458,8 +468,9 @@ configuración en la tabla `app_settings` bajo la clave
 `androidbot/` es una aplicación Android independiente
 (`com.coreia.botpanel`) que carga el panel web en un WebView apuntando a
 `BOT_PANEL_URL` (por defecto el `/bot` de Render). El workflow adicional
-`.github/workflows/android-bot.yml` compila y publica la APK como release de
-GitHub (`coreia-bot.apk`) cada vez que cambia `androidbot/` o `bot/`.
+`.github/workflows/android-bot.yml` compila la APK y la deja como **artifact**
+de la acción (`coreia-bot-apk`); deliberadamente **no se publica en GitHub
+Releases** para mantenerla privada.
 
 ## Discord Rich Presence (app Android)
 

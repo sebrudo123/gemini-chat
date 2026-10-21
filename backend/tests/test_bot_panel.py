@@ -141,3 +141,47 @@ def test_bot_test_message(client, monkeypatch):
 def test_bot_sync_when_bot_off(client):
     response = client.post("/api/admin/discord-bot/sync", headers=auth(FOUNDER_ID))
     assert response.status_code == 409
+
+
+def _fake_oauth(monkeypatch, discord_id: str) -> None:
+    async def fake_exchange(url: str, data: dict) -> str:
+        return "access-token"
+
+    async def fake_profile(url: str, access_token: str) -> dict:
+        return {"id": discord_id, "username": "tester", "verified": True}
+
+    monkeypatch.setattr(main, "_exchange_code", fake_exchange)
+    monkeypatch.setattr(main, "_fetch_profile", fake_profile)
+
+
+def test_bot_discord_login_redirects_to_discord(client):
+    response = client.get(
+        "/api/admin/discord-bot/login", follow_redirects=False
+    )
+    assert response.status_code == 307
+    assert "discord.com" in response.headers["location"]
+
+
+def test_bot_discord_login_denied_for_non_founder(client, monkeypatch):
+    _fake_oauth(monkeypatch, "999888777666555444")
+    state = main._oauth_state("https://testserver/bot/", {"panel": True})
+    response = client.get(
+        "/api/auth/discord/callback",
+        params={"code": "abc", "state": state},
+        follow_redirects=False,
+    )
+    assert response.status_code == 307
+    assert "denied=1" in response.headers["location"]
+
+
+def test_bot_discord_login_grants_founder(client, monkeypatch):
+    _fake_oauth(monkeypatch, FOUNDER_ID)
+    state = main._oauth_state("https://testserver/bot/", {"panel": True})
+    response = client.get(
+        "/api/auth/discord/callback",
+        params={"code": "abc", "state": state},
+        follow_redirects=False,
+    )
+    assert response.status_code == 307
+    location = response.headers["location"]
+    assert "#token=" in location

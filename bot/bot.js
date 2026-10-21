@@ -406,7 +406,59 @@
   /* ---------------------------------------------------------- */
   /* Arranque                                                    */
   /* ---------------------------------------------------------- */
+  function handlePending2fa(pendingToken) {
+    var code = prompt("Introduce el código de 2 pasos (TOTP):");
+    if (!code) return showApp(false);
+    busy($("loginBtn"), true);
+    api("/api/auth/2fa/verify", {
+      method: "POST",
+      body: { pending_token: pendingToken, code: code.trim() },
+    })
+      .then(function (data) { handleAuthSuccess(data.token); })
+      .catch(function (err) {
+        $("loginMsg").textContent = err.message || "No se pudo completar el login.";
+        $("loginMsg").className = "msgbox err show";
+        showApp(false);
+      })
+      .finally(function () { busy($("loginBtn"), false); });
+  }
+
+  function consumeHash() {
+    var hash = window.location.hash || "";
+    if (!hash) return;
+
+    var token = hash.match(/#token=([^&]+)/);
+    var pending = hash.match(/#pending2fa=([^&]+)/);
+
+    // Limpia el hash para que el token no quede en la barra ni en el historial.
+    history.replaceState(null, "", window.location.pathname + window.location.search);
+
+    if (hash.indexOf("#denied=1") !== -1) {
+      $("loginMsg").textContent =
+        "No tienes permisos para usar este panel. Solo el fundador de Core IA puede entrar.";
+      $("loginMsg").className = "msgbox err show";
+      localStorage.removeItem(TOKEN_KEY);
+      state.token = "";
+      showApp(false);
+      return;
+    }
+    if (pending && pending[1]) {
+      state.token = "";
+      showApp(false);
+      handlePending2fa(decodeURIComponent(pending[1]));
+      return;
+    }
+    if (token && token[1]) {
+      // Solo guarda el token: el bloque de arranque valida la sesión contra el backend.
+      state.token = decodeURIComponent(token[1]);
+      localStorage.setItem(TOKEN_KEY, state.token);
+    }
+  }
+
   function bind() {
+    $("discordBtn").onclick = function () {
+      window.location.href = "/api/admin/discord-bot/login";
+    };
     $("loginBtn").onclick = loginEmail;
     $("tokenBtn").onclick = loginToken;
     $("btnLogout").onclick = logout;
@@ -473,14 +525,21 @@
   }
 
   bind();
+  consumeHash();
   if (state.token) {
     api("/api/admin/discord-bot")
       .then(function (data) {
         state.bot = data.bot;
         showApp(true);
       })
-      .catch(function () {
+      .catch(function (err) {
         localStorage.removeItem(TOKEN_KEY);
+        state.token = "";
+        $("loginMsg").textContent =
+          err && /403|fundador|permisos/i.test(err.message)
+            ? "No tienes permisos para usar este panel. Solo el fundador de Core IA."
+            : "Tu sesión ya no es válida. Vuelve a entrar.";
+        $("loginMsg").className = "msgbox err show";
         showApp(false);
       });
   } else {

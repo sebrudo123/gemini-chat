@@ -1153,11 +1153,15 @@ def metrics(request: Request) -> Response:
 # Autenticación OAuth2 (Discord) y por correo
 # --------------------------------------------------------------------------- #
 
-def _oauth_state(return_to: str | None) -> str:
+def _oauth_state(return_to: str | None, extra: dict[str, Any] | None = None) -> str:
     """Crea un `state` firmado con el nonce y la URL de retorno."""
-    return serializer.dumps(
-        {"nonce": secrets.token_urlsafe(16), "return_to": allowed_return_url(return_to)}
-    )
+    payload: dict[str, Any] = {
+        "nonce": secrets.token_urlsafe(16),
+        "return_to": allowed_return_url(return_to),
+    }
+    if extra:
+        payload.update(extra)
+    return serializer.dumps(payload)
 
 
 def _read_state(state: str | None) -> dict[str, Any]:
@@ -1280,6 +1284,19 @@ async def discord_callback(
         "avatar_url": build_avatar_url(raw),
         "email_verified": bool(raw.get("verified")),
     }
+
+    # Login exclusivo para el panel del bot: solo los fundadores entran.
+    if state_data.get("panel"):
+        panel_url = state_data.get("return_to") or f"{settings.frontend_url}/"
+        if not is_admin(profile):
+            return RedirectResponse(f"{panel_url}#denied=1")
+        user = upsert_user(db, profile)
+        if user.totp_enabled:
+            pending = twofa_serializer.dumps({"user": profile})
+            return RedirectResponse(f"{panel_url}#pending2fa={pending}")
+        token = issue_session(db, profile)
+        return RedirectResponse(f"{panel_url}#token={token}")
+
     return _finish_login(db, profile, state_data)
 
 
@@ -4150,6 +4167,27 @@ BOT_CONFIG_KEYS = (
     "welcome_message",
     "goodbye_message",
 )
+
+
+@app.get("/api/admin/discord-bot/login")
+def admin_discord_bot_login(request: Request) -> RedirectResponse:
+    """Login con Discord para el panel del bot (solo fundadores).
+
+    Reutiliza el mismo redirect_uri registrado en la app de Discord y marca el
+    `state` con `panel` para que el callback restrinja el acceso al retorno.
+    """
+    client_id = require_config(settings.discord_client_id, "DISCORD_CLIENT_ID")
+    redirect_uri = require_config(settings.discord_redirect_uri, "DISCORD_REDIRECT_URI")
+    origin = str(request.base_url).rstrip("/")
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "identify",
+        "state": _oauth_state(f"{origin}/bot/", {"panel": True}),
+        "prompt": "consent",
+    }
+    return RedirectResponse(f"{DISCORD_AUTHORIZE_URL}?{urlencode(params)}")
 
 
 @app.get("/api/admin/discord-bot/guilds")

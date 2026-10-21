@@ -88,16 +88,3 @@ jobs:
           name: coreia-bot-apk
           path: androidbot/coreia-bot.apk
           if-no-files-found: error
-
-      - name: Publish release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION_NAME: 1.0.${{ github.run_number }}
-        run: |
-          gh release view "bot-panel-$VERSION_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 0
-          gh release create "bot-panel-$VERSION_NAME" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "Core IA Bot $VERSION_NAME" \
-            --notes "APK aparte del panel de administración del bot de Discord." \
-            coreia-bot.apk
