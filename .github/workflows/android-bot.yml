@@ -87,6 +87,32 @@ jobs:
             cp app/build/outputs/apk/debug/app-debug.apk coreia-bot.apk
           fi
 
+      # Changelog real: input del dispatch o mensaje del último commit en push.
+      - name: Derive changelog
+        env:
+          INPUT_CHANGELOG: ${{ inputs.changelog }}
+        working-directory: .
+        run: |
+          if [ -n "$INPUT_CHANGELOG" ]; then
+            echo "CHANGELOG=$INPUT_CHANGELOG" >> "$GITHUB_ENV"
+          else
+            git log -1 --pretty='format:%s' > /tmp/changelog.txt
+            echo "CHANGELOG=$(cat /tmp/changelog.txt)" >> "$GITHUB_ENV"
+          fi
+
+      # Release pública en GitHub: de ahí saca la actualización la app
+      # (releases con etiqueta bot-vX.Y.Z, pública y sin autenticación).
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_NAME: 1.0.${{ github.run_number }}
+          CHANGELOG: ${{ env.CHANGELOG }}
+        run: |
+          TAG="bot-v${VERSION_NAME}"
+          gh release create "$TAG" --title "Core IA Bot — $VERSION_NAME" \
+            --notes "$CHANGELOG" coreia-bot.apk --target main
+          echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}" >> "$GITHUB_ENV"
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -99,7 +125,8 @@ jobs:
           UPLOAD_TOKEN: ${{ secrets.BACKEND_UPLOAD_TOKEN }}
           VERSION_CODE: ${{ github.run_number }}
           VERSION_NAME: 1.0.${{ github.run_number }}
-          CHANGELOG: ${{ inputs.changelog || 'Mejoras y arreglos de errores.' }}
+          CHANGELOG: ${{ env.CHANGELOG }}
+          RELEASE_URL: ${{ env.RELEASE_URL }}
         run: |
           python3 - <<'PY'
           import base64, json, os, urllib.request
@@ -117,6 +144,7 @@ jobs:
               "version_name": os.environ["VERSION_NAME"],
               "changelog": os.environ.get("CHANGELOG", "Mejoras y arreglos de errores."),
               "apk_base64": apk_b64,
+              "release_url": os.environ.get("RELEASE_URL", ""),
           }).encode()
 
           req = urllib.request.Request(

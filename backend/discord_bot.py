@@ -262,6 +262,20 @@ async def send_channel_message(channel_id: int, content: str, token: str = "") -
     )
 
 
+async def send_channel_embed(channel_id: int, embed: dict[str, Any], token: str = "") -> None:
+    """Publica un embed (aviso con formato) en un canal concreto.
+
+    `embed` es un diccionario con el formato de la API de Discord
+    (title, description, fields, color...).
+    """
+    await _discord_request(
+        "POST",
+        f"/channels/{int(channel_id)}/messages",
+        token=token,
+        json_body={"embeds": [embed], "allowed_mentions": {"parse": []}},
+    )
+
+
 def _snowflake(value: str | None) -> int | None:
     try:
         return int(value) if value else None

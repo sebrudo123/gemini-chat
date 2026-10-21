@@ -4523,6 +4523,7 @@ class BotUpdateUpload(BaseModel):
     version_name: str = Field(..., min_length=1, max_length=32)
     changelog: str = Field(default="", max_length=4000)
     apk_base64: str = Field(..., min_length=100, max_length=90_000_000)
+    release_url: str = Field(default="", max_length=400)
 
 
 BOT_UPDATE_MANIFEST_KEY = "bot:update:manifest"
@@ -4541,24 +4542,67 @@ def _read_update_manifest(db: Session) -> dict[str, Any]:
     return manifest if isinstance(manifest, dict) else {}
 
 
+def _update_changelog_bullets(changelog: str) -> str:
+    """Convierte el changelog en una lista visual para el embed.
+
+    Cada línea se vuelve una viñeta; Discord limita cada campo a 1024
+    caracteres, así que se recorta de forma segura.
+    """
+    lines = [line.strip(" \t-•*") for line in changelog.splitlines()]
+    bullets = []
+    for line in lines:
+        if not line:
+            continue
+        bullets.append(f"• {line[:200]}")
+    text = "\n".join(bullets)[:1000]
+    return text or "Correcciones y mejoras de rendimiento."
+
+
+def _update_announce_embed(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Embed de Discord para el anuncio de una nueva versión del APK."""
+    version = str(manifest.get("version_name") or "").strip() or "desconocida"
+    embed: dict[str, Any] = {
+        "title": f"Actualización de Core IA Bot — v{version}",
+        "description": (
+            "Nueva versión del panel del bot publicada en GitHub Actions. "
+            "Los servidores conectados la reciben en el canal de actualizaciones."
+        ),
+        "color": 0x6D5DFC,
+        "fields": [
+            {
+                "name": "Qué se arregló",
+                "value": _update_changelog_bullets(str(manifest.get("changelog") or "")),
+                "inline": False,
+            },
+            {
+                "name": "Cómo instalarla",
+                "value": (
+                    "Abre la app del panel: al arrancar aparece el aviso de "
+                    "actualización con el botón «Instalar»."
+                ),
+                "inline": False,
+            },
+        ],
+        "footer": {"text": "APK armada en GitHub Actions • auto-actualización"},
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    release_url = str(manifest.get("release_url") or "").strip()
+    if release_url.startswith("http"):
+        embed["url"] = release_url
+    return embed
+
+
 async def _notify_bot_update(manifest: dict[str, Any]) -> int:
-    """Anuncia la nueva versión en Discord el bot mismo.
+    """Anuncia la nueva versión en Discord con un embed del propio bot.
 
     Publica en el canal de actualizaciones de cada servidor (o en el de
     registros si no hay uno configurado). Nunca rompe la publicación del
     manifest: los fallos de Discord se ignoran.
     """
     version = str(manifest.get("version_name") or "").strip()
-    changelog = str(manifest.get("changelog") or "").strip()
     if not version:
         return 0
-    content = f"Nueva versión de Core IA Bot: **{version}**"
-    if changelog:
-        content += f"\n\nNovedades:\n{changelog}"
-    content += (
-        "\n\nLa actualización se instala desde la app del panel "
-        "con el botón «Instalar»."
-    )
+    embed = _update_announce_embed(manifest)
     notified = 0
     try:
         guilds = await discord_bot.fetch_bot_guilds()
@@ -4570,7 +4614,7 @@ async def _notify_bot_update(manifest: dict[str, Any]) -> int:
         if not channel:
             continue
         try:
-            await discord_bot.send_channel_message(int(channel), content)
+            await discord_bot.send_channel_embed(int(channel), embed)
             notified += 1
         except Exception:  # noqa: BLE001 - un servidor sin permisos no bloquea
             continue
@@ -4602,6 +4646,7 @@ async def bot_update_upload(
         "version_name": payload.version_name,
         "version_code": payload.version_code,
         "changelog": payload.changelog.strip()[:4000],
+        "release_url": payload.release_url.strip()[:400],
         "published_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "apk_size": len(apk_bytes),
     }
@@ -4642,6 +4687,7 @@ def bot_update_check(
         "version_name": manifest.get("version_name", ""),
         "version_code": latest,
         "changelog": manifest.get("changelog", ""),
+        "release_url": manifest.get("release_url", ""),
         "published_at": manifest.get("published_at", ""),
         "apk_url": f"{base}/bot/update/latest.apk",
         "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

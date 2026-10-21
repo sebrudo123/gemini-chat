@@ -116,6 +116,48 @@ def test_upload_publishes_and_check_serves_apk(client, upload_token, monkeypatch
     assert apk.headers["content-type"].startswith("application/vnd.android.package-archive")
 
 
+def test_upload_announces_with_embed(client, upload_token, monkeypatch):
+    """El aviso de versión se publica como embed con el changelog en viñetas."""
+    sent: dict[str, list] = {"embeds": []}
+
+    async def fake_guilds(token: str = ""):
+        return [{"id": "999"}]
+
+    def fake_load_config(guild_id: int) -> dict[str, str]:
+        return {"update_channel_id": "777"}
+
+    async def fake_send_embed(channel_id: int, embed, token: str = ""):
+        sent["embeds"].append((channel_id, embed))
+
+    monkeypatch.setattr(main.discord_bot, "fetch_bot_guilds", fake_guilds)
+    monkeypatch.setattr(main.discord_bot, "load_guild_config", fake_load_config)
+    monkeypatch.setattr(main.discord_bot, "send_channel_embed", fake_send_embed)
+    monkeypatch.setattr(main.discord_bot, "send_channel_message", fake_send_embed)
+
+    response = publish(
+        client,
+        upload_token,
+        version_code=12,
+        version_name="1.0.12",
+        changelog="Arregla el login con Discord\nMejora la barra inferior\n",
+    )
+    assert response.status_code == 200
+    assert response.json()["notified_guilds"] == 1
+
+    assert len(sent["embeds"]) == 1
+    channel_id, embed = sent["embeds"][0]
+    assert channel_id == 777
+    assert embed["color"] == 0x6D5DFC
+    assert "1.0.12" in embed["title"]
+    names = [field["name"] for field in embed["fields"]]
+    assert "Qué se arregló" in names
+    bullets = embed["fields"][0]["value"]
+    assert bullets.startswith("• Arregla el login con Discord")
+    assert "Mejora la barra inferior" in bullets
+    assert embed["footer"]["text"].strip() != ""
+    assert "timestamp" in embed
+
+
 def test_update_check_without_manifest(client, monkeypatch, tmp_path):
     from database import SessionLocal
     from sqlalchemy import select

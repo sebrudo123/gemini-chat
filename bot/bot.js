@@ -1092,6 +1092,56 @@
   function checkUpdate() {
     if (!window.CoreIAUpdate) return; // solo avisa dentro del APK
     var current = androidVersionCode();
+    // El APK se busca en GitHub: el workflow de Actions publica una release
+    // pública (etiqueta bot-vX.Y.Z con el APK). Si GitHub falla, se usa el
+    // manifiesto del backend como respaldo.
+    checkUpdateGithub(current)
+      .then(function (handled) {
+        if (!handled) checkUpdateBackend(current);
+      })
+      .catch(function () {
+        checkUpdateBackend(current);
+      });
+  }
+
+  /* Última release del APK en GitHub (pública, sin autenticación). */
+  function checkUpdateGithub(current) {
+    var url = "https://api.github.com/repos/sebrudo123/gemini-chat/releases?per_page=30";
+    return fetch(url)
+      .then(function (res) {
+        if (!res.ok) throw new Error("GitHub no respondió.");
+        return res.json();
+      })
+      .then(function (releases) {
+        var latest = null;
+        (releases || []).forEach(function (release) {
+          var match = /^bot-v(\d+)\.(\d+)\.(\d+)$/.exec(String(release && release.tag_name || ""));
+          if (!match) return;
+          if (!latest || Number(match[3]) > latest.code) {
+            latest = {
+              code: Number(match[3]),
+              name: match[1] + "." + match[2] + "." + match[3],
+              release: release,
+            };
+          }
+        });
+        if (!latest || latest.code <= current) return false;
+        var asset = null;
+        (latest.release.assets || []).forEach(function (item) {
+          if (!asset && /\.apk$/i.test(String(item && item.name || ""))) asset = item;
+        });
+        if (!asset) return false; // release sin APK: pasa al respaldo
+        showUpdate({
+          version_name: latest.name,
+          changelog: String(latest.release.body || "").trim() || "Mejoras y arreglos de errores.",
+          apk_url: asset.browser_download_url,
+        });
+        return true;
+      });
+  }
+
+  /* Respaldo: manifiesto guardado en el backend por el mismo workflow. */
+  function checkUpdateBackend(current) {
     fetch(API_BASE + "/bot/update/check?current=" + current)
       .then(function (res) { return res.ok ? res.json() : null; })
       .then(function (data) {
