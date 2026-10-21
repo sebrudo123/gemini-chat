@@ -143,6 +143,12 @@ class Settings:
             ).split(",")
             if founder.strip()
         ]
+        # Fundadores/administradores que entran con correo y contraseña.
+        self.admin_emails = [
+            email.strip().lower()
+            for email in os.environ.get("ADMIN_EMAILS", "").split(",")
+            if email.strip()
+        ]
         self.founder_2fa_required = os.environ.get("FOUNDER_2FA_REQUIRED", "true").lower() in (
             "1",
             "true",

@@ -47,6 +47,8 @@ services:
         value: discord
       - key: FOUNDER_DISCORD_IDS
         value: "1439761085040427100,1429588284748599369"
+      - key: ADMIN_EMAILS
+        value: "admin@coreia.com"
       - key: FOUNDER_2FA_REQUIRED
         value: "true"
       - key: EMAIL_RELAY_URL

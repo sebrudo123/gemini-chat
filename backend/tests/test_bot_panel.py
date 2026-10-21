@@ -53,6 +53,24 @@ def test_bot_panel_forbidden_for_normal_user(client):
     assert client.get("/api/admin/discord-bot/guilds", headers=headers).status_code == 403
 
 
+def test_bot_panel_allows_admin_email(client, monkeypatch):
+    monkeypatch.setattr(main.settings, "admin_emails", ["admin@coreia.com"])
+    token = main.create_session_token(
+        {
+            "provider": "email",
+            "id": 777,
+            "username": "admin",
+            "display_name": "Core IA Admin",
+            "email": "admin@coreia.com",
+            "avatar_url": None,
+            "email_verified": True,
+        }
+    )
+    me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"}).json()["user"]
+    assert me["is_admin"] is True
+    assert client.get("/api/admin/discord-bot", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+
+
 def test_bot_guilds_lists_shared_guilds(client, monkeypatch):
     async def fake_fetch(token: str = "") -> list[dict]:
         return [

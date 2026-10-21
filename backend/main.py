@@ -424,9 +424,15 @@ def is_founder(profile: dict[str, Any] | None) -> bool:
 def is_admin(profile: dict[str, Any] | None) -> bool:
     """Indica si el perfil pertenece a un fundador/administrador.
 
-    Los fundadores se identifican por su ID de Discord.
+    Los fundadores se identifican por su ID de Discord o, alternativamente,
+    por un correo incluido en `ADMIN_EMAILS`.
     """
-    return is_founder(profile)
+    if is_founder(profile):
+        return True
+    if not profile:
+        return False
+    email = (profile.get("email") or "").strip().lower()
+    return bool(email) and email in settings.admin_emails
 
 
 def require_admin(profile: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
