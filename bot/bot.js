@@ -5,6 +5,21 @@
   var TOKEN_KEY = "coreia_bot_token";
   var FALLBACK_TOKEN_KEY = "coreia_token";
 
+  /* Cuando el panel vive en Vercel (estático) las llamadas van a la API de
+     Render; en Render el origen ya es el correcto. ?api= fuerza otro destino. */
+  var API_BASE = (function () {
+    var forced = new URLSearchParams(window.location.search).get("api");
+    if (forced) {
+      localStorage.setItem("coreia_api", forced);
+      return forced;
+    }
+    var saved = localStorage.getItem("coreia_api");
+    if (saved) return saved;
+    return window.location.hostname.indexOf("vercel.app") !== -1
+      ? "https://gemini-chat-backend-vyrz.onrender.com"
+      : "";
+  })();
+
   var state = {
     token: localStorage.getItem(TOKEN_KEY) || localStorage.getItem(FALLBACK_TOKEN_KEY) || "",
     bot: null,
@@ -44,7 +59,7 @@
       options.body = JSON.stringify(options.body);
       options.headers["Content-Type"] = "application/json";
     }
-    return fetch(path, options).then(function (res) {
+    return fetch(API_BASE + path, options).then(function (res) {
       return res
         .text()
         .then(function (text) {
@@ -1056,7 +1071,7 @@
   function checkUpdate() {
     if (!window.CoreIAUpdate) return; // solo avisa dentro del APK
     var current = androidVersionCode();
-    fetch("/bot/update/check?current=" + current)
+    fetch(API_BASE + "/bot/update/check?current=" + current)
       .then(function (res) { return res.ok ? res.json() : null; })
       .then(function (data) {
         if (data && data.has_update) showUpdate(data);
@@ -1129,7 +1144,7 @@
   /* ---------------------------------------------------------- */
   function bind() {
     $("discordBtn").onclick = function () {
-      window.location.href = "/api/admin/discord-bot/login";
+      window.location.href = API_BASE + "/api/admin/discord-bot/login";
     };
     $("loginBtn").onclick = loginEmail;
     $("tokenBtn").onclick = loginToken;

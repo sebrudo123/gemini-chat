@@ -340,10 +340,13 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
+    # Origen fijo del despliegue (Render) + regex para el panel en Vercel:
+    # el panel estático vive en *.vercel.app y consume esta API con token Bearer.
     allow_origins=settings.allowed_origins,
+    allow_origin_regex=r"https://[a-z0-9-]+\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "x-upload-token"],
 )
 
 
