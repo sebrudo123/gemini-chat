@@ -21,6 +21,7 @@ import websearch
 from config import settings
 from database import SessionLocal
 from models import AppSetting
+from sqlalchemy.exc import SQLAlchemyError
 
 try:  # La dependencia solo es necesaria si el bot está activado.
     import discord
@@ -286,6 +287,60 @@ def _resolve_channel(guild: Any, config: dict[str, str], key: str) -> Any:
     if isinstance(channel, (discord.TextChannel, discord.Thread)):
         return channel
     return None
+
+
+def _parse_duration(raw: str) -> int | None:
+    """Convierte '15m', '2h', '1d' o minutos sueltos en minutos."""
+    raw = (raw or "").strip().lower()
+    if not raw:
+        return None
+    match = _DURATION_RE.fullmatch(raw)
+    if not match:
+        try:
+            value = int(raw)
+            return value if value > 0 else None
+        except ValueError:
+            return None
+    amount = int(match.group(1))
+    unit = match.group(2)
+    factor = 1 if unit is None else {"m": 1, "h": 60, "d": 60 * 24}[unit]
+    return amount * factor
+
+
+_DURATION_RE = __import__("re").compile(r"^(\d+)\s*([mhd])?$")
+
+
+def _human_delta(minutes: int) -> str:
+    if minutes >= 60 * 24:
+        return f"{round(minutes / (60 * 24), 1)} día(s)"
+    if minutes >= 60:
+        return f"{round(minutes / 60, 1)} hora(s)"
+    return f"{minutes} minuto(s)"
+
+
+def _create_reminder(
+    guild_id: Any, channel_id: Any, user_id: Any, content: str, due: Any
+) -> Any:
+    """Crea un recordatorio en la base de datos."""
+    from models import BotReminder
+
+    db = SessionLocal()
+    try:
+        row = BotReminder(
+            guild_id=str(guild_id),
+            channel_id=str(channel_id),
+            user_id=str(user_id),
+            content=content,
+            due_at=due,
+        )
+        db.add(row)
+        db.commit()
+        return row.id
+    except SQLAlchemyError:
+        db.rollback()
+        return None
+    finally:
+        db.close()
 
 
 def _render_template(template: str, values: dict[str, Any]) -> str:
@@ -695,6 +750,44 @@ class BotManager:
             except (discord.Forbidden, discord.HTTPException):
                 LOG.exception("No se pudo enviar la bienvenida a %s", member)
 
+        # Mensaje privado de bienvenida (opcional).
+        if (config.get("welcome_dm_enabled") or "").lower() in ("1", "true", "on"):
+            try:
+                dm_template = config.get("welcome_dm_message") or (
+                    "¡Hola {name}! Gracias por unirte a **{server}**. "
+                    "Cuando te verifiques tendrás acceso a todo el servidor."
+                )
+                dm_values = {
+                    "user": member.mention,
+                    "name": member.display_name,
+                    "server": member.guild.name,
+                    "count": member.guild.member_count or "—",
+                }
+                dm_kwargs: dict[str, Any] = {}
+                if (config.get("welcome_image_enabled") or "").lower() in (
+                    "1",
+                    "true",
+                    "on",
+                ):
+                    dm_image = await self._build_welcome_image(member)
+                    if dm_image is not None:
+                        dm_file, dm_image_url = dm_image
+                        dm_embed = discord.Embed(
+                            description=_render_template(dm_template, dm_values),
+                            color=0x6D5DFC,
+                        )
+                        dm_embed.set_image(url=dm_image_url)
+                        dm_kwargs["files"] = [dm_file]
+                        dm_kwargs["embed"] = dm_embed
+                else:
+                    dm_kwargs["content"] = _render_template(dm_template, dm_values)
+                await member.send(**dm_kwargs)
+                bot_extras.record_event(
+                    "welcome_dm", member.display_name, str(member.guild.id)
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                LOG.info("No se pudo enviar el MP de bienvenida a %s", member)
+
         created_text = (
             discord.utils.format_dt(member.created_at, "R")
             if member.created_at
@@ -896,6 +989,160 @@ class BotManager:
             except (discord.Forbidden, discord.HTTPException):
                 LOG.exception("No se pudo actualizar la encuesta")
 
+        async def handle_giveaway(interaction: "discord.Interaction") -> None:
+            """Apunta o desapunta al usuario del sorteo y actualiza el mensaje."""
+            guild = interaction.guild
+            if guild is None:
+                return
+            _, giveaway_id = str(
+                (interaction.data or {}).get("custom_id", "")
+            ).split(":", 1)
+            giveaways = await asyncio.to_thread(
+                bot_extras.load_store, guild.id, bot_extras.GIVEAWAY_STORE
+            )
+            entry = giveaways.get(giveaway_id)
+            if not entry or entry.get("closed"):
+                await interaction.response.send_message(
+                    "Este sorteo ya ha terminado.", ephemeral=True
+                )
+                return
+            user_id = str(interaction.user.id)
+            entrants = list(entry.get("entrants") or [])
+            leaving = user_id in entrants
+            if leaving:
+                entrants = [uid for uid in entrants if uid != user_id]
+            else:
+                entrants.append(user_id)
+            entry["entrants"] = entrants[:2000]
+            await asyncio.to_thread(
+                bot_extras.save_store, guild.id, bot_extras.GIVEAWAY_STORE, giveaways
+            )
+            bot_extras.bump_stat("giveaway_joins", guild_id=str(guild.id))
+            try:
+                await interaction.response.edit_message(
+                    content=bot_extras.giveaway_content(entry)
+                )
+                if leaving:
+                    await interaction.followup.send(
+                        "Saliste del sorteo.", ephemeral=True
+                    )
+            except (discord.Forbidden, discord.HTTPException):
+                LOG.exception("No se pudo actualizar el sorteo")
+
+        async def handle_ticket(interaction: "discord.Interaction") -> None:
+            """Crea o cierra un canal de ticket de soporte."""
+            guild = interaction.guild
+            if guild is None:
+                return
+            _, action = str((interaction.data or {}).get("custom_id", "")).split(":", 1)
+            config = await asyncio.to_thread(load_guild_config, guild.id)
+            me = guild.me
+            if not (me and me.guild_permissions.manage_channels):
+                await interaction.response.send_message(
+                    "No tengo permiso para crear canales en este servidor.",
+                    ephemeral=True,
+                )
+                return
+            if action == "open":
+                member = guild.get_member(interaction.user.id) or interaction.user
+                existing = utils_channels_for(guild, str(interaction.user.id))
+                if existing:
+                    await interaction.response.send_message(
+                        f"Ya tienes un ticket abierto: {existing.mention}",
+                        ephemeral=True,
+                    )
+                    return
+                overwrites = {
+                    guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                    member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+                    me: discord.PermissionOverwrite(view_channel=True),
+                }
+                staff_role = _resolve_role(guild, config, "ticket_staff_role_id")
+                if staff_role is not None:
+                    overwrites[staff_role] = discord.PermissionOverwrite(
+                        view_channel=True, send_messages=True
+                    )
+                category = _resolve_channel(guild, config, "ticket_category_id")
+                try:
+                    channel_name = f"ticket-{member.name[:24]}".replace(" ", "-").lower()
+                    ticket_channel = await guild.create_text_channel(
+                        channel_name,
+                        overwrites=overwrites,
+                        category=category
+                        if isinstance(category, discord.CategoryChannel)
+                        else None,
+                        topic=f"ticket:{interaction.user.id}",
+                        reason="Ticket de soporte Core IA",
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    LOG.exception("No se pudo crear el canal de ticket")
+                    await interaction.response.send_message(
+                        "No pude crear el canal del ticket. Revisa mis permisos.",
+                        ephemeral=True,
+                    )
+                    return
+                bot_extras.bump_stat("tickets_opened", guild_id=str(guild.id))
+                bot_extras.record_event(
+                    "ticket_open", str(interaction.user), str(guild.id)
+                )
+                close_button = {
+                    "type": 1,
+                    "components": [
+                        {
+                            "type": 2,
+                            "style": 4,
+                            "custom_id": f"{bot_extras.TICKET_COMPONENT_PREFIX}:close",
+                            "label": "Cerrar ticket",
+                        }
+                    ],
+                }
+                await interaction.response.send_message(
+                    f"Ticket creado: {ticket_channel.mention}", ephemeral=True
+                )
+                await ticket_channel.send(
+                    content=(
+                        f"{member.mention} este es tu ticket de soporte.\n"
+                        "Describe tu problema y la atención te responderá pronto."
+                    ),
+                    components=[close_button],
+                    allowed_mentions=discord.AllowedMentions(users=True),
+                )
+                return
+            if action == "close":
+                channel = interaction.channel
+                if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+                    return
+                staff_role = _resolve_role(guild, config, "ticket_staff_role_id")
+                is_creator = f"ticket:{interaction.user.id}" == channel.topic
+                is_staff = staff_role is not None and staff_role in interaction.user.roles if hasattr(
+                    interaction.user, "roles"
+                ) else False
+                if not (is_creator or is_staff):
+                    await interaction.response.send_message(
+                        "Solo el creador del ticket o la atención puede cerrarlo.",
+                        ephemeral=True,
+                    )
+                    return
+                await interaction.response.send_message(
+                    "Cerrando el ticket…",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                bot_extras.record_event(
+                    "ticket_close", channel.name, str(guild.id)
+                )
+                await asyncio.sleep(2)
+                try:
+                    await channel.delete(reason="Ticket cerrado")
+                except (discord.Forbidden, discord.HTTPException):
+                    LOG.exception("No se pudo borrar el ticket")
+
+        def utils_channels_for(guild: Any, user_id: str) -> Any:
+            """Busca un canal de ticket ya abierto para ese usuario."""
+            for channel in guild.text_channels:
+                if channel.topic == f"ticket:{user_id}":
+                    return channel
+            return None
+
         async def on_interaction(interaction: "discord.Interaction") -> None:
             """Rutea las interacciones de componentes propios del bot."""
             try:
@@ -904,6 +1151,10 @@ class BotManager:
                     await handle_rolemenu(interaction)
                 elif custom_id.startswith(f"{bot_extras.POLL_COMPONENT_PREFIX}:"):
                     await handle_poll(interaction)
+                elif custom_id.startswith(f"{bot_extras.GIVEAWAY_COMPONENT_PREFIX}:"):
+                    await handle_giveaway(interaction)
+                elif custom_id.startswith(f"{bot_extras.TICKET_COMPONENT_PREFIX}:"):
+                    await handle_ticket(interaction)
             except Exception:  # noqa: BLE001 - nunca romper por una interacción
                 LOG.exception("Error en la interacción de componente")
 
@@ -1001,6 +1252,195 @@ class BotManager:
             _channel_history.pop(interaction.channel_id or 0, None)
             await interaction.response.send_message(
                 "Historial del canal borrado.", ephemeral=True
+            )
+
+        @tree.command(name="nivel", description="Muestra tu nivel y XP")
+        @app_commands.describe(usuario="Miembro para consultar (opcional)")
+        async def nivel_command(
+            interaction: "discord.Interaction",
+            usuario: "discord.Member | None" = None,
+        ) -> None:
+            if interaction.guild is None:
+                return
+            target = usuario or interaction.user
+            info = await asyncio.to_thread(
+                bot_extras.level_user, interaction.guild.id, target.id
+            )
+            next_level = info["level"] + 1
+            needed = bot_extras.xp_for_level(next_level)
+            progress = int(info["xp"] * 20 / max(1, needed)) * "▰"
+            progress += "▱" * (20 - len(progress))
+            embed = discord.Embed(
+                title=f"Nivel de {target.display_name}",
+                color=0x6D5DFC,
+            )
+            embed.add_field(name="Nivel", value=f"**{info['level']}**")
+            embed.add_field(name="XP", value=str(info["xp"]))
+            if info.get("rank"):
+                embed.add_field(name="Puesto", value=f"#{info['rank']}")
+            embed.add_field(
+                name="Progreso al nivel siguiente",
+                value=f"{progress}\n{info['xp']} / {needed} XP",
+                inline=False,
+            )
+            embed.set_footer(text="Core IA · Niveles")
+            await interaction.response.send_message(embed=embed)
+
+        @tree.command(name="top", description="Tabla de niveles del servidor")
+        async def top_command(interaction: "discord.Interaction") -> None:
+            if interaction.guild is None:
+                return
+            top = await asyncio.to_thread(
+                bot_extras.level_top, interaction.guild.id, 10
+            )
+            if not top:
+                await interaction.response.send_message(
+                    "Aún no hay nadie con niveles. ¡Habla en el chat para empezar!",
+                    ephemeral=True,
+                )
+                return
+            medals = ["1.", "2.", "3."]
+            lines = []
+            for index, entry in enumerate(top):
+                prefix = medals[index] if index < 3 else f"{index + 1}."
+                lines.append(f"{prefix} **{entry['name']}** — nivel {entry['level']} ({entry['xp']} XP)")
+            embed = discord.Embed(
+                title="Niveles del servidor",
+                description="\n".join(lines),
+                color=0x6D5DFC,
+            )
+            embed.set_footer(text="Core IA · Niveles")
+            await interaction.response.send_message(embed=embed)
+
+        @tree.command(name="traducir", description="Traduce un texto a otro idioma")
+        @app_commands.describe(
+            texto="Texto a traducir",
+            idioma="Idioma de destino",
+        )
+        @app_commands.choices(
+            idioma=[
+                app_commands.Choice(name=name, value=code)
+                for code, name in bot_extras.LEVEL_LANGUAGES.items()
+            ]
+        )
+        async def traducir_command(
+            interaction: "discord.Interaction", texto: str, idioma: str
+        ) -> None:
+            texto = texto.strip()[:1500]
+            if not texto:
+                await interaction.response.send_message(
+                    "Escribe un texto para traducir.", ephemeral=True
+                )
+                return
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            try:
+                translated = await asyncio.to_thread(
+                    bot_extras.translate_text_sync, texto, idioma
+                )
+            except Exception:  # noqa: BLE001 - el servicio puede fallar
+                LOG.exception("Error traduciendo texto")
+                await interaction.followup.send(
+                    "El traductor no respondió. Inténtalo otra vez en unos segundos.",
+                    ephemeral=True,
+                )
+                return
+            lang_name = bot_extras.LEVEL_LANGUAGES.get(idioma, idioma)
+            chunks = _split_message(translated or "Sin traducción.")
+            first = chunks[0]
+            rest = chunks[1:3]
+            await interaction.followup.send(
+                f"**Traducción ({lang_name}):**\n{first}",
+                ephemeral=True,
+            )
+            for chunk in rest:
+                await interaction.followup.send(chunk, ephemeral=True)
+
+        @tree.command(
+            name="recordar",
+            description="Crea un recordatorio: el bot te menciona al cumplirse",
+        )
+        @app_commands.describe(
+            texto="Qué recordarte",
+            tiempo="En minutos: 30m, 2h, 1d (máximo 30 días)",
+        )
+        async def recordar_command(
+            interaction: "discord.Interaction", texto: str, tiempo: str
+        ) -> None:
+            if interaction.guild is None or not interaction.channel_id:
+                return
+            minutes = _parse_duration(tiempo)
+            if minutes is None:
+                await interaction.response.send_message(
+                    "No entendí el tiempo. Ejemplos válidos: 15m, 2h, 1d.",
+                    ephemeral=True,
+                )
+                return
+            if minutes < 1 or minutes > 60 * 24 * 30:
+                await interaction.response.send_message(
+                    "El tiempo debe estar entre 1 minuto y 30 días.", ephemeral=True
+                )
+                return
+            from datetime import timedelta as _Timedelta
+
+            due = datetime.now(timezone.utc) + _Timedelta(minutes=minutes)
+            reminder_id = await asyncio.to_thread(
+                lambda: _create_reminder(
+                    interaction.guild_id, interaction.channel_id, interaction.user.id,
+                    texto.strip()[:800], due,
+                )
+            )
+            if reminder_id is None:
+                await interaction.response.send_message(
+                    "No pude guardar el recordatorio. Inténtalo otra vez.",
+                    ephemeral=True,
+                )
+                return
+            await interaction.response.send_message(
+                f"Vale. Te recuerdo «{texto.strip()[:120]}» en {_human_delta(minutes)}.",
+                ephemeral=True,
+            )
+
+        @tree.command(
+            name="limpiar",
+            description="Borra los últimos N mensajes de este canal",
+        )
+        @app_commands.describe(cantidad="Cuántos mensajes borrar (1-50)")
+        @app_commands.default_permissions(manage_messages=True)
+        @app_commands.guild_only()
+        async def limpiar_command(
+            interaction: "discord.Interaction", cantidad: int
+        ) -> None:
+            if interaction.guild is None or not isinstance(
+                interaction.channel, (discord.TextChannel, discord.Thread)
+            ):
+                return
+            if not _is_manager(interaction) and not (
+                interaction.user.guild_permissions
+                if hasattr(interaction.user, "guild_permissions")
+                else False
+            ):
+                await interaction.response.send_message(
+                    "Necesitas el permiso **Gestionar mensajes**.", ephemeral=True
+                )
+                return
+            cantidad = max(1, min(50, int(cantidad)))
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            try:
+                purged = await interaction.channel.purge(limit=cantidad)
+            except (discord.Forbidden, discord.HTTPException):
+                LOG.exception("No se pudo limpiar el canal")
+                await interaction.followup.send(
+                    "No pude borrar mensajes ahí. Revisa mis permisos.", ephemeral=True
+                )
+                return
+            bot_extras.bump_stat("messages_purged", guild_id=str(interaction.guild.id))
+            bot_extras.record_event(
+                "channel_purge",
+                f"{len(purged)} mensajes en #{interaction.channel.name}",
+                str(interaction.guild.id),
+            )
+            await interaction.followup.send(
+                f"Listo: {len(purged)} mensajes borrados.", ephemeral=True
             )
 
         verificacion = app_commands.Group(
@@ -1316,6 +1756,45 @@ class BotManager:
         async def on_member_remove(member: "discord.Member") -> None:
             if not member.bot:
                 await self._on_member_remove(member)
+
+        @client.event
+        async def on_message(message: "discord.Message") -> None:
+            """Suma XP por actividad en los servidores activados."""
+            try:
+                if message.guild is None or message.author.bot:
+                    return
+                if self._guild_id and str(message.guild.id) != self._guild_id:
+                    return
+                config = await asyncio.to_thread(load_guild_config, message.guild.id)
+                if (config.get("levels_enabled") or "").lower() not in ("1", "true", "on"):
+                    return
+                result = await asyncio.to_thread(
+                    bot_extras.add_level_xp,
+                    message.guild.id,
+                    message.author.id,
+                    message.author.display_name,
+                )
+                if result is None:
+                    return
+                _, new_level, _xp = result
+                if (config.get("levelup_channel_id") or "").lower() in ("", "0"):
+                    return
+                channel = _resolve_channel(
+                    message.guild, config, "levelup_channel_id"
+                )
+                if channel is None:
+                    return
+                try:
+                    await channel.send(
+                        content=(
+                            f"{message.author.mention} subió al nivel **{new_level}**."
+                        ),
+                        allowed_mentions=discord.AllowedMentions(users=True),
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+            except Exception:  # noqa: BLE001 - XP nunca rompe el bot
+                LOG.exception("Error sumando XP de niveles")
 
         return client
 

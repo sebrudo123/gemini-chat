@@ -1,6 +1,8 @@
 """Pruebas de los extras del bot: programados, stats, respaldo, menús de roles
 y encuestas."""
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -228,3 +230,179 @@ def test_welcome_image_render():
     if png is None:  # Pillow no disponible en el entorno
         pytest.skip("Pillow no instalado")
     assert png.startswith(b"\x89PNG")
+
+
+# ---- Tanda 2: niveles, sorteos, recordatorios, feeds ----------------------- #
+def test_level_xp_and_top(client, monkeypatch):
+    import asyncio
+
+    # Primera subida otorga XP; segundos mensajes en menos de 60s no.
+    first = asyncio.run(bot_extras.add_level_xp(999, "77", "Tester"))
+    assert first is not None  # (nivel_previo, nivel_nuevo, xp)
+    second = asyncio.run(bot_extras.add_level_xp(999, "77", "Tester"))
+    assert second is None  # dentro del enfriamiento
+
+    bot_extras._level_cooldown.clear()
+    asyncio.run(bot_extras.add_level_xp(999, "77", "Tester"))
+
+    top = bot_extras.level_top(999)
+    assert top[0]["user_id"] == "77"
+    assert top[0]["level"] == bot_extras.level_of(top[0]["xp"])
+
+    me = bot_extras.level_user(999, "77")
+    assert me["xp"] > 0 and me["rank"] == 1
+    assert bot_extras.level_user(999, "88")["rank"] == 0
+
+
+def test_levels_endpoint(client, monkeypatch):
+    import asyncio
+
+    headers = auth()
+    bot_extras._level_cooldown.clear()
+    asyncio.run(bot_extras.add_level_xp(999, "77", "Tester"))
+    data = client.get("/api/admin/discord-bot/guilds/999/levels", headers=headers).json()
+    assert any(entry["user_id"] == "77" for entry in data["top"])
+
+
+def test_member_stats(client, monkeypatch):
+    headers = auth()
+    bot_extras.bump_stat("welcomes", guild_id="999")
+    data = client.get("/api/admin/discord-bot/member-stats", headers=headers).json()
+    assert len(data["days"]) == 7
+    assert all("welcomes" in day and "goodbyes" in day for day in data["days"])
+
+
+def test_parse_duration_and_human():
+    assert discord_bot._parse_duration("15m") == 15
+    assert discord_bot._parse_duration("2h") == 120
+    assert discord_bot._parse_duration("1d") == 1440
+    assert discord_bot._parse_duration("90") == 90
+    assert discord_bot._parse_duration("basura") is None
+    assert discord_bot._human_delta(120) == "2.0 hora(s)"
+
+
+def test_reminder_due_and_panel(client, monkeypatch, tmp_path):
+    from datetime import timedelta
+
+    from models import BotReminder
+    from database import SessionLocal
+
+    headers = auth()
+    db = SessionLocal()
+    try:
+        row = BotReminder(
+            guild_id="999",
+            channel_id="42",
+            user_id="77",
+            content="Pasar por la tienda",
+            due_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        )
+        db.add(row)
+        db.commit()
+        reminder_id = row.id
+    finally:
+        db.close()
+
+    listed = client.get(
+        "/api/admin/discord-bot/reminders", headers=headers
+    ).json()
+    assert any(item["id"] == reminder_id for item in listed["reminders"])
+
+    due = bot_extras.collect_due_reminders(datetime.now(timezone.utc))
+    assert any(item["id"] == reminder_id for item in due)
+
+    deleted = client.delete(
+        f"/api/admin/discord-bot/reminders/{reminder_id}", headers=headers
+    )
+    assert deleted.status_code == 200
+
+
+def test_giveawy_flow(client, monkeypatch):
+    created_messages: list[dict] = []
+
+    async def fake_api_request(method, path, *, json_body=None, token=""):
+        if method == "POST" and "/messages" in path:
+            response = {"id": "999"}
+            created_messages.append(response)
+            return response
+        if method == "PATCH":
+            return {}
+        if method == "DELETE":
+            return {}
+        raise AssertionError("Llamada inesperada " + method + path)
+
+    monkeypatch.setattr(bot_extras, "api_request", fake_api_request)
+    headers = auth()
+
+    response = client.post(
+        "/api/admin/discord-bot/guilds/999/giveaways",
+        json={
+            "channel_id": "42",
+            "prize": "Nitro x1",
+            "minutes": 1,
+            "winners": 1,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200
+    giveaway = response.json()["giveaway"]
+    assert giveaway["message_id"] == "999"
+    text = bot_extras.giveaway_content(giveaway)
+    assert "Sorteo" in text and "Participantes" in text
+
+    # Apuntar un participante y cerrarlo a mano.
+    store = bot_extras.load_store(999, bot_extras.GIVEAWAY_STORE)
+    assert store, "el sorteo debe haber quedado guardado"
+    giveaway_id, entry = next(iter(store.items()))
+    entry["entrants"] = ["77", "88"]
+    entry["ends_at"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=2)
+    ).isoformat(timespec="seconds")
+    store[giveaway_id] = entry
+    bot_extras.save_store(999, bot_extras.GIVEAWAY_STORE, store)
+
+    bot_extras._level_cooldown.clear()
+    due_map = bot_extras.collect_due_giveaways(datetime.now(timezone.utc))
+    assert "999" in due_map
+    closed = due_map["999"][0]
+    assert closed["closed"] is True
+    assert len(closed["winners_ids"]) == 1 and closed["winners_ids"][0] in ("77", "88")
+    final_text = bot_extras.giveaway_content(closed, finished=True)
+    assert "<@" in final_text
+
+    cleanup = client.delete(
+        f"/api/admin/discord-bot/guilds/999/giveaways/{giveaway_id}", headers=headers
+    )
+    assert cleanup.status_code == 200
+
+
+def test_feed_poll_twitch(monkeypatch):
+    import asyncio as _asyncio
+
+    feed = {
+        "kind": "twitch",
+        "target": "midudev",
+        "name": "midudev",
+        "channel_id": "42",
+        "last_at": "",
+        "live": False,
+    }
+
+    async def fake_fetch(url):
+        return "2 hours 3 minutes"  # canal en vivo
+
+    monkeypatch.setattr(bot_extras, "_fetch_text", fake_fetch)
+    announce = _asyncio.run(bot_extras.poll_feed(feed))
+    assert announce is not None and "DIRECTO" in announce["content"]
+    assert feed["live"] is True
+
+    # Segunda vuelta con el canal ya marcado en vivo: sin aviso.
+    announce_again = _asyncio.run(bot_extras.poll_feed(feed))
+    assert announce_again is None
+
+    async def fake_fetch_offline(url):
+        return ""
+
+    monkeypatch.setattr(bot_extras, "_fetch_text", fake_fetch_offline)
+    result = _asyncio.run(bot_extras.poll_feed(feed))
+    assert result is None and feed["live"] is False

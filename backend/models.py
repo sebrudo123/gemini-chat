@@ -206,6 +206,23 @@ class BotSchedule(Base):
     )
 
 
+class BotReminder(Base):
+    """Recordatorio creado con /recordar: se envía al llegar la hora."""
+
+    __tablename__ = "bot_reminders"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    guild_id: Mapped[str] = mapped_column(String(32), index=True)
+    channel_id: Mapped[str] = mapped_column(String(32))
+    user_id: Mapped[str] = mapped_column(String(32))
+    content: Mapped[str] = mapped_column(Text, default="")
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class AuditLog(Base):
     """Registro de acciones administrativas (auditoría)."""
 

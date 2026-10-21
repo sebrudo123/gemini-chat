@@ -10,13 +10,16 @@ esté encendido; las interacciones las atiende discord_bot.py.
 from __future__ import annotations
 
 import json
+import math
+import random
 import secrets
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from config import settings
 from database import SessionLocal
-from models import AppSetting
+from models import AppSetting, BotReminder
 from sqlalchemy.exc import SQLAlchemyError
 
 DISCORD_API = "https://discord.com/api/v10"
@@ -155,8 +158,17 @@ def stats_key(day: str) -> str:
     return f"bot:stats:{day}"
 
 
-def bump_stat(counter: str, amount: int = 1, day: str | None = None) -> None:
-    """Suma un contador diario de actividad del bot."""
+def bump_stat(
+    counter: str,
+    amount: int = 1,
+    day: str | None = None,
+    guild_id: str = "",
+) -> None:
+    """Suma un contador diario de actividad del bot.
+
+    ``guild_id`` queda reservado para métricas por servidor: los contadores
+    diarios son globales, así que aquí no cambia nada de momento.
+    """
     day = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     db = SessionLocal()
     try:
@@ -556,3 +568,506 @@ def collect_due_schedules(now: datetime) -> list[dict[str, Any]]:
     finally:
         db.close()
     return due
+
+
+# --------------------------------------------------------------------------- #
+# Sistema de niveles (XP por actividad, /nivel y /top)
+# --------------------------------------------------------------------------- #
+LEVEL_STORE = "levels"
+GIVEAWAY_STORE = "giveaways"
+FEED_STORE = "feeds"
+TICKET_COMPONENT_PREFIX = "coreia_ticket"
+GIVEAWAY_COMPONENT_PREFIX = "coreia_giveaway"
+
+XP_PER_MESSAGE = 15
+XP_COOLDOWN_SECONDS = 60.0
+LEVEL_XP_FACTOR = 40
+
+_level_cooldown: dict[str, float] = {}
+
+LEVEL_LANGUAGES = {
+    "es": "Español",
+    "en": "Inglés",
+    "pt": "Portugués",
+    "fr": "Francés",
+    "de": "Alemán",
+    "it": "Italiano",
+    "ja": "Japonés",
+    "ko": "Coreano",
+    "zh": "Chino",
+    "ar": "Árabe",
+    "ru": "Ruso",
+    "hi": "Hindi",
+}
+
+
+def level_of(xp: int) -> int:
+    """Nivel actual según la XP acumulada (progresión suave)."""
+    return int(math.sqrt(max(0, int(xp)) / LEVEL_XP_FACTOR))
+
+
+def xp_for_level(level: int) -> int:
+    return int(level * level * LEVEL_XP_FACTOR)
+
+
+def level_store_key(guild_id: int | str) -> str:
+    return _key(guild_id, LEVEL_STORE)
+
+
+async def add_level_xp(
+    guild_id: int | str,
+    user_id: int | str,
+    display_name: str,
+) -> tuple[int, int, int] | None:
+    """Suma XP a un usuario respetando el enfriamiento.
+
+    Devuelve (nivel_anterior, nivel_actual, xp_total) si grantearon puntos,
+    o None si estaba dentro del enfriamiento.
+    """
+    cooldown_key = f"{int(guild_id)}:{int(user_id)}"
+    now_ts = time.monotonic()
+    last = _level_cooldown.get(cooldown_key, 0.0)
+    if now_ts - last < XP_COOLDOWN_SECONDS:
+        return None
+    _level_cooldown[cooldown_key] = now_ts
+
+    db = SessionLocal()
+    try:
+        key = level_store_key(guild_id)
+        row = db.get(AppSetting, key)
+        data: dict[str, Any] = {}
+        if row and row.value:
+            try:
+                data = json.loads(row.value)
+            except (ValueError, TypeError):
+                data = {}
+        if not isinstance(data, dict):
+            data = {}
+        entry = data.get(str(user_id)) or {}
+        before = int(entry.get("xp", 0))
+        total = before + XP_PER_MESSAGE
+        data[str(user_id)] = {"xp": total, "name": (display_name or "")[:40]}
+        value = json.dumps(data, ensure_ascii=False)
+        if row is None:
+            db.add(AppSetting(key=key, value=value))
+        else:
+            row.value = value
+        db.commit()
+        before_level, after_level = level_of(before), level_of(total)
+        return (before_level, after_level, total)
+    except SQLAlchemyError:
+        db.rollback()
+        return None
+    finally:
+        db.close()
+
+
+def level_top(guild_id: int | str, count: int = 10) -> list[dict[str, Any]]:
+    """Top de niveles del servidor."""
+    db = SessionLocal()
+    try:
+        row = db.get(AppSetting, level_store_key(guild_id))
+        if not row or not row.value:
+            return []
+        data = json.loads(row.value)
+        if not isinstance(data, dict):
+            return []
+        items = []
+        for user_id, entry in data.items():
+            xp = int((entry or {}).get("xp", 0))
+            items.append(
+                {
+                    "user_id": user_id,
+                    "name": (entry or {}).get("name") or user_id,
+                    "xp": xp,
+                    "level": level_of(xp),
+                }
+            )
+        items.sort(key=lambda item: item["xp"], reverse=True)
+        return items[:count]
+    except (ValueError, TypeError):
+        return []
+    finally:
+        db.close()
+
+
+def level_user(guild_id: int | str, user_id: int | str) -> dict[str, Any]:
+    """Nivel y XP de un usuario concreto."""
+    db = SessionLocal()
+    try:
+        row = db.get(AppSetting, level_store_key(guild_id))
+        if not row or not row.value:
+            return {"xp": 0, "level": 0, "rank": 0}
+        data = json.loads(row.value)
+        if not isinstance(data, dict):
+            return {"xp": 0, "level": 0, "rank": 0}
+        all_items = sorted(
+            (
+                (uid, int((entry or {}).get("xp", 0)))
+                for uid, entry in data.items()
+            ),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        xp = int((data.get(str(user_id)) or {}).get("xp", 0))
+        rank = next((i + 1 for i, (uid, _) in enumerate(all_items) if uid == str(user_id)), 0)
+        return {"xp": xp, "level": level_of(xp), "rank": rank}
+    except (ValueError, TypeError):
+        return {"xp": 0, "level": 0, "rank": 0}
+    finally:
+        db.close()
+
+
+def translate_text_sync(text: str, target: str) -> str:
+    """Traduce texto con el endpoint gratuito de Google Translate (sin clave)."""
+    import urllib.parse
+    import urllib.request
+
+    url = (
+        "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl="
+        + urllib.parse.quote(target)
+        + "&dt=t&q="
+        + urllib.parse.quote(text[:1500])
+    )
+    request = urllib.request.Request(url, headers={"User-Agent": "CoreIA/2.1"})
+    import json as _json
+
+    with urllib.request.urlopen(request, timeout=15) as response:
+        data = _json.loads(response.read().decode("utf-8"))
+    parts: list[str] = []
+    for chunk in (data or [[[]]])[0]:
+        if chunk and len(chunk) > 0 and chunk[0]:
+            parts.append(str(chunk[0]))
+    return "".join(parts).strip()
+
+
+# --------------------------------------------------------------------------- #
+# Sorteos (giveaway con botón de participación)
+# --------------------------------------------------------------------------- #
+def giveaway_content(entry: dict[str, Any], finished: bool = False) -> str:
+    """Texto del mensaje del sorteo (progreso o ganadores)."""
+    entrants = len(entry.get("entrants") or [])
+    winners = max(1, int(entry.get("winners", 1)))
+    if finished:
+        text = f"## Sorteo terminado: {entry['prize']}\n\n"
+        winners_list = [
+            f"- <@{uid}>" for uid in (entry.get("winners_ids") or [])[:winners]
+        ]
+        if winners_list:
+            text += "Felicidades a:\n" + "\n".join(winners_list)
+        else:
+            text += "Hubo pocos participantes y no se eligió ganador."
+        return text
+    ends = entry.get("ends_at", "")
+    return (
+        f"## Sorteo: {entry['prize']}\n"
+        f"Premio para **{winners}** ganador(es).\n\n"
+        f"Participantes: **{entrants}**\n"
+        f"Termina: {ends} UTC\n\n"
+        "Toca el botón para entrar (toca otra vez para salir):"
+    )
+
+
+async def post_giveaway(
+    guild_id: int | str,
+    channel_id: int,
+    prize: str,
+    minutes: int,
+    winners: int = 1,
+) -> dict[str, Any]:
+    """Publica un mensaje de sorteo con botón para participar."""
+    giveaway_id = secrets.token_hex(4)
+    ends_at = datetime.now(timezone.utc) + timedelta(minutes=max(1, minutes))
+    entry = {
+        "giveaway_id": giveaway_id,
+        "channel_id": str(channel_id),
+        "prize": prize[:120],
+        "winners": max(1, min(10, winners)),
+        "ends_at": ends_at.isoformat(timespec="seconds"),
+        "entrants": [],
+        "message_id": "",
+        "closed": False,
+    }
+    payload = {
+        "content": giveaway_content(entry),
+        "allowed_mentions": {"parse": []},
+        "components": [
+            {
+                "type": 1,
+                "components": [
+                    {
+                        "type": 2,
+                        "style": 1,
+                        "custom_id": f"{GIVEAWAY_COMPONENT_PREFIX}:{giveaway_id}",
+                        "label": "Participar",
+                    }
+                ],
+            }
+        ],
+    }
+    message = await api_request(
+        "POST", f"/channels/{int(channel_id)}/messages", json_body=payload
+    )
+    entry["message_id"] = str(message.get("id", ""))
+    store = load_store(guild_id, GIVEAWAY_STORE)
+    store[giveaway_id] = entry
+    save_store(guild_id, GIVEAWAY_STORE, store)
+    record_event("giveaway_create", prize[:100], str(guild_id))
+    return entry
+
+
+async def remove_giveaway(guild_id: int | str, giveaway_id: str) -> bool:
+    """Borra el mensaje del sorteo y su estado."""
+    store = load_store(guild_id, GIVEAWAY_STORE)
+    entry = store.pop(giveaway_id, None)
+    if not entry:
+        return False
+    save_store(guild_id, GIVEAWAY_STORE, store)
+    if entry.get("message_id"):
+        with suppress_msg_delete():
+            await api_request(
+                "DELETE",
+                f"/channels/{int(entry['channel_id'])}/messages/{entry['message_id']}",
+            )
+    record_event("giveaway_delete", entry.get("prize", ""), str(guild_id))
+    return True
+
+
+def store_giveaway_ids() -> list[int | str]:
+    """IDs de servidores con sorteos activos (para el ciclo de cierres)."""
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(AppSetting.key)
+            .filter(AppSetting.key.like("%:giveaways"))
+            .all()
+        )
+        return [row[0].split(":")[1] for row in rows]
+    finally:
+        db.close()
+
+
+def collect_due_giveaways(now: datetime) -> dict[str, list[dict[str, Any]]]:
+    """Sorteos vencidos por servidor, marcados como cerrados."""
+    due: dict[str, list[dict[str, Any]]] = {}
+    for guild_id in store_giveaway_ids():
+        store = load_store(guild_id, GIVEAWAY_STORE)
+        for giveaway_id, entry in list(store.items()):
+            if entry.get("closed"):
+                continue
+            try:
+                ends = datetime.fromisoformat(entry["ends_at"])
+            except (KeyError, ValueError):
+                continue
+            if ends.tzinfo is None:
+                ends = ends.replace(tzinfo=timezone.utc)
+            if ends <= now:
+                entrants = list(entry.get("entrants") or [])
+                winners_n = max(1, int(entry.get("winners", 1)))
+                if entrants:
+                    winners_ids = random.sample(
+                        entrants, k=min(winners_n, len(entrants))
+                    )
+                else:
+                    winners_ids = []
+                entry["closed"] = True
+                entry["winners_ids"] = winners_ids
+                store[giveaway_id] = entry
+                save_store(guild_id, GIVEAWAY_STORE, store)
+                due.setdefault(str(guild_id), []).append(entry)
+    return due
+
+
+# --------------------------------------------------------------------------- #
+# Avisos de YouTube / Twitch (servicios públicos gratuitos)
+# --------------------------------------------------------------------------- #
+TOMICRO_CHANNELS_PAGE = "https://www.youtube.com"
+
+
+def resolve_youtube_channel_id(target: str) -> str:
+    """Extrae el ID UC... de una URL de canal o resuelve un @handle."""
+    import re
+    import urllib.request
+
+    target = (target or "").strip()
+    if target.startswith("UC"):
+        return target
+    match = re.search(r"channel/(UC[\w-]+)", target)
+    if match:
+        return match.group(1)
+    # Página del canal para aclarar el channelId (una sola vez al crear).
+    url = target if target.startswith("http") else f"https://www.youtube.com/{target}"
+    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 CoreIA"})
+    html = urllib.request.urlopen(request, timeout=15).read().decode("utf-8", "ignore")
+    match = re.search(r"(?:channelId|channel_id)&#34;:&#34;(UC[\w-]+)", html)
+    if not match:
+        match = re.search(r"(UC[\w-]{22,})", html)
+    if match:
+        return match.group(1)
+    raise ValueError("No se pudo deducir el ID del canal de YouTube.")
+
+
+async def poll_feed(feed: dict[str, Any]) -> dict[str, Any] | None:
+    """Consulta un feed único; devuelve el aviso a publicar si hay novedad.
+
+    YouTube usa el RSS público; Twitch usa decapi.me (gratuito, sin clave).
+    """
+    kind = feed.get("kind")
+    last_iso = feed.get("last_at") or ""
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if kind == "youtube":
+        channel_id = feed.get("target", "")
+        url = (
+            "https://www.youtube.com/feeds/videos.xml?channel_id="
+            + urllib_parse_quote(channel_id)
+        )
+        xml = await _fetch_text(url)
+        if not xml:
+            feed["last_at"] = now_iso
+            return None
+        latest = _youtube_latest(xml)
+        if not latest:
+            feed["last_at"] = now_iso
+            return None
+        video_id, title, link = latest
+        if video_id == feed.get("last_id"):
+            feed["last_at"] = now_iso
+            return None
+        feed["last_id"] = video_id
+        feed["last_at"] = now_iso
+        if not last_iso:  # primera consulta: no anunciar el video viejo
+            return None
+        return {
+            "content": f"**Nuevo video de {feed.get('name') or 'YouTube'}**\n{title}\n<{link}>",
+            "channel_id": feed.get("channel_id", ""),
+            "event": f"youtube:{video_id}",
+        }
+    if kind == "twitch":
+        name = feed.get("target", "")
+        text = await _fetch_text(f"https://decapi.me/twitch/uptime/{urllib_parse_quote(name)}")
+        text = (text or "").strip()[:600]
+        was_live = feed.get("live") is True
+        is_live = bool(text) and "offline" not in text.lower() and len(text) > 4
+        feed["last_at"] = now_iso
+        feed["live"] = is_live
+        if is_live and not was_live:
+            return {
+                "content": (
+                    f"**{feed.get('name') or name} está en DIRECTO en Twitch**\n"
+                    f"https://twitch.tv/{name}"
+                ),
+                "channel_id": feed.get("channel_id", ""),
+                "event": f"twitch:{name}",
+            }
+        return None
+    feed["last_at"] = now_iso
+    return None
+
+
+def urllib_parse_quote(value: str) -> str:
+    import urllib.parse
+
+    return urllib.parse.quote(value or "")
+
+
+async def _fetch_text(url: str) -> str:
+    import aiohttp
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as response:
+                if response.status >= 400:
+                    return ""
+                return await response.text()
+    except Exception:  # noqa: BLE001 - un feed caído no debe romper el ciclo
+        return ""
+
+
+def _youtube_latest(xml: str) -> tuple[str, str, str] | None:
+    import re
+
+    match_id = re.search(r"<yt:videoId>([^<]+)</yt:videoId>", xml)
+    match_title = re.search(r"<title>([^<]+)</title>\s*<link", xml)
+    if not match_id:
+        return None
+    video_id = match_id.group(1)
+    title = (match_title.group(1) if match_title else "Nuevo video").strip()
+    return video_id, title, f"https://www.youtube.com/watch?v={video_id}"
+
+
+def all_feed_stores() -> list[tuple[str, dict[str, Any]]]:
+    """Todos los almacenes de feeds por servidor."""
+    db = SessionLocal()
+    try:
+        rows = db.query(AppSetting).filter(AppSetting.key.like("%:feeds")).all()
+        out = []
+        for row in rows:
+            guild_id = (row.key or "").split(":")[1]
+            try:
+                data = json.loads(row.value or "{}")
+                if isinstance(data, dict):
+                    out.append((guild_id, data))
+            except (ValueError, TypeError):
+                continue
+        return out
+    finally:
+        db.close()
+
+
+def save_feed(guild_id: int | str, feed_id: str, entry: dict[str, Any]) -> None:
+    store = load_store(guild_id, FEED_STORE)
+    store[feed_id] = entry
+    save_store(guild_id, FEED_STORE, store)
+
+
+# --------------------------------------------------------------------------- #
+# Recordatorios (tabla bot_reminders)
+# --------------------------------------------------------------------------- #
+def collect_due_reminders(now: datetime) -> list[dict[str, Any]]:
+    """Recordatorios que tocan ahora, marcados como enviados."""
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(BotReminder)
+            .filter(BotReminder.sent.is_(False), BotReminder.due_at <= now)  # type: ignore[arg-type]
+            .order_by(BotReminder.due_at.asc())
+            .limit(20)
+            .all()
+        )
+        due = [
+            {
+                "id": row.id,
+                "guild_id": row.guild_id,
+                "channel_id": row.channel_id,
+                "user_id": row.user_id,
+                "content": row.content,
+            }
+            for row in rows
+        ]
+        for row in rows:
+            row.sent = True
+        db.commit()
+        return due
+    except SQLAlchemyError:
+        db.rollback()
+        return []
+    finally:
+        db.close()
+
+
+def member_stats_last_days(days: int = 7) -> list[dict[str, Any]]:
+    """Bienvenidas y despedidas de los últimos N días (para el panel)."""
+    base = datetime.now(timezone.utc)
+    out = []
+    for offset in range(days):
+        day = (base - timedelta(days=offset)).strftime("%Y-%m-%d")
+        stats = load_stats(day)
+        out.append(
+            {
+                "day": day,
+                "welcomes": int(stats.get("welcomes", 0)),
+                "goodbyes": int(stats.get("goodbyes", 0)),
+            }
+        )
+    return out

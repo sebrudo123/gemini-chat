@@ -540,6 +540,16 @@
           </div>
 
           <div class="card" style="margin-top:14px">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-users"/></svg></span>Membresía · últimos 7 días</h2>
+            <div class="stats" style="grid-template-columns:1fr 1fr;margin-top:6px">
+              <div class="stat"><div class="tile"><svg class="ic"><use href="#ic-userplus"/></svg></div><div><b id="msWelcomes">—</b><span class="lbl">Entradas</span></div></div>
+              <div class="stat"><div class="tile"><svg class="ic"><use href="#ic-door"/></svg></div><div><b id="msGoodbyes">—</b><span class="lbl">Salidas</span></div></div>
+              <div class="stat"><div class="tile"><svg class="ic"><use href="#ic-users"/></svg></div><div><b id="msUsers">—</b><span class="lbl">Miembros hoy</span></div></div>
+              <div class="stat"><div class="tile"><svg class="ic"><use href="#ic-poll"/></svg></div><div><b id="msNet">—</b><span class="lbl">Crecimiento</span></div></div>
+            </div>
+          </div>
+
+          <div class="card" style="margin-top:14px">
             <h2><span class="tile"><svg class="ic"><use href="#ic-send"/></svg></span>Canal de prueba</h2>
             <p class="sub">Envía un mensaje real con el bot para comprobar los permisos del canal.</p>
             <select id="testChannel"></select>
@@ -586,6 +596,13 @@
             <label class="switch"><span>Tarjeta de bienvenida con imagen generada</span><input type="checkbox" id="cfgWelcomeImage"></label>
             <p class="mini">El bot genera una tarjeta con el avatar y el número de miembro al entrar alguien.</p>
             <button class="btn primary wide" id="btnSaveWelcome" style="margin-top:10px"><svg class="ic"><use href="#ic-check"/></svg><span>Guardar bienvenida</span></button>
+            <h2 style="margin-top:22px"><span class="tile"><svg class="ic"><use href="#ic-message"/></svg></span>Mensaje privado de bienvenida</h2>
+            <p class="sub">Además del anuncio en el canal, el bot le escribe al nuevo miembro por MP.</p>
+            <div class="chips" data-for="cfgWelcomeDm">
+              <span class="chip">{user}</span><span class="chip">{name}</span><span class="chip">{server}</span><span class="chip">{count}</span>
+            </div>
+            <textarea id="cfgWelcomeDm" placeholder="¡Hola {name}! Bienvenido a {server}. Verifícate para entrar a todos los canales."></textarea>
+            <label class="switch"><span>Enviar MP de bienvenida</span><input type="checkbox" id="cfgWelcomeDmOn"></label>
           </div>
           <div class="card">
             <h2><span class="tile"><svg class="ic"><use href="#ic-door"/></svg></span>Mensaje de despedida</h2>
@@ -652,6 +669,55 @@
             <label class="fl">Encuestas activas</label>
             <div class="list" id="pollList"><div class="skeleton">Cargando…</div></div>
           </div>
+
+          <div class="card" style="margin-top:14px">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-list"/></svg></span>Sistema de niveles</h2>
+            <p class="sub">Los miembros ganan experiencia al escribir. Comandos: /nivel y /top.</p>
+            <label class="switch"><span>Activar niveles en este servidor</span><input type="checkbox" id="cfgLevelsOn"></label>
+            <label class="fl">Canal donde anunciar subidas de nivel</label>
+            <select id="cfgLevelupChannel"></select>
+            <button class="btn primary wide" id="btnSaveLevels" style="margin-top:12px"><svg class="ic"><use href="#ic-check"/></svg><span>Guardar niveles</span></button>
+            <label class="fl">Tabla de posiciones</label>
+            <div class="list" id="levelList"><div class="skeleton">Cargando…</div></div>
+          </div>
+
+          <div class="card" style="margin-top:14px">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-layers"/></svg></span>Tickets de soporte</h2>
+            <p class="sub">Publica un panel de tickets: cada usuario abre un canal privado al tocar el botón.</p>
+            <label class="fl">Categoría (carpeta) donde abrir tickets</label>
+            <select id="cfgTicketCategory"></select>
+            <label class="fl">Rol de atención (puede ver y cerrar tickets)</label>
+            <select id="cfgTicketStaffRole"></select>
+            <label class="fl">Canal del panel de tickets</label>
+            <select id="ticketChannel"></select>
+            <button class="btn primary wide" id="btnPostTicketPanel" style="margin-top:12px"><svg class="ic"><use href="#ic-layers"/></svg><span>Publicar panel de tickets</span></button>
+          </div>
+
+          <div class="card" style="margin-top:14px">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-poll"/></svg></span>Sorteos</h2>
+            <p class="sub">Premio con botón para participar; al terminar, el bot sube y elige al azar.</p>
+            <label class="fl">Canal</label>
+            <select id="gwChannel"></select>
+            <label class="fl">Premio</label>
+            <input id="gwPrize" placeholder="Premio del sorteo" />
+            <div class="optrow">
+              <label class="fl" style="margin:0">Duración (minutos)</label>
+              <label class="fl" style="margin:0">Ganadores</label>
+            </div>
+            <div class="optrow">
+              <input id="gwMinutes" type="number" min="1" value="60">
+              <input id="gwWinners" type="number" min="1" max="10" value="1">
+            </div>
+            <button class="btn primary wide" id="btnPostGiveaway" style="margin-top:12px"><svg class="ic"><use href="#ic-poll"/></svg><span>Publicar sorteo</span></button>
+            <label class="fl">Sorteos activos</label>
+            <div class="list" id="giveawayList"><div class="skeleton">Cargando…</div></div>
+          </div>
+
+          <div class="card" style="margin-top:14px">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-clock"/></svg></span>Recordatorios pendientes</h2>
+            <p class="sub">Creados por los miembros con /recordar. Se envían al llegar la hora.</p>
+            <div class="list" id="reminderList"><div class="skeleton">Cargando…</div></div>
+          </div>
         </section>
 
         <!-- ANUNCIOS -->
@@ -690,6 +756,23 @@
             <button class="btn primary wide" id="btnSchedule" style="margin-top:12px"><svg class="ic"><use href="#ic-clock"/></svg><span>Programar mensaje</span></button>
             <label class="fl">Programaciones activas</label>
             <div class="list" id="scheduleList"><div class="skeleton">Cargando…</div></div>
+          </div>
+
+          <div class="card" style="margin-top:14px">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-globe"/></svg></span>Avisos de YouTube/Twitch</h2>
+            <p class="sub">Cuando salga video nuevo (RSS gratuito) o haya directo en Twitch, el bot lo anuncia.</p>
+            <label class="fl">Canal donde avisar</label>
+            <select id="fdChannel"></select>
+            <label class="fl">Tipo</label>
+            <select id="fdKind">
+              <option value="youtube">YouTube</option>
+              <option value="twitch">Twitch</option>
+            </select>
+            <label class="fl">Canal a vigilar</label>
+            <input id="fdTarget" placeholder="https://youtube.com/@micanal o nombre de Twitch" />
+            <button class="btn primary wide" id="btnAddFeed" style="margin-top:12px"><svg class="ic"><use href="#ic-globe"/></svg><span>Añadir aviso</span></button>
+            <label class="fl">Avisos activos</label>
+            <div class="list" id="feedList"><div class="skeleton">Cargando…</div></div>
           </div>
         </section>
 

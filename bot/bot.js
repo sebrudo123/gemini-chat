@@ -145,10 +145,12 @@
     document.querySelectorAll("section.view").forEach(function (view) {
       view.classList.toggle("active", view.id === "view-" + name);
     });
-    if (name === "extras") { refreshRoleMenus(); refreshPolls(); }
-    if (name === "anuncios") refreshSchedules();
+    if (name === "extras") {
+      refreshRoleMenus(); refreshPolls(); refreshLevels(); refreshGiveaways(); refreshReminders();
+    }
+    if (name === "anuncios") { refreshSchedules(); refreshFeeds(); }
     if (name === "ajustes") refreshEvents();
-    if (name === "resumen") refreshBotStats();
+    if (name === "resumen") { refreshBotStats(); refreshMemberStats(); }
   }
 
   /* ---------------------------------------------------------- */
@@ -186,7 +188,10 @@
         renderStats();
         renderConfigTexts();
         renderRmRoles();
+        renderExtraSelects();
+        renderDmTexts();
         refreshBotStats();
+        refreshMemberStats();
       });
   }
 
@@ -343,6 +348,31 @@
     }
   }
 
+  function categoryOptions(selectedId) {
+    var channels = (state.inventory && state.inventory.channels) || [];
+    var options = "<option value=''>— sin categoría —</option>";
+    channels.forEach(function (channel) {
+      if (channel.type !== 4) return;
+      options +=
+        "<option value='" + channel.id + "'" + (channel.id === selectedId ? " selected" : "") + ">" +
+        escapeHtml(channel.name) + "</option>";
+    });
+    return options;
+  }
+
+  function renderExtraSelects() {
+    if (!state.inventory) return;
+    $("cfgLevelupChannel").innerHTML = channelOptions(state.config.levelup_channel_id);
+    $("cfgTicketCategory").innerHTML = categoryOptions(state.config.ticket_category_id);
+    $("cfgTicketStaffRole").innerHTML = roleOptions(state.config.ticket_staff_role_id);
+    ["ticketChannel", "gwChannel", "fdChannel"].forEach(function (id) {
+      if (!$(id).dataset.ready) {
+        $(id).innerHTML = channelOptions(null);
+        $(id).dataset.ready = "1";
+      }
+    });
+  }
+
   function renderRmRoles() {
     var wrap = $("rmRoleList");
     wrap.innerHTML = "";
@@ -415,6 +445,33 @@
     $("cfgWelcomeImage").checked = ["1", "true", "on"].includes(
       String(state.config.welcome_image_enabled || "").toLowerCase()
     );
+    $("cfgLevelsOn").checked = ["1", "true", "on"].includes(
+      String(state.config.levels_enabled || "").toLowerCase()
+    );
+    $("cfgWelcomeDmOn").checked = ["1", "true", "on"].includes(
+      String(state.config.welcome_dm_enabled || "").toLowerCase()
+    );
+  }
+
+  function renderDmTexts() {
+    $("cfgWelcomeDm").value = state.config.welcome_dm_message || "";
+  }
+
+  function refreshMemberStats() {
+    api("/api/admin/discord-bot/member-stats").then(function (data) {
+      var days = data.days || [];
+      var welcomes = 0;
+      var goodbyes = 0;
+      days.forEach(function (day) {
+        welcomes += Number(day.welcomes || 0);
+        goodbyes += Number(day.goodbyes || 0);
+      });
+      $("msWelcomes").textContent = welcomes;
+      $("msGoodbyes").textContent = goodbyes;
+      $("msUsers").textContent =
+        (state.inventory && state.inventory.guild && state.inventory.guild.member_count) || "—";
+      $("msNet").textContent = (welcomes >= goodbyes ? "+" : "") + (welcomes - goodbyes);
+    }).catch(function () { /* decorativo */ });
   }
 
   function escapeHtml(text) {
@@ -756,6 +813,189 @@
   }
 
   /* ---------------------------------------------------------- */
+  /* Tanda 2: niveles, tickets, sorteos, recordatorios y feeds    */
+  /* ---------------------------------------------------------- */
+  function refreshLevels() {
+    if (!state.guildId) return Promise.resolve();
+    return api("/api/admin/discord-bot/guilds/" + state.guildId + "/levels").then(function (data) {
+      var wrap = $("levelList");
+      wrap.innerHTML = "";
+      var top = data.top || [];
+      if (!top.length) {
+        wrap.innerHTML = "<div class='empty'>Sin niveles todavía.</div>";
+        return;
+      }
+      top.forEach(function (entry, index) {
+        var row = document.createElement("div");
+        row.className = "row-item";
+        row.innerHTML =
+          "<div class='ico'>" + (index + 1) + "</div>" +
+          "<div class='meta'><b>" + escapeHtml(entry.name) + "</b>" +
+          "<span>" + entry.xp + " XP</span></div>" +
+          "<div class='end'><b style='font-size:13px'>Nv " + entry.level + "</b></div>";
+        wrap.appendChild(row);
+      });
+    }).catch(function (err) {
+      $("levelList").innerHTML = "<div class='empty'>" + escapeHtml(err.message || "Error") + "</div>";
+    });
+  }
+
+  function saveLevelsConfig() {
+    saveConfig({
+      levels_enabled: $("cfgLevelsOn").checked ? "1" : "",
+      levelup_channel_id: $("cfgLevelupChannel").value,
+    }, "Niveles guardados.").then(function () {
+      refreshLevels();
+    });
+  }
+
+  function postTicketPanel() {
+    var channel = $("ticketChannel").value;
+    if (!state.guildId) return toast("Selecciona antes un servidor.", "err");
+    if (!channel) return toast("Elige un canal de texto para el panel.", "err");
+    busy($("btnPostTicketPanel"), true);
+    api("/api/admin/discord-bot/guilds/" + state.guildId + "/test-message", {
+      method: "POST",
+      body: {
+        channel_id: channel,
+        content: "Tickets de soporte",
+        ticket_panel: true,
+      },
+    })
+      .then(function () { toast("Panel de tickets publicado.", "ok"); })
+      .catch(function (err) { toast(err.message || "No se pudo publicar.", "err"); })
+      .finally(function () { busy($("btnPostTicketPanel"), false); });
+  }
+
+  function refreshGiveaways() {
+    if (!state.guildId) return Promise.resolve();
+    return api("/api/admin/discord-bot/guilds/" + state.guildId + "/giveaways").then(function (data) {
+      var wrap = $("giveawayList");
+      wrap.innerHTML = "";
+      var items = (data.giveaways || []).filter(function (entry) { return !entry.closed; });
+      if (!items.length) {
+        wrap.innerHTML = "<div class='empty'>Sin sorteos activos.</div>";
+        return;
+      }
+      items.forEach(function (entry) {
+        var row = document.createElement("div");
+        row.className = "row-item";
+        row.innerHTML =
+          "<div class='ico'><svg class='ic'><use href='#ic-poll'/></svg></div>" +
+          "<div class='meta'><b>" + escapeHtml(entry.prize) + "</b>" +
+          "<span>" + (entry.entrants || []).length + " participantes · termina " + escapeHtml(String(entry.ends_at).slice(0, 16)) + " UTC</span></div>" +
+          "<button class='btn' style='padding:8px 10px' aria-label='Borrar'>" +
+          "<svg class='ic'><use href='#ic-trash'/></svg></button>";
+        row.querySelector("button").onclick = function () {
+          api("/api/admin/discord-bot/guilds/" + state.guildId + "/giveaways/" + entry.giveaway_id, { method: "DELETE" })
+            .then(function () { toast("Sorteo cancelado.", "ok"); refreshGiveaways(); })
+            .catch(function (err) { toast(err.message || "No se pudo borrar.", "err"); });
+        };
+        wrap.appendChild(row);
+      });
+    }).catch(function (err) {
+      $("giveawayList").innerHTML = "<div class='empty'>" + escapeHtml(err.message || "Error") + "</div>";
+    });
+  }
+
+  function postGiveaway() {
+    var channel = $("gwChannel").value;
+    var prize = $("gwPrize").value.trim();
+    var minutes = parseInt($("gwMinutes").value || "60", 10) || 60;
+    var winners = parseInt($("gwWinners").value || "1", 10) || 1;
+    if (!state.guildId) return toast("Selecciona antes un servidor.", "err");
+    if (!channel) return toast("Elige un canal.", "err");
+    if (!prize) return toast("Escribe el premio.", "err");
+    if (minutes < 1 || minutes > 43200) return toast("Duración: 1 min a 30 días.", "err");
+    busy($("btnPostGiveaway"), true);
+    api("/api/admin/discord-bot/guilds/" + state.guildId + "/giveaways", {
+      method: "POST",
+      body: { channel_id: channel, prize: prize, minutes: minutes, winners: winners },
+    })
+      .then(function () { toast("Sorteo publicado.", "ok"); $("gwPrize").value = ""; refreshGiveaways(); })
+      .catch(function (err) { toast(err.message || "No se pudo publicar.", "err"); })
+      .finally(function () { busy($("btnPostGiveaway"), false); });
+  }
+
+  function refreshReminders() {
+    return api("/api/admin/discord-bot/reminders" + (state.guildId ? "?guild_id=" + state.guildId : "")).then(function (data) {
+      var wrap = $("reminderList");
+      wrap.innerHTML = "";
+      var items = data.reminders || [];
+      if (!items.length) {
+        wrap.innerHTML = "<div class='empty'>Sin recordatorios pendientes.</div>";
+        return;
+      }
+      items.forEach(function (item) {
+        var row = document.createElement("div");
+        row.className = "row-item";
+        row.innerHTML =
+          "<div class='ico'><svg class='ic'><use href='#ic-clock'/></svg></div>" +
+          "<div class='meta'><b>" + escapeHtml(String(item.content || "").slice(0, 60)) + "</b>" +
+          "<span>" + escapeHtml(String(item.due_at).slice(0, 16)) + " UTC</span></div>" +
+          "<button class='btn' style='padding:8px 10px' aria-label='Borrar'>" +
+          "<svg class='ic'><use href='#ic-trash'/></svg></button>";
+        row.querySelector("button").onclick = function () {
+          api("/api/admin/discord-bot/reminders/" + item.id, { method: "DELETE" })
+            .then(function () { toast("Recordatorio borrado.", "ok"); refreshReminders(); })
+            .catch(function (err) { toast(err.message || "No se pudo borrar.", "err"); });
+        };
+        wrap.appendChild(row);
+      });
+    }).catch(function (err) {
+      $("reminderList").innerHTML = "<div class='empty'>" + escapeHtml(err.message || "Error") + "</div>";
+    });
+  }
+
+  function refreshFeeds() {
+    if (!state.guildId) return Promise.resolve();
+    return api("/api/admin/discord-bot/guilds/" + state.guildId + "/feeds").then(function (data) {
+      var wrap = $("feedList");
+      wrap.innerHTML = "";
+      var items = data.feeds || [];
+      if (!items.length) {
+        wrap.innerHTML = "<div class='empty'>Sin avisos configurados.</div>";
+        return;
+      }
+      items.forEach(function (feed) {
+        var row = document.createElement("div");
+        row.className = "row-item";
+        row.innerHTML =
+          "<div class='ico'><svg class='ic'><use href='#ic-globe'/></svg></div>" +
+          "<div class='meta'><b>" + (feed.kind === "twitch" ? "Twitch" : "YouTube") + " · " + escapeHtml(feed.name || feed.target) + "</b>" +
+          "<span>" + (feed.last_at ? "última revisión " + escapeHtml(String(feed.last_at).slice(0, 16)) : "sin revisar") + "</span></div>" +
+          "<button class='btn' style='padding:8px 10px' aria-label='Borrar'>" +
+          "<svg class='ic'><use href='#ic-trash'/></svg></button>";
+        row.querySelector("button").onclick = function () {
+          api("/api/admin/discord-bot/guilds/" + state.guildId + "/feeds/" + feed.feed_id, { method: "DELETE" })
+            .then(function () { toast("Aviso eliminado.", "ok"); refreshFeeds(); })
+            .catch(function (err) { toast(err.message || "No se pudo borrar.", "err"); });
+        };
+        wrap.appendChild(row);
+      });
+    }).catch(function (err) {
+      $("feedList").innerHTML = "<div class='empty'>" + escapeHtml(err.message || "Error") + "</div>";
+    });
+  }
+
+  function addFeed() {
+    var channel = $("fdChannel").value;
+    var kind = $("fdKind").value;
+    var target = $("fdTarget").value.trim();
+    if (!state.guildId) return toast("Selecciona antes un servidor.", "err");
+    if (!channel) return toast("Elige un canal donde avisar.", "err");
+    if (!target) return toast("Escribe la URL o el nombre del canal.", "err");
+    busy($("btnAddFeed"), true);
+    api("/api/admin/discord-bot/guilds/" + state.guildId + "/feeds", {
+      method: "POST",
+      body: { channel_id: channel, kind: kind, target: target },
+    })
+      .then(function () { toast("Aviso añadido.", "ok"); $("fdTarget").value = ""; refreshFeeds(); })
+      .catch(function (err) { toast(err.message || "No se pudo añadir.", "err"); })
+      .finally(function () { busy($("btnAddFeed"), false); });
+  }
+
+  /* ---------------------------------------------------------- */
   /* Actualizaciones de la app (Android / instalador del APK)      */
   /* ---------------------------------------------------------- */
   function androidVersionCode() {
@@ -925,6 +1165,8 @@
       saveConfig({
         welcome_message: $("cfgWelcomeMsg").value,
         welcome_image_enabled: $("cfgWelcomeImage").checked ? "1" : "",
+        welcome_dm_message: $("cfgWelcomeDm").value,
+        welcome_dm_enabled: $("cfgWelcomeDmOn").checked ? "1" : "",
       }, "Bienvenida guardada.");
     };
 
@@ -938,6 +1180,16 @@
     $("btnPostRoleMenu").onclick = postRoleMenu;
     $("btnPostPoll").onclick = postPoll;
     $("btnSchedule").onclick = createSchedule;
+    $("btnAddFeed").onclick = addFeed;
+    $("btnPostGiveaway").onclick = postGiveaway;
+    $("btnSaveLevels").onclick = saveLevelsConfig;
+    $("btnPostTicketPanel").onclick = function () {
+      if (!state.guildId) return toast("Selecciona antes un servidor.", "err");
+      saveConfig({
+        ticket_category_id: $("cfgTicketCategory").value,
+        ticket_staff_role_id: $("cfgTicketStaffRole").value,
+      }, "Configuración de tickets guardada.").then(postTicketPanel);
+    };
     $("schKind").addEventListener("change", function () {
       $("schWeekday").hidden = $("schKind").value !== "weekly";
     });

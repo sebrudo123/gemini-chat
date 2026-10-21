@@ -74,6 +74,7 @@ from models import (
     AppSetting,
     Attachment,
     AuditLog,
+    BotReminder,
     BotSchedule,
     Conversation,
     ConversationFavorite,
@@ -195,16 +196,22 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 async def _housekeeping_loop() -> None:
-    """Cada minuto: publica los mensajes programados; semanal: snapshot."""
+    """Cada minuto: programados, recordatorios, sorteos y feeds; semanal: backup."""
+    tick = 0
     while True:
         try:
             await asyncio.sleep(60)
+            tick += 1
             await _process_schedules()
+            await _process_reminders()
+            await _process_giveaways()
+            if tick % 5 == 0:  # feeds cada ~5 minutos
+                await _process_feeds()
             await asyncio.to_thread(_update_backup_snapshot)
         except asyncio.CancelledError:  # pragma: no cover - al apagar el proceso
             raise
         except Exception:  # noqa: BLE001 - la tarea supervisa y nunca muere
-            LOG.exception("Error en la tarea de mensajes programados")
+            LOG.exception("Error en la tarea de mantenimiento del bot")
 
 
 def _update_backup_snapshot() -> None:
@@ -252,6 +259,78 @@ async def _process_schedules() -> None:
                 f"{exc}"[:200],
                 str(item.get("guild_id") or ""),
             )
+
+
+async def _process_reminders() -> None:
+    """Publica los recordatorios ya vencidos y los marca como enviados."""
+    now = datetime.now(timezone.utc)
+    due = await asyncio.to_thread(bot_extras.collect_due_reminders, now)
+    for item in due:
+        try:
+            await discord_bot.send_channel_message(
+                int(item["channel_id"]),
+                f"<@{item['user_id']}> Recordatorio: {item['content']}",
+            )
+            bot_extras.bump_stat("reminders_sent", guild_id=str(item["guild_id"]))
+            bot_extras.record_event(
+                "reminder_sent", (item.get("content") or "")[:80], str(item.get("guild_id") or "")
+            )
+        except Exception as exc:  # noqa: BLE001 - un fallo no bloquea los demás
+            bot_extras.record_event(
+                "reminder_error", f"{exc}"[:200], str(item.get("guild_id") or "")
+            )
+
+
+async def _process_giveaways() -> None:
+    """Cierra los sorteos vencidos y anuncia a los ganadores."""
+    now = datetime.now(timezone.utc)
+    due = await asyncio.to_thread(bot_extras.collect_due_giveaways, now)
+    for guild_id, entries in due.items():
+        for entry in entries:
+            message_id = entry.get("message_id")
+            try:
+                if message_id:
+                    await bot_extras.api_request(
+                        "PATCH",
+                        f"/channels/{int(entry['channel_id'])}/messages/{message_id}",
+                        json_body={
+                            "content": bot_extras.giveaway_content(entry, finished=True),
+                            "components": [],
+                            "allowed_mentions": {"parse": ["users"]},
+                        },
+                    )
+                bot_extras.bump_stat("giveaways_closed", guild_id=guild_id)
+                bot_extras.record_event(
+                    "giveaway_closed",
+                    entry.get("prize", "")[:100],
+                    guild_id,
+                )
+            except Exception:  # noqa: BLE001 - el sorteo fallido no rompe el ciclo
+                LOG.exception("No se pudo cerrar el sorteo %s", entry.get("giveaway_id"))
+
+
+async def _process_feeds() -> None:
+    """Revisa los avisos de YouTube/Twitch configurados por servidor."""
+    stores = await asyncio.to_thread(bot_extras.all_feed_stores)
+    for guild_id, store in stores:
+        for feed_id, feed in list(store.items()):
+            try:
+                result = await bot_extras.poll_feed(feed)
+                if result:
+                    channel_id = int(result.get("channel_id") or 0)
+                    if channel_id:
+                        await discord_bot.send_channel_message(
+                            channel_id, result.get("content", "")
+                        )
+                        bot_extras.bump_stat("feed_announces", guild_id=guild_id)
+                        bot_extras.record_event(
+                            "feed_announce",
+                            (result.get("content") or "")[:100],
+                            guild_id,
+                        )
+                bot_extras.save_feed(guild_id, feed_id, feed)
+            except Exception:  # noqa: BLE001 - un feed caído no rompe el ciclo
+                LOG.exception("Error revisando el feed %s de %s", feed_id, guild_id)
 
 
 app = FastAPI(title="Core IA API", version="2.1.0", lifespan=lifespan)
@@ -4227,6 +4306,7 @@ class BotGuildConfigUpdate(BaseModel):
 class BotTestMessageRequest(BaseModel):
     channel_id: str = Field(..., min_length=1, max_length=32)
     content: str = Field(..., min_length=1, max_length=1500)
+    ticket_panel: bool = False  # publica el panel de tickets en vez de texto
 
 
 BOT_CONFIG_KEYS = (
@@ -4241,6 +4321,12 @@ BOT_CONFIG_KEYS = (
     "welcome_message",
     "goodbye_message",
     "welcome_image_enabled",
+    "welcome_dm_enabled",
+    "welcome_dm_message",
+    "levels_enabled",
+    "levelup_channel_id",
+    "ticket_category_id",
+    "ticket_staff_role_id",
 )
 
 
@@ -4370,7 +4456,35 @@ async def admin_discord_bot_test_message(
     if not channel_id:
         raise HTTPException(status_code=400, detail="Identificador de canal no válido.")
     try:
-        await discord_bot.send_channel_message(channel_id, payload.content)
+        if payload.ticket_panel:
+            await bot_extras.api_request(
+                "POST",
+                f"/channels/{channel_id}/messages",
+                json_body={
+                    "content": (
+                        "## Tickets de soporte\n"
+                        "Toca el botón para abrir un canal privado con la atención.\n"
+                        "Se cierra desde el propio ticket."
+                    ),
+                    "allowed_mentions": {"parse": []},
+                    "components": [
+                        {
+                            "type": 1,
+                            "components": [
+                                {
+                                    "type": 2,
+                                    "style": 1,
+                                    "custom_id": f"{bot_extras.TICKET_COMPONENT_PREFIX}:open",
+                                    "label": "Abrir ticket",
+                                }
+                            ],
+                        }
+                    ],
+                },
+            )
+            bot_extras.record_event("ticket_panel", "", str(guild_id))
+        else:
+            await discord_bot.send_channel_message(channel_id, payload.content)
     except discord_bot.BotError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     record_audit(
@@ -4936,6 +5050,204 @@ async def admin_bot_poll_delete(
         raise HTTPException(status_code=404, detail="Encuesta no encontrada.")
     record_audit(db, admin, "bot.poll_delete", str(guild_id), poll_id[:32])
     return {"ok": True}
+
+
+# ----- Niveles, recordatorios, sorteos, feeds de avisos y stats de membresía -- #
+@app.get("/api/admin/discord-bot/guilds/{guild_id}/levels")
+def admin_bot_levels(
+    guild_id: int,
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """Top de niveles del servidor (para el panel)."""
+    return {"top": bot_extras.level_top(guild_id, 15)}
+
+
+@app.get("/api/admin/discord-bot/reminders")
+def admin_bot_reminders(
+    guild_id: str = "",
+    _: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Recordatorios pendientes de enviar."""
+    query = (
+        db.query(BotReminder)
+        .filter(BotReminder.sent.is_(False))
+        .order_by(BotReminder.due_at.asc())
+        .limit(100)
+    )
+    if guild_id:
+        query = query.filter(BotReminder.guild_id == str(guild_id))
+    return {
+        "reminders": [
+            {
+                "id": row.id,
+                "guild_id": row.guild_id,
+                "channel_id": row.channel_id,
+                "user_id": row.user_id,
+                "content": row.content,
+                "due_at": row.due_at.isoformat() if row.due_at else "",
+            }
+            for row in query.all()
+        ]
+    }
+
+
+@app.delete("/api/admin/discord-bot/reminders/{reminder_id}")
+def admin_bot_reminder_delete(
+    reminder_id: int,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Borra un recordatorio pendiente."""
+    row = db.get(BotReminder, reminder_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Recordatorio no encontrado.")
+    db.delete(row)
+    db.commit()
+    record_audit(db, admin, "bot.reminder_delete", row.guild_id, f"#{reminder_id}")
+    return {"ok": True}
+
+
+class BotGiveawayCreate(BaseModel):
+    channel_id: str = Field(..., min_length=1, max_length=32)
+    prize: str = Field(..., min_length=1, max_length=120)
+    minutes: int = Field(..., ge=1, le=60 * 24 * 30)
+    winners: int = Field(default=1, ge=1, le=10)
+
+
+@app.get("/api/admin/discord-bot/guilds/{guild_id}/giveaways")
+def admin_bot_giveaways_list(
+    guild_id: int,
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """Sorteos activos del servidor."""
+    store = bot_extras.load_store(guild_id, bot_extras.GIVEAWAY_STORE)
+    return {"giveaways": list(store.values())}
+
+
+@app.post("/api/admin/discord-bot/guilds/{guild_id}/giveaways")
+async def admin_bot_giveaway_create(
+    guild_id: int,
+    payload: BotGiveawayCreate,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Publica un sorteo con botón de participación y lo registra."""
+    try:
+        entry = await bot_extras.post_giveaway(
+            guild_id,
+            int(payload.channel_id),
+            payload.prize,
+            payload.minutes,
+            payload.winners,
+        )
+    except Exception as exc:  # noqa: BLE001 - Discord rechazó la publicación
+        raise HTTPException(status_code=503, detail=f"Discord: {str(exc)[:200]}") from exc
+    record_audit(db, admin, "bot.giveaway_create", str(guild_id), payload.prize[:80])
+    return {"giveaway": entry}
+
+
+@app.delete("/api/admin/discord-bot/guilds/{guild_id}/giveaways/{giveaway_id}")
+async def admin_bot_giveaway_delete(
+    guild_id: int,
+    giveaway_id: str,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Cancela un sorteo borrando su mensaje."""
+    try:
+        removed = await bot_extras.remove_giveaway(guild_id, giveaway_id[:32])
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"Discord: {str(exc)[:200]}") from exc
+    if not removed:
+        raise HTTPException(status_code=404, detail="Sorteo no encontrado.")
+    record_audit(db, admin, "bot.giveaway_delete", str(guild_id), giveaway_id[:32])
+    return {"ok": True}
+
+
+class BotFeedCreate(BaseModel):
+    channel_id: str = Field(..., min_length=1, max_length=32)
+    kind: str = Field(..., max_length=10)  # youtube | twitch
+    target: str = Field(..., min_length=1, max_length=220)  # URL o @handle
+
+
+@app.get("/api/admin/discord-bot/guilds/{guild_id}/feeds")
+def admin_bot_feeds(
+    guild_id: int,
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """Avisos de YouTube/Twitch configurados en el servidor."""
+    store = bot_extras.load_store(guild_id, bot_extras.FEED_STORE)
+    return {"feeds": list(store.values())}
+
+
+@app.post("/api/admin/discord-bot/guilds/{guild_id}/feeds")
+async def admin_bot_feed_create(
+    guild_id: int,
+    payload: BotFeedCreate,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Añade un aviso de YouTube (URL/@handle) o Twitch (nombre de canal)."""
+    kind = "youtube" if payload.kind == "youtube" else "twitch"
+    target = (payload.target or "").strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="Falta la URL o el canal.")
+    if kind == "youtube":
+        raw_target = target
+        try:
+            target = await asyncio.to_thread(
+                bot_extras.resolve_youtube_channel_id, raw_target
+            )
+        except Exception as exc:  # noqa: BLE001 - URL o canal de YT no válido
+            raise HTTPException(
+                status_code=400,
+                detail="No pude deducir el canal de YouTube desde esa URL/@handle.",
+            ) from exc
+        name = raw_target.rsplit("/", 1)[-1].lstrip("@")[:60]
+    else:
+        target = target.rsplit("/", 1)[-1].replace("@", "")[:60]
+        name = target
+    feed_id = secrets.token_hex(4)
+    entry = {
+        "feed_id": feed_id,
+        "kind": kind,
+        "channel_id": str(payload.channel_id),
+        "target": target,
+        "name": name,
+        "last_id": "",
+        "last_at": "",
+        "live": False,
+    }
+    bot_extras.save_feed(guild_id, feed_id, entry)
+    record_audit(db, admin, "bot.feed_create", str(guild_id), f"{kind}:{target[:40]}")
+    bot_extras.record_event("feed_create", f"{kind} · {name}", str(guild_id))
+    return {"feed": entry}
+
+
+@app.delete("/api/admin/discord-bot/guilds/{guild_id}/feeds/{feed_id}")
+def admin_bot_feed_delete(
+    guild_id: int,
+    feed_id: str,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Elimina un aviso de YouTube/Twitch."""
+    store = bot_extras.load_store(guild_id, bot_extras.FEED_STORE)
+    entry = store.pop(feed_id[:32], None)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Aviso no encontrado.")
+    bot_extras.save_store(guild_id, bot_extras.FEED_STORE, store)
+    record_audit(db, admin, "bot.feed_delete", str(guild_id), feed_id[:32])
+    return {"ok": True}
+
+
+@app.get("/api/admin/discord-bot/member-stats")
+def admin_bot_member_stats(
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """Bienvenidas y despedidas de los últimos 7 días."""
+    return {"days": bot_extras.member_stats_last_days(7)}
 
 
 @app.get("/api/admin/health")
