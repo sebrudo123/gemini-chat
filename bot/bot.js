@@ -29,6 +29,15 @@
     config: {},
   };
 
+  /* Puente con la APK nativa: cuando corre dentro de la app Android, la barra
+     inferior y el splash son nativos y el panel adapta su layout. */
+  var nativeBridge = window.CoreIAAndroid || null;
+  try {
+    if (nativeBridge && document.body && !document.body.classList.contains("native-ui")) {
+      document.body.classList.add("native-ui");
+    }
+  } catch (err) { /* navegador normal: sin puente */ }
+
   var $ = function (id) { return document.getElementById(id); };
 
   function toast(message, kind) {
@@ -74,6 +83,9 @@
   function showApp(logged) {
     $("loginView").style.display = logged ? "none" : "flex";
     $("appView").style.display = logged ? "block" : "none";
+    try {
+      if (nativeBridge && nativeBridge.onLoginState) nativeBridge.onLoginState(!!logged);
+    } catch (err) { /* fuera de la APK */ }
     if (logged) refreshAll();
   }
 
@@ -160,6 +172,9 @@
     document.querySelectorAll("section.view").forEach(function (view) {
       view.classList.toggle("active", view.id === "view-" + name);
     });
+    try {
+      if (nativeBridge && nativeBridge.onView) nativeBridge.onView(String(name));
+    } catch (err) { /* fuera de la APK */ }
     if (name === "extras") {
       refreshRoleMenus(); refreshPolls(); refreshLevels(); refreshGiveaways(); refreshReminders();
     }
@@ -1039,12 +1054,18 @@
   function closeUpdateView() {
     $("updateView").classList.remove("show");
     $("updStatus").textContent = "";
+    try {
+      if (nativeBridge && nativeBridge.onOverlay) nativeBridge.onOverlay(false);
+    } catch (err) { /* fuera de la APK */ }
   }
 
   function showUpdate(data) {
     $("updVersion").textContent = "Versión " + (data.version_name || "desconocida");
     $("updNotes").textContent =
       (data.changelog || "").trim() || "Mejoras y arreglos de errores.";
+    try {
+      if (nativeBridge && nativeBridge.onOverlay) nativeBridge.onOverlay(true);
+    } catch (err) { /* fuera de la APK */ }
     var btn = $("updInstall");
     btn.disabled = false;
     $("updProgressBox").hidden = true;
@@ -1249,6 +1270,8 @@
   bind();
   consumeHash();
   setTimeout(checkUpdate, 700);
+  /* Puente nativo → web: la barra inferior de la APK cambia de pestaña aquí. */
+  window.CoreIAJS = { switchView: switchView };
   if (state.token) {
     api("/api/admin/discord-bot")
       .then(function (data) {

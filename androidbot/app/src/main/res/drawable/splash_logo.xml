@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Logo del splash: cuadrado morado redondeado con la "C" (marca Core IA). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp"
+    android:height="96dp"
+    android:viewportWidth="96"
+    android:viewportHeight="96">
+
+    <path
+        android:fillColor="#6D5DFC"
+        android:pathData="M14,0 L82,0 A14,14 0 0 1 96,14 L96,82 A14,14 0 0 1 82,96 L14,96 A14,14 0 0 1 0,82 L0,14 A14,14 0 0 1 14,0 Z" />
+
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#ffffff"
+        android:strokeWidth="9"
+        android:strokeLineCap="round"
+        android:pathData="M60,34 C56,30 50,28 44,30 C35,33 30,42 32,51 C34,60 43,66 52,64 C56,63 60,61 62,58" />
+</vector>

@@ -316,6 +316,14 @@
     nav.tabs button.active { background:var(--grad); color:#fff; box-shadow:0 6px 16px rgba(109,93,252,.35); }
     nav.tabs button:active { transform:scale(.94); }
 
+    /* ---------- Modo APK nativa ---------- */
+    /* Dentro de la app Android la barra inferior es nativa (Material Bottom-
+       NavigationView); el panel oculta la suya y ajusta el espacio inferior
+       para que ni el toast ni el panel de update queden tapados por ella. */
+    body.native-ui nav.tabs { display:none !important; }
+    body.native-ui main { padding-bottom: 40px !important; }
+    body.native-ui .toast { bottom: 24px; }
+
     .spinner { width:14px; height:14px; border:2px solid rgba(255,255,255,.25); border-top-color:#fff; border-radius:50%; display:inline-block; animation:spin .8s linear infinite; }
     @keyframes spin { to { transform:rotate(360deg); } }
 
@@ -616,8 +624,8 @@
           </div>
         </section>
 
-        <!-- COMANDOS -->
-        <section class="view" id="view-comandos">
+        <!-- COMANDOS (fusionado con Extras) -->
+        <section class="view" id="view-extras">
           <div class="card">
             <h2><span class="tile"><svg class="ic"><use href="#ic-sync"/></svg></span>Sincronización</h2>
             <p class="sub">Los comandos se instalan en Discord cuando el bot está encendido.</p>
@@ -826,7 +834,6 @@
       <button data-view="resumen" class="active"><svg class="ic lg"><use href="#ic-home"/></svg><span>Resumen</span></button>
       <button data-view="servidores"><svg class="ic lg"><use href="#ic-globe"/></svg><span>Servidores</span></button>
       <button data-view="mensajes"><svg class="ic lg"><use href="#ic-message"/></svg><span>Mensajes</span></button>
-      <button data-view="comandos"><svg class="ic lg"><use href="#ic-terminal"/></svg><span>Comandos</span></button>
       <button data-view="extras"><svg class="ic lg"><use href="#ic-layers"/></svg><span>Extras</span></button>
       <button data-view="anuncios"><svg class="ic lg"><use href="#ic-megaphone"/></svg><span>Anuncios</span></button>
     </nav>

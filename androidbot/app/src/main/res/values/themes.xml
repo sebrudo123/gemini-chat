@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.CoreIABot" parent="Theme.AppCompat.DayNight.NoActionBar">
-        <item name="android:statusBarColor">#171722</item>
-        <item name="android:navigationBarColor">#171722</item>
-        <item name="android:windowBackground">#171722</item>
+        <item name="android:statusBarColor">#15151f</item>
+        <item name="android:navigationBarColor">#1b1b27</item>
+        <!-- Arranque estilo app: fondo splash nativo con el logo hasta que
+             el WebView pinta el panel (elimina el "flash" de página cargando). -->
+        <item name="android:windowBackground">@drawable/bg_splash</item>
     </style>
 </resources>

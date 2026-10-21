@@ -10,8 +10,7 @@ import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.content.FileProvider;
+
 import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -19,22 +18,53 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 
-/** WebView del panel web de Core IA Bot servido por el backend en /bot. */
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.FileProvider;
+
+import com.google.android.material.bottomnavigation.BottomNavigationView;
+
+/**
+ * Shell nativo del panel de Core IA Bot.
+ *
+ * El panel web vive en el WebView; la barra inferior de navegación es nativa
+ * (BottomNavigationView, estilo app de chat) y se sincroniza en ambos
+ * sentidos con el panel a través de los puentes JS. La app arranca con un
+ * splash nativo (tema) y se oculta la barra nativa en la pantalla de login
+ * y durante la pantalla de actualización.
+ */
 public class MainActivity extends AppCompatActivity {
 
+    /** Destinos de la barra inferior (mismos nombres que switchView del panel). */
+    private static final String[] TABS = {"resumen", "servidores", "mensajes", "extras", "anuncios"};
+    private static final int[] TAB_IDS = {
+        com.coreia.botpanel.R.id.nav_resumen,
+        com.coreia.botpanel.R.id.nav_servidores,
+        com.coreia.botpanel.R.id.nav_mensajes,
+        com.coreia.botpanel.R.id.nav_extras,
+        com.coreia.botpanel.R.id.nav_anuncios,
+    };
+
+    private static final int NAV_ACTIVE = 0xFF8F7BFF;
+    private static final int NAV_IDLE = 0xFF7A7A92;
+
     private WebView webView;
+    private BottomNavigationView bottomNav;
+    private boolean loggedIn;
+    private boolean overlayShown;
+    /** Evita bucles: cuando Java marca la pestaña tras un aviso de JS. */
+    private boolean suppressNavListener;
 
     /** Puente que usa el panel para comprobación e instalación de actualizaciones. */
     private class UpdateBridge {
 
         @JavascriptInterface
         public String getVersionCode() {
-            return String.valueOf(BuildConfig.VERSION_CODE);
+            return String.valueOf(com.coreia.botpanel.BuildConfig.VERSION_CODE);
         }
 
         @JavascriptInterface
         public String getVersionName() {
-            return BuildConfig.VERSION_NAME;
+            return com.coreia.botpanel.BuildConfig.VERSION_NAME;
         }
 
         @JavascriptInterface
@@ -43,15 +73,44 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    /** Puente del shell nativo: el panel avisa de login, pestaña y overlays. */
+    private class NativeBridge {
+
+        @JavascriptInterface
+        public void onView(final String name) {
+            runOnUiThread(() -> {
+                if (suppressNavListener) return;
+                selectTabQuietly(name);
+            });
+        }
+
+        @JavascriptInterface
+        public void onLoginState(final boolean logged) {
+            runOnUiThread(() -> {
+                loggedIn = logged;
+                updateNavVisibility();
+            });
+        }
+
+        @JavascriptInterface
+        public void onOverlay(final boolean visible) {
+            runOnUiThread(() -> {
+                overlayShown = visible;
+                updateNavVisibility();
+            });
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        webView = new WebView(this);
-        setContentView(webView);
 
-        String url = com.coreia.botpanel.BuildConfig.PANEL_URL;
+        setContentView(com.coreia.botpanel.R.layout.activity_main);
+        webView = findViewById(com.coreia.botpanel.R.id.webview);
+        bottomNav = findViewById(com.coreia.botpanel.R.id.bottom_nav);
 
-        WebSettings settings = webView.getSettings();
+        final WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setLoadWithOverviewMode(true);
@@ -60,17 +119,23 @@ public class MainActivity extends AppCompatActivity {
         // y debe reflejarse igual que en la web después de cada deploy.
         settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
 
-        webView.setBackgroundColor(Color.parseColor("#171722"));
-        webView.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        webView.setBackgroundColor(Color.parseColor("#15151f"));
         webView.setWebViewClient(new WebViewClient());
-        webView.addJavascriptInterface(new UpdateBridge(), "CoreIAUpdate");
-        // Aceleración por hardware (por defecto). El modo SOFTWARE causaba
-        // problemas de scroll/renderizado del panel en algunos WebViews.
 
+        webView.addJavascriptInterface(new UpdateBridge(), "CoreIAUpdate");
+        webView.addJavascriptInterface(new NativeBridge(), "CoreIAAndroid");
+
+        setupBottomNav();
+
+        // Hasta que el panel confirme sesión, la barra nativa está oculta.
+        loggedIn = false;
+        overlayShown = false;
+        updateNavVisibility();
+
+        final String url = com.coreia.botpanel.BuildConfig.PANEL_URL;
         if (savedInstanceState != null && !url.isEmpty()) {
             webView.restoreState(savedInstanceState);
-        }
-        if (!url.isEmpty()) {
+        } else if (!url.isEmpty()) {
             webView.loadUrl(url);
         } else {
             webView.loadData(
@@ -80,6 +145,62 @@ public class MainActivity extends AppCompatActivity {
                 "utf-8"
             );
         }
+    }
+
+    /** Colores y listener de la barra inferior (estilo del panel, morado Core IA). */
+    private void setupBottomNav() {
+        final int[][] states = new int[][] {
+            new int[] { android.R.attr.state_checked },
+            new int[] { -android.R.attr.state_checked },
+        };
+        final int[] colors = new int[] { NAV_ACTIVE, NAV_IDLE };
+        final android.content.res.ColorStateList tint = new android.content.res.ColorStateList(states, colors);
+        bottomNav.setItemIconTintList(tint);
+        bottomNav.setItemTextColor(tint);
+        bottomNav.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xFF1B1B27));
+
+        bottomNav.setOnItemSelectedListener(item -> {
+            if (suppressNavListener) return true;
+            final String tab = tabNameForItemId(item.getItemId());
+            if (tab != null) {
+                evaluateJs("window.CoreIAJS && CoreIAJS.switchView('" + tab + "');");
+            }
+            return true;
+        });
+    }
+
+    private String tabNameForItemId(final int itemId) {
+        for (int i = 0; i < TAB_IDS.length; i++) {
+            if (TAB_IDS[i] == itemId) return TABS[i];
+        }
+        return null;
+    }
+
+    /** Selecciona la pestaña sin disparar de nuevo la llamada a JS. */
+    private void selectTabQuietly(final String name) {
+        for (int i = 0; i < TABS.length; i++) {
+            if (TABS[i].equals(name)) {
+                if (bottomNav.getSelectedItemId() != TAB_IDS[i]) {
+                    suppressNavListener = true;
+                    bottomNav.setSelectedItemId(TAB_IDS[i]);
+                    suppressNavListener = false;
+                }
+                return;
+            }
+        }
+    }
+
+    /** La barra nativa solo se muestra con sesión iniciada y sin overlay de update. */
+    private void updateNavVisibility() {
+        final boolean show = loggedIn && !overlayShown;
+        if (bottomNav != null) {
+            bottomNav.setVisibility(show ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    private void evaluateJs(final String script) {
+        if (webView == null) return;
+        webView.evaluateJavascript(script, null);
     }
 
     @Override
@@ -168,10 +289,12 @@ public class MainActivity extends AppCompatActivity {
     @SuppressWarnings("deprecation")
     @Override
     public void onBackPressed() {
+        // En la app nativa, Atrás vuelve por el historial del panel si lo hay;
+        // si no, cierra la app (comportamiento natural de una app).
         if (webView != null && webView.canGoBack()) {
             webView.goBack();
         } else {
-            finish();
+            super.onBackPressed();
         }
     }
 }

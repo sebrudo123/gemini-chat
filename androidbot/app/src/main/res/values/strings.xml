@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Core IA Bot</string>
+    <string name="nav_resumen">Resumen</string>
+    <string name="nav_servidores">Servidores</string>
+    <string name="nav_mensajes">Mensajes</string>
+    <string name="nav_extras">Extras</string>
+    <string name="nav_anuncios">Anuncios</string>
 </resources>
