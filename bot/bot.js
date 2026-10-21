@@ -279,12 +279,14 @@
       };
       var icon = guild.icon
         ? "<img src='https://cdn.discordapp.com/icons/" + guild.id + "/" + guild.icon + ".png?size=64' alt=''/>"
-        : "🏰";
+        : "<svg class='ic'><use href='#ic-globe'/></svg>";
       var members = guild.member_count ? guild.member_count + " miembros" : guild.id;
       item.innerHTML =
         "<div class='ico'>" + icon + "</div>" +
         "<div class='meta'><b>" + escapeHtml(guild.name) + "</b><span>" + escapeHtml(members) + "</span></div>" +
-        "<div class='end'>" + (guild.id === state.guildId ? "<span class='check'>✓</span>" : "⁝") + "</div>";
+        "<div class='end'>" + (guild.id === state.guildId
+          ? "<svg class='ic'><use href='#ic-check'/></svg>"
+          : "<svg class='ic'><use href='#ic-chevron'/></svg>") + "</div>";
       wrap.appendChild(item);
     });
   }
@@ -359,7 +361,8 @@
         (role.managed ? "<span class='tag'>integración</span>" : "") +
         (role.default ? "<span class='tag gray'>@everyone</span>" : "") + "</b>" +
         "<span>" + role.id + "</span></div>" +
-        "<div class='end'>" + (state.config.verify_role_id === role.id ? "<span class='check'>✓</span>" : "") + "</div>";
+        "<div class='end'>" + (state.config.verify_role_id === role.id
+          ? "<svg class='ic'><use href='#ic-check'/></svg>" : "") + "</div>";
       wrap.appendChild(item);
     });
   }
