@@ -313,6 +313,86 @@
     .spinner { width:14px; height:14px; border:2px solid rgba(255,255,255,.25); border-top-color:#fff; border-radius:50%; display:inline-block; animation:spin .8s linear infinite; }
     @keyframes spin { to { transform:rotate(360deg); } }
 
+    /* ---------- Pantalla de actualización ---------- */
+    .uoverlay {
+      position:fixed; inset:0; z-index:120;
+      display:flex; align-items:center; justify-content:center;
+      padding:max(20px, env(safe-area-inset-top)) 22px max(20px, env(safe-area-inset-bottom));
+      background:
+        radial-gradient(700px 380px at 50% 38%, rgba(42,70,140,.5), transparent 70%),
+        rgba(6,9,22,.82);
+      backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+      opacity:0; pointer-events:none;
+      transition:opacity .28s ease;
+    }
+    .uoverlay.show { opacity:1; pointer-events:auto; }
+    .ucard {
+      position:relative; width:100%; max-width:400px;
+      max-height:min(82dvh, 720px); max-height:min(82vh, 720px);
+      overflow-y:auto; overscroll-behavior:contain;
+      border-radius:26px; padding:22px 17px 16px;
+      background:linear-gradient(180deg,#1c2f5e 0%,#14264f 55%,#0e1a3a 100%);
+      box-shadow:0 30px 80px rgba(4,8,20,.7), inset 0 0 0 1px rgba(220,174,85,.22);
+      transform:scale(.9) translateY(20px);
+      transition:transform .4s cubic-bezier(.21,1.1,.35,1);
+      animation:ucardin .5s cubic-bezier(.21,1.1,.35,1);
+    }
+    .uoverlay.show .ucard { transform:none; }
+    .ucard::before {
+      content:""; position:absolute; top:0; left:16%; right:16%; height:2px;
+      background:linear-gradient(90deg,transparent,#dcae55,transparent); border-radius:2px;
+    }
+    .uhead { display:flex; align-items:center; gap:11px; color:#e8b95c; font-weight:750; font-size:15px; margin:0 0 16px; }
+    .utile {
+      width:42px; height:42px; border-radius:12px; flex:none;
+      display:grid; place-items:center; border:2px solid #dcae55; color:#dcae55;
+      animation:upulse 2.6s ease-in-out infinite;
+    }
+    @keyframes upulse {
+      0%,100% { box-shadow:0 0 0 0 rgba(220,174,85,.3); }
+      50% { box-shadow:0 0 16px 2px rgba(220,174,85,.28); }
+    }
+    .ubadge {
+      display:inline-block; padding:9px 16px; border-radius:12px; margin-bottom:15px;
+      background:rgba(220,174,85,.15); border:1px solid rgba(220,174,85,.42);
+      color:#ecc578; font-size:16.5px; font-weight:750;
+    }
+    .ulabel { font-size:12.5px; color:#9fb0d8; margin:0 0 8px; }
+    .unotes {
+      background:rgba(7,14,34,.66); border:1px solid rgba(255,255,255,.08);
+      border-radius:14px; padding:14px; margin-bottom:16px;
+      font-size:13px; line-height:1.7; color:#dbe2f4; white-space:pre-wrap;
+    }
+    .uinstall {
+      width:100%; min-height:52px; border:none; border-radius:14px;
+      background:linear-gradient(135deg,#e9c066,#cf9a41);
+      color:#241a06; font-size:15px; font-weight:800; font-family:inherit;
+      display:flex; align-items:center; justify-content:center; gap:9px;
+      cursor:pointer; box-shadow:0 10px 26px rgba(207,154,65,.4);
+      transition:transform .12s ease, opacity .2s;
+    }
+    .uinstall:active { transform:scale(.97); }
+    .uinstall:disabled { opacity:.55; cursor:wait; }
+    .uprogress { margin-top:15px; }
+    .uprogress-row { display:flex; justify-content:space-between; font-size:12px; color:#cdd7ee; margin-bottom:7px; }
+    .uprogress-row b { color:#ecc578; }
+    .utrack { height:9px; border-radius:6px; background:rgba(255,255,255,.14); overflow:hidden; }
+    .ufill {
+      height:100%; width:0%; border-radius:6px;
+      background:linear-gradient(90deg,#c98f36,#f4d591,#c98f36);
+      background-size:200% 100%;
+      transition:width .25s ease;
+      animation:usheen 1.4s linear infinite;
+    }
+    @keyframes usheen { to { background-position:-200% 0; } }
+    .ustatus { font-size:12px; color:#9fb0d8; text-align:center; margin:11px 0 0; min-height:16px; }
+    .ulater {
+      display:block; margin:13px auto 0; padding:8px 14px;
+      background:none; border:none; color:#8ba0cc; font-size:12.5px; font-weight:650;
+      font-family:inherit; cursor:pointer; border-radius:10px;
+    }
+    .uoverlay.locked .ulater { display:none; }
+
     @media (min-width:560px) {
       .stats { grid-template-columns:repeat(4,1fr); }
     }
@@ -341,7 +421,28 @@
     <symbol id="ic-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
     <symbol id="ic-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></symbol>
     <symbol id="ic-flag" viewBox="0 0 24 24"><path d="M4 22V4c0-.6.4-1 1-1h14l-3 5 3 5H6"/><path d="M4 3v19"/></symbol>
+    <symbol id="ic-download" viewBox="0 0 24 24"><path d="M12 3v11"/><path d="m7 9 5 5 5-5"/><path d="M21 15v3a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3v-3"/></symbol>
   </svg>
+
+  <!-- Pantalla de actualización (estilo app: navy + dorado, animada) -->
+  <div class="uoverlay" id="updateView">
+    <div class="ucard">
+      <div class="uhead">
+        <span class="utile"><svg class="ic" style="width:20px;height:20px"><use href="#ic-download"/></svg></span>
+        <span>Nueva versión disponible</span>
+      </div>
+      <div class="ubadge" id="updVersion">Versión</div>
+      <p class="ulabel">Novedades:</p>
+      <div class="unotes" id="updNotes"></div>
+      <button class="uinstall" id="updInstall"><svg class="ic" style="width:19px;height:19px"><use href="#ic-download"/></svg><span>Instalar</span></button>
+      <div class="uprogress" id="updProgressBox" hidden>
+        <div class="uprogress-row"><span>Descargando actualización…</span><b id="updPct">0%</b></div>
+        <div class="utrack"><div class="ufill" id="updFill"></div></div>
+      </div>
+      <p class="ustatus" id="updStatus"></p>
+      <button class="ulater" id="updLater">Más tarde</button>
+    </div>
+  </div>
 
   <!-- Vistas -->
   <div class="login-wrap" id="loginView">
@@ -441,6 +542,8 @@
             <select id="cfgGoodbyeChannel"></select>
             <label class="fl">Canal de registros</label>
             <select id="cfgLogChannel"></select>
+            <label class="fl">Canal de actualizaciones de la app</label>
+            <select id="cfgUpdateChannel"></select>
             <button class="btn primary wide" id="btnSaveChannels" style="margin-top:14px"><svg class="ic"><use href="#ic-check"/></svg><span>Guardar canales</span></button>
           </div>
           <div class="card">

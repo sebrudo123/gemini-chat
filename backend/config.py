@@ -130,6 +130,11 @@ class Settings:
         self.smtp_user = os.environ.get("SMTP_USER", "")
         self.smtp_password = os.environ.get("SMTP_PASSWORD", "")
 
+        # --- Actualizaciones del APK del panel del bot ---
+        # El workflow de GitHub Actions publica cada APK nuevo cifrado con este
+        # token (header x-upload-token). Nunca se almacena en el repositorio.
+        self.bot_update_upload_token = os.environ.get("BOT_UPDATE_UPLOAD_TOKEN", "").strip()
+
         # --- Autenticación en dos pasos (TOTP) ---
         self.totp_issuer = os.environ.get("TOTP_ISSUER", "Core IA")
         self.require_2fa = os.environ.get("REQUIRE_2FA", "false").lower() in ("1", "true", "yes")

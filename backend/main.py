@@ -4170,6 +4170,7 @@ BOT_CONFIG_KEYS = (
     "welcome_channel_id",
     "goodbye_channel_id",
     "log_channel_id",
+    "update_channel_id",
     "min_account_age_days",
     "welcome_message",
     "goodbye_message",
@@ -4324,6 +4325,163 @@ async def admin_discord_bot_sync(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     record_audit(db, admin, "discord_bot.sync", "", "")
     return {"bot": _admin_bot_payload(request)}
+
+
+# --------------------------------------------------------------------------- #
+# Actualizaciones del APK del panel (manifest + descarga + aviso del bot)
+# --------------------------------------------------------------------------- #
+
+
+class BotUpdateUpload(BaseModel):
+    """Publicación de un APK nuevo, hecha por el workflow de GitHub Actions."""
+
+    version_code: int = Field(..., ge=0, le=2_147_483_000)
+    version_name: str = Field(..., min_length=1, max_length=32)
+    changelog: str = Field(default="", max_length=4000)
+    apk_base64: str = Field(..., min_length=100, max_length=90_000_000)
+
+
+BOT_UPDATE_MANIFEST_KEY = "bot:update:manifest"
+BOT_UPDATE_APK_KEY = "bot:update:apk"
+
+
+def _read_update_manifest(db: Session) -> dict[str, Any]:
+    """Lee el manifiesto de la última versión publicada (o vacío)."""
+    raw = get_setting(db, BOT_UPDATE_MANIFEST_KEY, "")
+    if not raw:
+        return {}
+    try:
+        manifest = json.loads(raw)
+    except ValueError:
+        return {}
+    return manifest if isinstance(manifest, dict) else {}
+
+
+async def _notify_bot_update(manifest: dict[str, Any]) -> int:
+    """Anuncia la nueva versión en Discord el bot mismo.
+
+    Publica en el canal de actualizaciones de cada servidor (o en el de
+    registros si no hay uno configurado). Nunca rompe la publicación del
+    manifest: los fallos de Discord se ignoran.
+    """
+    version = str(manifest.get("version_name") or "").strip()
+    changelog = str(manifest.get("changelog") or "").strip()
+    if not version:
+        return 0
+    content = f"Nueva versión de Core IA Bot: **{version}**"
+    if changelog:
+        content += f"\n\nNovedades:\n{changelog}"
+    content += (
+        "\n\nLa actualización se instala desde la app del panel "
+        "con el botón «Instalar»."
+    )
+    notified = 0
+    try:
+        guilds = await discord_bot.fetch_bot_guilds()
+    except Exception:  # noqa: BLE001 - sin conexión a Discord se omite el aviso
+        return 0
+    for guild in guilds:
+        config = discord_bot.load_guild_config(int(guild["id"]))
+        channel = config.get("update_channel_id") or config.get("log_channel_id")
+        if not channel:
+            continue
+        try:
+            await discord_bot.send_channel_message(int(channel), content)
+            notified += 1
+        except Exception:  # noqa: BLE001 - un servidor sin permisos no bloquea
+            continue
+    return notified
+
+
+@app.post("/api/bot/update/upload")
+async def bot_update_upload(
+    request: Request,
+    payload: BotUpdateUpload,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Publica un APK nuevo: guarda el binario, el manifest y avisa al bot.
+
+    Autenticado con el token de subida (BOT_UPDATE_UPLOAD_TOKEN) que usa el
+    workflow de Actions; solo existe en los secrets de GitHub y Render.
+    """
+    supplied = request.headers.get("x-upload-token", "")
+    expected = settings.bot_update_upload_token
+    if not expected or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(status_code=403, detail="Token de publicación inválido.")
+    try:
+        apk_bytes = base64.b64decode(payload.apk_base64, validate=True)
+    except Exception as exc:  # noqa: BLE001 - base64 inválido
+        raise HTTPException(status_code=400, detail="APK base64 inválido.") from exc
+    if len(apk_bytes) < 1024:
+        raise HTTPException(status_code=400, detail="El APK parece truncado.")
+    manifest = {
+        "version_name": payload.version_name,
+        "version_code": payload.version_code,
+        "changelog": payload.changelog.strip()[:4000],
+        "published_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "apk_size": len(apk_bytes),
+    }
+    set_setting(db, BOT_UPDATE_APK_KEY, payload.apk_base64)
+    set_setting(db, BOT_UPDATE_MANIFEST_KEY, json.dumps(manifest, ensure_ascii=False))
+    notified = 0
+    try:
+        notified = await _notify_bot_update(manifest)
+    except Exception:  # noqa: BLE001 - el aviso nunca bloquea la publicación
+        notified = 0
+    return {
+        "ok": True,
+        "published": manifest["published_at"],
+        "notified_guilds": notified,
+    }
+
+
+@app.get("/bot/update/check", include_in_schema=False)
+def bot_update_check(
+    request: Request,
+    current: int = 0,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Comprobar si hay una versión más nueva del APK del panel."""
+    manifest = _read_update_manifest(db)
+    if not manifest or "version_code" not in manifest:
+        return {
+            "has_update": False,
+            "current": current,
+            "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+    latest = int(manifest.get("version_code") or 0)
+    base = str(request.base_url).rstrip("/")
+    return {
+        "has_update": bool(latest > current),
+        "current": current,
+        "latest": latest,
+        "version_name": manifest.get("version_name", ""),
+        "version_code": latest,
+        "changelog": manifest.get("changelog", ""),
+        "published_at": manifest.get("published_at", ""),
+        "apk_url": f"{base}/bot/update/latest.apk",
+        "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+@app.get("/bot/update/latest.apk", include_in_schema=False)
+def bot_update_latest_apk(db: Session = Depends(get_db)) -> Response:
+    """Descarga del última APK publicado para el instalador de Android."""
+    apk_b64 = get_setting(db, BOT_UPDATE_APK_KEY, "")
+    if not apk_b64:
+        raise HTTPException(status_code=404, detail="No hay APK publicado todavía.")
+    try:
+        data = base64.b64decode(apk_b64)
+    except Exception as exc:  # noqa: BLE001 - datos corrompidos
+        raise HTTPException(status_code=502, detail="APK almacenado no válido.") from exc
+    return Response(
+        data,
+        media_type="application/vnd.android.package-archive",
+        headers={
+            "Content-Disposition": 'attachment; filename="coreia-bot.apk"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @app.get("/api/admin/health")

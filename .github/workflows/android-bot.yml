@@ -9,6 +9,11 @@ on:
       - "backend/main.py"
       - ".github/workflows/android-bot.yml"
   workflow_dispatch:
+    inputs:
+      changelog:
+        description: "Novedades de la versión (una mejora por línea)"
+        required: false
+        default: "Mejoras y arreglos de errores."
 
 permissions:
   contents: write
@@ -88,3 +93,40 @@ jobs:
           name: coreia-bot-apk
           path: androidbot/coreia-bot.apk
           if-no-files-found: error
+
+      - name: Publish update to backend
+        env:
+          UPLOAD_TOKEN: ${{ secrets.BACKEND_UPLOAD_TOKEN }}
+          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: 1.0.${{ github.run_number }}
+          CHANGELOG: ${{ inputs.changelog || 'Mejoras y arreglos de errores.' }}
+        run: |
+          python3 - <<'PY'
+          import base64, json, os, urllib.request
+
+          token = os.environ.get("UPLOAD_TOKEN", "").strip()
+          if not token:
+              print("Sin BACKEND_UPLOAD_TOKEN; el APK queda solo como artifact.")
+              raise SystemExit(0)
+
+          with open("coreia-bot.apk", "rb") as fh:
+              apk_b64 = base64.b64encode(fh.read()).decode()
+
+          body = json.dumps({
+              "version_code": int(os.environ["VERSION_CODE"]),
+              "version_name": os.environ["VERSION_NAME"],
+              "changelog": os.environ.get("CHANGELOG", "Mejoras y arreglos de errores."),
+              "apk_base64": apk_b64,
+          }).encode()
+
+          req = urllib.request.Request(
+              "https://gemini-chat-backend-vyrz.onrender.com/api/bot/update/upload",
+              data=body,
+              headers={
+                  "Content-Type": "application/json",
+                  "x-upload-token": token,
+              },
+          )
+          with urllib.request.urlopen(req, timeout=300) as res:
+              print("Backend:", res.read().decode())
+          PY

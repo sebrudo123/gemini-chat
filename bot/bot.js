@@ -308,6 +308,7 @@
     $("cfgWelcomeChannel").innerHTML = channelOptions(state.config.welcome_channel_id);
     $("cfgGoodbyeChannel").innerHTML = channelOptions(state.config.goodbye_channel_id);
     $("cfgLogChannel").innerHTML = channelOptions(state.config.log_channel_id);
+    $("cfgUpdateChannel").innerHTML = channelOptions(state.config.update_channel_id);
   }
 
   function renderTextSelects() {
@@ -441,6 +442,84 @@
   }
 
   /* ---------------------------------------------------------- */
+  /* Actualizaciones de la app (Android / instalador del APK)      */
+  /* ---------------------------------------------------------- */
+  function androidVersionCode() {
+    try {
+      if (window.CoreIAUpdate && window.CoreIAUpdate.getVersionCode) {
+        return parseInt(window.CoreIAUpdate.getVersionCode(), 10) || 0;
+      }
+    } catch (err) { /* navegador normal: no hay puente nativo */ }
+    return 0;
+  }
+
+  function onUpdateProgress(pct) {
+    var clamped = Math.min(100, Math.max(0, Number(pct) || 0));
+    $("updProgressBox").hidden = false;
+    $("updPct").textContent = Math.round(clamped) + "%";
+    $("updFill").style.width = clamped + "%";
+  }
+
+  function onUpdateError(message) {
+    var btn = $("updInstall");
+    btn.disabled = false;
+    $("updateView").classList.remove("locked");
+    $("updStatus").textContent = message || "No se pudo descargar la actualización.";
+  }
+
+  function closeUpdateView() {
+    $("updateView").classList.remove("show");
+    $("updStatus").textContent = "";
+  }
+
+  function showUpdate(data) {
+    $("updVersion").textContent = "Versión " + (data.version_name || "desconocida");
+    $("updNotes").textContent =
+      (data.changelog || "").trim() || "Mejoras y arreglos de errores.";
+    var btn = $("updInstall");
+    btn.disabled = false;
+    $("updProgressBox").hidden = true;
+    $("updFill").style.width = "0%";
+    if (window.CoreIAUpdate && window.CoreIAUpdate.installApk) {
+      btn.onclick = function () {
+        btn.disabled = true;
+        $("updateView").classList.add("locked");
+        $("updProgressBox").hidden = false;
+        try {
+          window.CoreIAUpdate.installApk(String(data.apk_url));
+        } catch (err) {
+          onUpdateError("El instalador no respondió.");
+        }
+      };
+    } else {
+      // Navegador normal: descarga directa del APK.
+      btn.onclick = function () { window.open(String(data.apk_url), "_blank"); };
+    }
+    $("updLater").onclick = closeUpdateView;
+    $("updateView").classList.add("show");
+  }
+
+  function checkUpdate() {
+    if (!window.CoreIAUpdate) return; // solo avisa dentro del APK
+    var current = androidVersionCode();
+    fetch("/bot/update/check?current=" + current)
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (data) {
+        if (data && data.has_update) showUpdate(data);
+      })
+      .catch(function () { /* sin conexión: no molesta */ });
+  }
+
+  window.CoreIAUI = {
+    onDownload: onUpdateProgress,
+    onInstalling: function () {
+      onUpdateProgress(100);
+      $("updStatus").textContent = "Abriendo el instalador de Android…";
+    },
+    onError: onUpdateError,
+  };
+
+  /* ---------------------------------------------------------- */
   /* Login con Discord, 2FA y hash de retorno                    */
   /* ---------------------------------------------------------- */
   function handlePending2fa(pendingToken) {
@@ -513,6 +592,7 @@
         welcome_channel_id: $("cfgWelcomeChannel").value,
         goodbye_channel_id: $("cfgGoodbyeChannel").value,
         log_channel_id: $("cfgLogChannel").value,
+        update_channel_id: $("cfgUpdateChannel").value,
       }, "Canales guardados.").then(renderStats);
     };
 
@@ -570,6 +650,7 @@
 
   bind();
   consumeHash();
+  setTimeout(checkUpdate, 700);
   if (state.token) {
     api("/api/admin/discord-bot")
       .then(function (data) {
