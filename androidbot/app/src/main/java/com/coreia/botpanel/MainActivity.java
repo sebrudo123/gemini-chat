@@ -28,11 +28,15 @@ public class MainActivity extends AppCompatActivity {
         settings.setDomStorageEnabled(true);
         settings.setLoadWithOverviewMode(true);
         settings.setUseWideViewPort(true);
+        // Nunca reutilizar el HTML viejo del caché: el panel vive en el backend
+        // y debe reflejarse igual que en la web después de cada deploy.
+        settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
 
         webView.setBackgroundColor(Color.parseColor("#171722"));
         webView.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
         webView.setWebViewClient(new WebViewClient());
-        webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+        // Aceleración por hardware (por defecto). El modo SOFTWARE causaba
+        // problemas de scroll/renderizado del panel en algunos WebViews.
 
         if (savedInstanceState != null && !url.isEmpty()) {
             webView.restoreState(savedInstanceState);
