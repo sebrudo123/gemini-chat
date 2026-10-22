@@ -60,6 +60,8 @@ public class MainActivity extends AppCompatActivity {
     private WebView webView;
     private BottomNavigationView bottomNav;
     private SwipeRefreshLayout swipe;
+    private View dashHost;
+    private boolean dashActive;
     private boolean loggedIn;
     private boolean overlayShown;
     /** Evita bucles: cuando Java marca la pestaña tras un aviso de JS. */
@@ -92,7 +94,7 @@ public class MainActivity extends AppCompatActivity {
         public void onView(final String name) {
             runOnUiThread(() -> {
                 if (suppressNavListener) return;
-                selectTabQuietly(name);
+                showTab(name);
             });
         }
 
@@ -142,6 +144,12 @@ public class MainActivity extends AppCompatActivity {
         webView = findViewById(com.coreia.botpanel.R.id.webview);
         bottomNav = findViewById(com.coreia.botpanel.R.id.bottom_nav);
         swipe = findViewById(com.coreia.botpanel.R.id.swipe);
+        dashHost = findViewById(com.coreia.botpanel.R.id.dashHost);
+        if (dashHost != null) {
+            LayoutInflater.from(this).inflate(
+                com.coreia.botpanel.R.layout.view_resumen,
+                (android.view.ViewGroup) dashHost, true);
+        }
 
         final View gear = findViewById(com.coreia.botpanel.R.id.btnGear);
         if (gear != null) {
@@ -223,10 +231,7 @@ public class MainActivity extends AppCompatActivity {
 
         bottomNav.setOnItemSelectedListener(item -> {
             if (suppressNavListener) return true;
-            final String tab = tabNameForItemId(item.getItemId());
-            if (tab != null) {
-                evaluateJs("window.CoreIAJS && CoreIAJS.switchView('" + tab + "');");
-            }
+            showTab(tabNameForItemId(item.getItemId()));
             return true;
         });
     }
@@ -252,6 +257,281 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    /**
+     * Centraliza el cambio de vista. "Resumen" se pinta nativa (item 1: app
+     * de verdad, sin WebView); el resto de pestañas vive en el panel web y
+     * se les pide el cambio por el puente CoreIAJS.switchView.
+     */
+    private void showTab(final String tab) {
+        if (tab == null || !loggedIn) return;
+        selectTabQuietly(tab);
+        if ("resumen".equals(tab)) {
+            dashActive = true;
+            if (dashHost != null) {
+                dashHost.setVisibility(View.VISIBLE);
+            }
+            if (webView != null) {
+                webView.setVisibility(View.GONE);
+            }
+            loadResumen();
+        } else {
+            dashActive = false;
+            if (dashHost != null) {
+                dashHost.setVisibility(View.GONE);
+            }
+            if (webView != null) {
+                webView.setVisibility(View.VISIBLE);
+            }
+            evaluateJs("window.CoreIAJS && CoreIAJS.switchView('" + tab + "');");
+        }
+    }
+
+    /** Carga los datos del Resumen nativo por el endpoint agregado. */
+    private void loadResumen() {
+        final String base = LoginActivity.apiBase();
+        if (base.isEmpty()) return;
+        final String token = getSharedPreferences(
+            LoginActivity.PREFS_NAME, MODE_PRIVATE)
+            .getString(LoginActivity.KEY_TOKEN_CACHE, "");
+        ApiClient.get(base + "/api/admin/discord-bot/app-home", token,
+            (code, body) -> runOnUiThread(() -> fillResumen(code, body)));
+    }
+
+    private void fillResumen(final int code, final String body) {
+        if (swipe != null && swipe.isRefreshing()) {
+            swipe.setRefreshing(false);
+        }
+        if (code != 200) return;
+        try {
+            final org.json.JSONObject data = new org.json.JSONObject(body);
+            renderBotStatus(data.optJSONObject("bot"));
+            renderGuilds(data.optJSONArray("guilds"));
+            renderStats(data.optJSONObject("stats"));
+            renderModlog(data.optJSONArray("modlog"));
+            final TextView sync = findViewById(com.coreia.botpanel.R.id.lastSync);
+            if (sync != null) {
+                final String hora = new java.text.SimpleDateFormat(
+                    "HH:mm", java.util.Locale.getDefault()).format(new java.util.Date());
+                sync.setText("Actualizado a las " + hora);
+            }
+        } catch (Exception e) {
+            // JSON incompleto: se conserva el render anterior sin caer.
+        }
+    }
+
+    private void renderBotStatus(final org.json.JSONObject bot) {
+        if (bot == null) return;
+        final TextView name = findViewById(com.coreia.botpanel.R.id.botName);
+        final TextView uptime = findViewById(com.coreia.botpanel.R.id.botUptime);
+        final TextView state = findViewById(com.coreia.botpanel.R.id.botState);
+        final View dotOk = findViewById(com.coreia.botpanel.R.id.botStateDot);
+        final TextView error = findViewById(com.coreia.botpanel.R.id.botError);
+        final boolean on = bot.optBoolean("running") && bot.optBoolean("ready");
+        if (name != null) {
+            name.setText(bot.optString("user", "Core IA"));
+        }
+        if (uptime != null) {
+            final long started = parseIsoAsMillis(bot.optString("started_at", ""));
+            if (started > 0) {
+                final long mins = (System.currentTimeMillis() - started) / 60000L;
+                uptime.setText(mins >= 60
+                    ? "Activo " + (mins / 60) + " h"
+                    : "Activo " + mins + " min");
+            } else {
+                uptime.setText("");
+            }
+        }
+        if (state != null) {
+            state.setText(on ? "En línea" : "Detenido");
+            state.setTextColor(on ? 0xFF22C55E : 0xFFF87171);
+        }
+        if (dotOk != null) {
+            dotOk.setBackgroundResource(on
+                ? com.coreia.botpanel.R.drawable.bg_dot_ok
+                : com.coreia.botpanel.R.drawable.bg_dot_bad);
+        }
+        if (error != null) {
+            final String last = bot.optString("last_error", "");
+            error.setVisibility(last.isEmpty() ? View.GONE : View.VISIBLE);
+            if (!last.isEmpty()) error.setText(last);
+        }
+    }
+
+    /** "2026-10-22T03:54:44.816398+00:00" → millis (0 si no se entiende). */
+    private static long parseIsoAsMillis(final String iso) {
+        try {
+            final java.text.SimpleDateFormat fmt = new java.text.SimpleDateFormat(
+                "yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US);
+            fmt.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+            return fmt.parse(iso).getTime();
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private void renderStats(final org.json.JSONObject stats) {
+        if (stats == null) return;
+        setStatText(com.coreia.botpanel.R.id.statMessages,
+            stats.optLong("messages_today", 0));
+        setStatText(com.coreia.botpanel.R.id.statWelcomes,
+            stats.optLong("welcomes", 0));
+        setStatText(com.coreia.botpanel.R.id.statVerifs,
+            stats.optLong("verifications", 0));
+        setStatText(com.coreia.botpanel.R.id.statMods,
+            stats.optLong("antiraid_triggers", 0)
+                + stats.optLong("antiraid_blocked", 0)
+                + stats.optLong("antispam_warn", 0)
+                + stats.optLong("antispam_timeout", 0)
+                + stats.optLong("antispam_kick", 0));
+    }
+
+    private void setStatText(final int id, final long value) {
+        final TextView tv = findViewById(id);
+        if (tv != null) tv.setText(String.valueOf(value));
+    }
+
+    private void renderGuilds(final org.json.JSONArray guilds) {
+        final LinearLayout host = findViewById(com.coreia.botpanel.R.id.guildList);
+        if (host == null) return;
+        host.removeAllViews();
+        if (guilds == null || guilds.length() == 0) {
+            host.addView(makeEmptyRow("El bot aún no está en ningún servidor."));
+            return;
+        }
+        for (int i = 0; i < guilds.length(); i++) {
+            final org.json.JSONObject g = guilds.optJSONObject(i);
+            if (g == null) continue;
+            final LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            row.setPadding(28, 20, 28, 20);
+
+            final TextView name = new TextView(this);
+            name.setLayoutParams(new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            final String title = g.optString("name", "Servidor");
+            name.setText(title.isEmpty() ? "Servidor" : title);
+            name.setTextColor(0xFFDDDDDD);
+            name.setTextSize(14f);
+            name.setTypeface(name.getTypeface(), android.graphics.Typeface.BOLD);
+
+            final TextView members = new TextView(this);
+            members.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+            final long count = g.optLong("member_count", 0);
+            members.setText(count > 0 ? membersLabel(count) : "");
+            members.setTextColor(0xFF8F7BFF);
+            members.setTextSize(12f);
+            members.setTypeface(members.getTypeface(), android.graphics.Typeface.BOLD);
+
+            row.addView(name);
+            row.addView(members);
+            host.addView(row);
+        }
+    }
+
+    private static String membersLabel(final long n) {
+        if (n >= 1000) return n / 1000 + "." + ((n % 1000) / 100) + "k";
+        return String.valueOf(n);
+    }
+
+    private void renderModlog(final org.json.JSONArray events) {
+        final LinearLayout host = findViewById(com.coreia.botpanel.R.id.modlogList);
+        if (host == null) return;
+        host.removeAllViews();
+        if (events == null || events.length() == 0) {
+            host.addView(makeEmptyRow("Sin eventos de moderación hoy."));
+            return;
+        }
+        for (int i = 0; i < events.length() && i < 6; i++) {
+            final org.json.JSONObject ev = events.optJSONObject(i);
+            if (ev == null) continue;
+            final String kind = modKindLabel(ev.optString("kind", ""));
+            if (kind == null) continue;
+            final LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.VERTICAL);
+            row.setPadding(28, 20, 28, 20);
+
+            final LinearLayout top = new LinearLayout(this);
+            top.setOrientation(LinearLayout.HORIZONTAL);
+            top.setGravity(android.view.Gravity.CENTER_VERTICAL);
+
+            final TextView title = new TextView(this);
+            title.setLayoutParams(new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            title.setText(kind);
+            title.setTextColor(0xFFDDDDDD);
+            title.setTextSize(13.5f);
+            title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
+
+            final TextView when = new TextView(this);
+            when.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+            when.setText(modTimeLabel(ev.optString("t", "")));
+            when.setTextColor(0xFF5F5F78);
+            when.setTextSize(11f);
+
+            top.addView(title);
+            top.addView(when);
+            row.addView(top);
+
+            final String detail = ev.optString("detail", "");
+            if (!detail.isEmpty()) {
+                final TextView sub = new TextView(this);
+                sub.setLayoutParams(new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT));
+                sub.setText(detail);
+                sub.setTextColor(0xFF7A7A92);
+                sub.setTextSize(12f);
+                row.addView(sub);
+            }
+            host.addView(row);
+        }
+    }
+
+    private TextView makeEmptyRow(final String text) {
+        final TextView empty = new TextView(this);
+        empty.setLayoutParams(new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT));
+        empty.setText(text);
+        empty.setTextColor(0xFF5F5F78);
+        empty.setTextSize(12.5f);
+        empty.setPadding(28, 26, 28, 26);
+        return empty;
+    }
+
+    private static String modKindLabel(final String kind) {
+        switch (kind) {
+            case "antiraid_trigger": return "Anti-raid: oleada detectada";
+            case "antiraid_block": return "Anti-raid: bloqueó oleada";
+            case "antispam_warn": return "Anti-spam: aviso";
+            case "antispam_timeout": return "Anti-spam: expulsión temporal";
+            case "antispam_kick": return "Anti-spam: expulsión";
+            case "ticket_close": return "Ticket cerrado";
+            case "ticket_transcript": return "Ticket: transcripción";
+            case "voice_temp_created": return "Sala temporal creada";
+            case "voice_temp_closed": return "Sala temporal cerrada";
+            default: return null;
+        }
+    }
+
+    private static String modTimeLabel(final String iso) {
+        try {
+            final java.text.SimpleDateFormat read = new java.text.SimpleDateFormat(
+                "yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US);
+            read.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+            final java.text.SimpleDateFormat out = new java.text.SimpleDateFormat(
+                "d MMM · HH:mm", new java.util.Locale("es"));
+            return out.format(read.parse(iso));
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
     /** La barra nativa solo se muestra con sesión iniciada y sin overlay de update. */
     private void updateNavVisibility() {
         final boolean show = loggedIn && !overlayShown;
@@ -268,18 +548,24 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /** Pull-to-refresh del WebView (solo cuando el panel está arriba). */
+    /** Pull-to-refresh del panel: resumen nativo cuando está visible. */
     private void setupSwipeRefresh() {
         if (swipe == null) return;
         swipe.setOnRefreshListener(() -> {
-            if (networkConnected && webView != null) {
+            if (!networkConnected) {
+                if (swipe.isRefreshing()) swipe.setRefreshing(false);
+                return;
+            }
+            if (dashActive) {
+                loadResumen();
+            } else if (webView != null) {
                 webView.reload();
-            } else if (swipe.isRefreshing()) {
-                swipe.setRefreshing(false);
             }
         });
-        swipe.setOnChildScrollUpCallback((parent, child) ->
-                webView != null && webView.getScrollY() > 0);
+        swipe.setOnChildScrollUpCallback((parent, child) -> {
+            if (dashActive) return false; // permitir pull del dashboard siempre
+            return webView != null && webView.getScrollY() > 0;
+        });
     }
 
     /** Banner nativo de conexidad (ConnectivityManager, sin permisos raros). */

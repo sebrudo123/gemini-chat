@@ -55,7 +55,7 @@ public class LoginActivity extends AppCompatActivity {
     private boolean working;
 
     /** URL del backend, derivada de la URL del panel (mismo host). */
-    private static String apiBase() {
+    public static String apiBase() {
         final String panelUrl = BuildConfig.PANEL_URL;
         try {
             URL url = new URL(panelUrl);

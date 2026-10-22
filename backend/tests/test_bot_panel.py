@@ -54,6 +54,7 @@ def test_bot_panel_redirects_slashless_to_slash(client):
 
 def test_bot_panel_pwa_assets(client):
     """El panel expone manifest y favicon (PWA instalable) y solo esos assets."""
+    """El panel expone manifest y favicon (PWA instalable) y solo esos assets."""
     manifest = client.get("/bot/manifest.json", follow_redirects=False)
     assert manifest.status_code == 200
     assert manifest.headers["content-type"].startswith("application/manifest")
@@ -63,6 +64,16 @@ def test_bot_panel_pwa_assets(client):
     assert favicon.headers["content-type"].startswith("image/svg")
     # Lista cerrada: paths fuera de la whitelist no se sirven.
     assert client.get("/bot/secrets.txt").status_code == 404
+
+
+def test_bot_app_home_shape(client):
+    """Endpoint agregado del Resumen nativo de la APK (una sola llamada)."""
+    response = client.get("/api/admin/discord-bot/app-home", headers=auth(FOUNDER_ID))
+    assert response.status_code == 200
+    data = response.json()
+    assert set(data.keys()) == {"bot", "guilds", "stats", "modlog"}
+    assert "running" in data["bot"]
+    assert "messages_today" in data["stats"]
 
 
 def test_bot_panel_endpoints_require_auth(client):

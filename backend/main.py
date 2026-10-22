@@ -5033,6 +5033,33 @@ def admin_bot_modlog(
     return {"events": mod_events[:limit]}
 
 
+@app.get("/api/admin/discord-bot/app-home")
+async def admin_bot_app_home(
+    _: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Todo lo que la APK pinta en su Resumen nativo, en una llamada sola.
+
+    Ahorra peticiones al abrir la app (Render frío mide). Los servidores
+    fallan "en silencio" (lista vacía) si el bot aún no arrancó.
+    """
+    try:
+        guilds = await discord_bot.fetch_bot_guilds()
+    except discord_bot.BotError:
+        guilds = []
+    stats = _admin_bot_stats_payload(db)
+    modlog = [
+        event for event in bot_extras.load_events()
+        if event.get("kind") in BOT_MOD_EVENT_KINDS
+    ][:6]
+    return {
+        "bot": bot_manager.status(),
+        "guilds": guilds[:8],
+        "stats": stats,
+        "modlog": modlog,
+    }
+
+
 def _backup_payload(db: Session) -> dict[str, Any]:
     """Snapshot JSON de la configuración del bot y de los extras."""
     settings_rows = (
