@@ -497,3 +497,33 @@ def test_events_endpoint_filters_by_since(client, monkeypatch):
 
     requerido = client.get("/api/admin/discord-bot/events")
     assert requerido.status_code in (401, 403)
+
+
+def test_config_theme_validation(client, monkeypatch):
+    """El tema acepta dark/light y un acento del preset; lo demás no pasa."""
+    guardadas: dict[str, str] = {}
+
+    monkeypatch.setattr(main.discord_bot, "save_guild_config",
+                        lambda gid, values: guardadas.update(values))
+    monkeypatch.setattr(main.discord_bot, "load_guild_config",
+                        lambda gid: {})
+    token_h = auth(FOUNDER_ID)
+
+    ok = client.patch(
+        "/api/admin/discord-bot/guilds/1551284673165000885/config",
+        json={"values": {"theme_mode": "light",
+                         "accent_color": "#22c55e"}},
+        headers=token_h,
+    )
+    assert ok.status_code == 200
+    assert guardadas["theme_mode"] == "light"
+    assert guardadas["accent_color"] == "#22c55e"
+
+    rechazo = client.patch(
+        "/api/admin/discord-bot/guilds/1551284673165000885/config",
+        json={"values": {"theme_mode": "neón", "accent_color": "#ff00ff"}},
+        headers=token_h,
+    )
+    # Ningún valor del preset válido → nada que guardar → 400 y sin cambios.
+    assert rechazo.status_code == 400
+    assert guardadas.get("accent_color") in ("", "#22c55e")
