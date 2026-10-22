@@ -295,6 +295,24 @@ def _resolve_role(guild: Any, config: dict[str, str], key: str) -> Any:
     return guild.get_role(role_id) if role_id else None
 
 
+def _command_ai_reply(
+    system_prompt: str, user_message: str, guild_name: str, user_name: str
+) -> str:
+    """IA para comandos propios del servidor (motor del panel)."""
+    import llm
+
+    fallback = (
+        f"Eres Core IA, bot del servidor {guild_name} de Discord. "
+        + f"El usuario se llama {user_name}. Contesta en español, breve y útil."
+    )
+    try:
+        text = llm.complete_text(user_message, system_instruction=(system_prompt or fallback))
+    except Exception:  # noqa: BLE001 - respondimos con aviso amable
+        LOG.exception("IA no disponible para comando propio")
+        return "Core IA todavía no tiene motor de IA disponible. Prueba de nuevo más tarde."
+    return text or "No pude generar una respuesta con IA ahora mismo."
+
+
 def _resolve_channel(guild: Any, config: dict[str, str], key: str) -> Any:
     channel_id = _snowflake(config.get(key))
     channel = guild.get_channel(channel_id) if channel_id else None
@@ -974,6 +992,77 @@ class BotManager:
             config,
         )
         return True
+
+    _CMD_COOLDOWN: "defaultdict[Any, float]" = defaultdict(float)
+
+    async def _custom_command(self, message: Any, config: dict[str, str]) -> bool:
+        """Comandos propios del servidor (item 3) y respuestas con IA.
+
+        `custom_commands` es JSON: [{"name": "/reglas", "response": "...",
+        "ai": true}]. El trigger casa la primera palabra del mensaje,
+        admitiendo prefijos "/", "!" o el nombre pelado; con `ai` la
+        respuesta la genera el motor propio usando `response` como
+        instrucciones. Cooldown corto por usuario para evitar bucles.
+        """
+        try:
+            raw = (config.get("custom_commands") or "").strip()
+            if not raw:
+                return False
+            try:
+                commands = json.loads(raw)
+            except (ValueError, TypeError):
+                return False
+            if not isinstance(commands, list) or not commands:
+                return False
+            content = (message.content or "").strip()
+            if not content:
+                return False
+            parts = content.split(maxsplit=1)
+            first = parts[0].lower().lstrip("!/").strip()
+            args = parts[1].strip() if len(parts) > 1 else ""
+            if not first:
+                return False
+            now = time.time()
+            for command in commands:
+                try:
+                    name = str((command or {}).get("name") or "").strip().lstrip("!/").lower()
+                except (TypeError, ValueError):
+                    name = ""
+                if not name or name != first:
+                    continue
+                guild_user = (message.guild.id, message.author.id)
+                if now - self._CMD_COOLDOWN[guild_user] < 15:
+                    return True
+                self._CMD_COOLDOWN[guild_user] = now
+                response = str((command or {}).get("response") or "").strip()
+                wants_ai = str((command or {}).get("ai") or "").lower() in ("1", "true", "on", "yes")
+                try:
+                    if wants_ai:
+                        reply = await asyncio.to_thread(
+                            _command_ai_reply,
+                            response,
+                            args or content,
+                            message.guild.name if message.guild is not None else "",
+                            message.author.display_name,
+                        )
+                    else:
+                        reply = response or "Comando configurado sin respuesta todavía."
+                    if reply:
+                        await message.reply(
+                            content=reply[:1900],
+                            mention_author=True,
+                        )
+                        bot_extras.record_event(
+                            "custom_command",
+                            f"Comando {name} · {message.author.display_name}",
+                            str(message.guild.id) if message.guild is not None else "",
+                        )
+                except Exception:  # noqa: BLE001 - nunca rompe el bot
+                    LOG.exception("Error respondiendo comando propio %s", name)
+                return True
+            return False
+        except Exception:  # noqa: BLE001 - nunca rompe el flujo de XP
+            return False
 
     async def _antispam_check(self, message: Any, config: dict[str, str]) -> bool:
         """Protección anti-spam por mensaje. True si se debe ignorar el mensaje."""
@@ -2067,6 +2156,8 @@ class BotManager:
                     return
                 config = await asyncio.to_thread(load_guild_config, message.guild.id)
                 if await self._antispam_check(message, config):
+                    return
+                if await self._custom_command(message, config):
                     return
                 if (config.get("levels_enabled") or "").lower() not in ("1", "true", "on"):
                     return

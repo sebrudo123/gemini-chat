@@ -315,6 +315,11 @@
     .sbar.now { background:linear-gradient(180deg,#ffb457,#e08a2d); }
     .scol span { font-size:9.5px; color:var(--faint); margin-top:5px; white-space:nowrap; }
 
+    .cmd-row {
+      border:1px solid var(--stroke-2); border-radius:12px; padding:12px; margin-top:10px;
+      background:var(--card-2);
+    }
+
     /* ---------- Login ---------- */
     .login-wrap {
       display:flex; align-items:center; justify-content:center;
@@ -662,6 +667,17 @@
             <select id="cfgUpdateChannel"></select>
             <button class="btn primary wide" id="btnSaveChannels" style="margin-top:14px"><svg class="ic"><use href="#ic-check"/></svg><span>Guardar canales</span></button>
           </div>
+          <div class="card">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-gear"/></svg></span>Comandos personalizados</h2>
+            <p class="sub">Tus propios comandos del servidor: respuesta fija o generada con IA. La gente escribe <b>/nombre</b> en este servidor y el bot responde.</p>
+            <div class="list" id="cmdList"><div class="skeleton">Cargando…</div></div>
+            <div class="row" style="gap:8px;margin-top:12px">
+              <button class="btn ghostish" id="btnCmdAdd" style="flex:1"><span>Añadir comando</span></button>
+              <button class="btn primary" id="btnCmdSave" style="flex:1"><svg class="ic"><use href="#ic-check"/></svg><span>Guardar comandos</span></button>
+            </div>
+            <p class="mini" style="margin-top:8px">Sirve para reglas, agenda, dudas frecuentes (respondidas con IA) y textos fijos.</p>
+          </div>
+
           <div class="card">
             <h2><span class="tile"><svg class="ic"><use href="#ic-userplus"/></svg></span>Mensaje de bienvenida</h2>
             <p class="sub">Se envía cuando alguien entra al servidor. Toca un placeholder para insertarlo en el texto.</p>

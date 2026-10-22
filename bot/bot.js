@@ -95,6 +95,7 @@
     guildId: LS.getItem("coreia_bot_guild") || "",
     inventory: null,
     config: {},
+    commands: [],
   };
 
   /* Modo app (la APK abre el panel con ?ui=app): nunca se muestra el login
@@ -344,7 +345,67 @@
 
   function refreshConfig() {
     return api("/api/admin/discord-bot/guilds/" + state.guildId + "/config")
-      .then(function (data) { state.config = data.config || {}; });
+      .then(function (data) {
+        state.config = data.config || {};
+        try {
+          var parsed = JSON.parse(state.config.custom_commands || "[]");
+          state.commands = Array.isArray(parsed) ? parsed : [];
+        } catch (err) {
+          state.commands = [];
+        }
+        renderCommands();
+      });
+  }
+
+  /* ---------------------------------------------------------- */
+  /* Comandos personalizados (respuesta fija o con IA)           */
+  /* ---------------------------------------------------------- */
+  function renderCommands() {
+    var host = $("cmdList");
+    if (!host) return;
+    if (!state.commands.length) {
+      host.innerHTML = '<div class="skeleton">Sin comandos todavía. Añade el primero: por ejemplo <b>/reglas</b>.</div>';
+      return;
+    }
+    var html = "";
+    for (var i = 0; i < state.commands.length; i++) {
+      var c = state.commands[i];
+      var name = (c.name || "").replace(/</g, "&lt;");
+      var resp = (c.response || "").replace(/</g, "&lt;");
+      var aiOn = String(c.ai).toLowerCase() === "true" ? " checked" : "";
+      html += '<div class="cmd-row" data-i="' + i + '">'
+        + '<input class="cmd-name" placeholder="/nombre-del-comando" value="' + name + '">'
+        + '<textarea class="cmd-resp" style="margin-top:8px;min-height:56px"'
+        + ' placeholder="Con IA: instrucciones para responder (ej. Dudas sobre el servidor).'
+        + ' Sin IA: texto exacto que envía el bot.">' + resp + '</textarea>'
+        + '<label class="switch"><span>Responder con IA</span>'
+        + '<input type="checkbox" class="cmd-ai"' + aiOn + '></label>'
+        + '<button class="btn danger wide cmd-rm" style="font-size:12px" data-rm="' + i + '">'
+        + 'Quitar este comando</button></div>';
+    }
+    host.innerHTML = html;
+  }
+
+  function pullCommandsFromDom() {
+    var rows = document.querySelectorAll("#cmdList .cmd-row");
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      var idx = row.getAttribute("data-i");
+      if (idx === null || !state.commands[idx]) continue;
+      state.commands[idx].name = row.querySelector(".cmd-name").value.trim();
+      state.commands[idx].response = row.querySelector(".cmd-resp").value.trim();
+      state.commands[idx].ai = row.querySelector(".cmd-ai").checked;
+    }
+  }
+
+  function normalizeCommand(c) {
+    var name = String(c.name || "").trim().replace(/^![/]*/, "/");
+    if (!name || name === "/") name = name || "";
+    return {
+      name: name,
+      response: String(c.response || "").trim(),
+      ai: !!c.ai,
+    };
   }
 
   function refreshAll() {
@@ -1432,6 +1493,48 @@
     $("loginBtn").onclick = loginEmail;
     $("tokenBtn").onclick = loginToken;
     $("btnLogout").onclick = logout;
+    $("btnCmdAdd").onclick = function () {
+      pullCommandsFromDom();
+      state.commands.push({ name: "/", response: "", ai: false });
+      renderCommands();
+    };
+    $("btnCmdSave").onclick = function () {
+      if (!state.guildId) {
+        toast("Selecciona antes un servidor.", "err");
+        return;
+      }
+      pullCommandsFromDom();
+      var clean = [];
+      var names = {};
+      var sentidos = 0;
+      for (var i = 0; i < state.commands.length; i++) {
+        var command = normalizeCommand(state.commands[i]);
+        if (!command.name) {
+          toast("Hay comandos sin nombre. Ponles nombres o quítalos.", "err");
+          return;
+        }
+        if (names[command.name]) {
+          toast("El comando " + command.name + " está duplicado.", "err");
+          return;
+        }
+        names[command.name] = true;
+        clean.push(command);
+        sentidos += 1;
+      }
+      saveConfig(
+        { custom_commands: JSON.stringify(clean) },
+        "Comandos guardados (" + sentidos + "). El bot los usa al instante."
+      );
+    };
+    document.addEventListener("click", function (ev) {
+      var target = ev.target;
+      if (!target || !target.getAttribute) return;
+      var rm = target.getAttribute("data-rm");
+      if (rm === null) return;
+      pullCommandsFromDom();
+      state.commands.splice(parseInt(rm, 10), 1);
+      renderCommands();
+    });
     $("btnStart").onclick = start;
     $("btnStop").onclick = stop;
     $("btnSync").onclick = sync;

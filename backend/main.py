@@ -1275,9 +1275,15 @@ _PANEL_ASSETS: dict[str, str] = {
 }
 
 
-@app.get("/bot/{asset:path}", include_in_schema=False)
+@app.get("/bot/{asset}", include_in_schema=False)
 def serve_bot_panel_asset(asset: str) -> FileResponse:
-    """Assets estáticos del panel (lista cerrada para evitar traversals)."""
+    """Assets estáticos del panel (lista cerrada para evitar traversals).
+
+    Solo acepta archivos de primer nivel (sin barras): `/bot/update/check`
+    y demás rutas profundas del update quedan fuera del patrón.
+    """
+    if "/" in asset:
+        raise HTTPException(status_code=404, detail="Asset del panel no disponible.")
     ctype = _PANEL_ASSETS.get(asset)
     if ctype is None:
         raise HTTPException(status_code=404, detail="Asset del panel no disponible.")
@@ -4401,6 +4407,8 @@ BOT_CONFIG_KEYS = (
     "ticket_category_id",
     "ticket_staff_role_id",
     "ticket_transcript_enabled",
+    # Comandos propios del servidor (con IA opcional) — item 3
+    "custom_commands",
     # Anti-raid: oleada de entradas de cuentas nuevas
     "antiraid_enabled",
     "antiraid_joins",
