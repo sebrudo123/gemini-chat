@@ -168,6 +168,11 @@
     if (el) el.style.display = show ? "flex" : "none";
   }
 
+  function setNetBanner(offline) {
+    var el = $("netBanner");
+    if (el) el.className = offline ? "netbanner show" : "netbanner";
+  }
+
   function handleAuthSuccess(token) {
     state.token = token;
     LS.setItem(TOKEN_KEY, token);
@@ -1376,6 +1381,13 @@
   }
 
   function bind() {
+    /* Estado de conexión: banner arriba y reintento del panel al volver internet. */
+    setNetBanner(!window.navigator.onLine);
+    window.addEventListener("offline", function () { setNetBanner(true); });
+    window.addEventListener("online", function () {
+      setNetBanner(false);
+      if (state.token) refreshAll();
+    });
     /* Insignia de versión: confirma en pantalla qué corre el dispositivo. */
     try {
       updateVerBadge(androidVersionCode());

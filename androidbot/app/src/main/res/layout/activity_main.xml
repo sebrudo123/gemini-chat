@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Shell nativo de la APK: el panel vive en el WebView y la barra inferior
-     es un componente nativo (estilo ChatGPT). Sin chrome de navegador. -->
+<!-- Shell nativo de la APK: barra superior nativa (título + engranaje de
+     ajustes), el panel en el WebView con pull-to-refresh, banner de red y
+     la barra inferior nativa (estilo ChatGPT). Sin chrome de navegador. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/shell_root"
@@ -9,16 +10,73 @@
     android:orientation="vertical"
     android:background="#15151f">
 
+    <LinearLayout
+        android:id="@+id/topbar"
+        android:layout_width="match_parent"
+        android:layout_height="54dp"
+        android:background="#191926"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="14dp"
+        android:paddingEnd="10dp">
+
+        <ImageView
+            android:layout_width="34dp"
+            android:layout_height="34dp"
+            android:background="@drawable/bg_logo_circle"
+            android:contentDescription="@string/app_name"
+            android:padding="7dp"
+            android:src="@drawable/splash_logo" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:layout_weight="1"
+            android:text="@string/app_name"
+            android:textColor="#ffffff"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <ImageView
+            android:id="@+id/btnGear"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Ajustes"
+            android:padding="9dp"
+            android:src="@drawable/ic_gear"
+            app:tint="#7a7a92" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/netBanner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#3a2026"
+        android:gravity="center"
+        android:padding="6dp"
+        android:text="@string/net_banner"
+        android:textColor="#ffb0bd"
+        android:textSize="12sp"
+        android:visibility="gone" />
+
     <FrameLayout
         android:id="@+id/web_container"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1">
 
-        <WebView
-            android:id="@+id/webview"
+        <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+            android:id="@+id/swipe"
             android:layout_width="match_parent"
-            android:layout_height="match_parent" />
+            android:layout_height="match_parent">
+
+            <WebView
+                android:id="@+id/webview"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+        </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
     </FrameLayout>
 
     <com.google.android.material.bottomnavigation.BottomNavigationView

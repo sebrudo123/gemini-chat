@@ -1,0 +1,21 @@
+{
+  "name": "Core IA Bot",
+  "short_name": "Core IA",
+  "description": "Panel de administración del bot de Discord Core IA",
+  "id": "/bot/",
+  "start_url": "/bot/",
+  "scope": "/bot/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#12121c",
+  "theme_color": "#15151f",
+  "lang": "es",
+  "icons": [
+    {
+      "src": "/bot/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

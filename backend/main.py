@@ -1269,6 +1269,24 @@ def serve_bot_panel_js() -> FileResponse:
     return FileResponse(path, media_type="application/javascript")
 
 
+_PANEL_ASSETS: dict[str, str] = {
+    "manifest.json": "application/manifest+json",
+    "favicon.svg": "image/svg+xml",
+}
+
+
+@app.get("/bot/{asset:path}", include_in_schema=False)
+def serve_bot_panel_asset(asset: str) -> FileResponse:
+    """Assets estáticos del panel (lista cerrada para evitar traversals)."""
+    ctype = _PANEL_ASSETS.get(asset)
+    if ctype is None:
+        raise HTTPException(status_code=404, detail="Asset del panel no disponible.")
+    path = BOT_PANEL_ROOT / asset
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Asset del panel no disponible.")
+    return FileResponse(path, media_type=ctype, headers={"Cache-Control": "public, max-age=300"})
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     """Liveness: el proceso está vivo."""

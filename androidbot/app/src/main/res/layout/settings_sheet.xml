@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hoja nativa de ajustes: sesión, versión, buscar actualizaciones y
+     cerrar sesión. Abre con el engranaje de la barra superior. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="#191926"
+    android:orientation="vertical"
+    android:paddingStart="20dp"
+    android:paddingEnd="20dp"
+    android:paddingBottom="26dp">
+
+    <View
+        android:layout_width="44dp"
+        android:layout_height="4dp"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="10dp"
+        android:background="#32324a" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:text="@string/settings_title"
+        android:textColor="#ffffff"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/settings_hint"
+        android:textColor="#6f6f88"
+        android:textSize="12sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:background="#202030"
+        android:orientation="vertical"
+        android:padding="14dp">
+
+        <TextView
+            android:id="@+id/settingsEmail"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:drawablePadding="8dp"
+            android:textColor="#d9d9e6"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/settingsVersion"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="#7a7a92"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnCheckUpdate"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:layout_marginTop="18dp"
+        android:text="@string/settings_check_updates"
+        android:textAllCaps="false"
+        android:textColor="#aab4ff"
+        android:textSize="14sp"
+        app:backgroundTint="#20203a"
+        app:cornerRadius="14dp"
+        app:rippleColor="#228fa0ff"
+        app:strokeColor="#44586bff"
+        app:strokeWidth="1dp" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnLogoutApp"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:layout_marginTop="10dp"
+        android:text="@string/settings_logout"
+        android:textAllCaps="false"
+        android:textColor="#ff8fa3"
+        android:textSize="14sp"
+        app:backgroundTint="#2a1b22"
+        app:cornerRadius="14dp"
+        app:rippleColor="#33ff8fa3"
+        app:strokeColor="#556b2733"
+        app:strokeWidth="1dp" />
+</LinearLayout>

@@ -9,7 +9,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Core IA Bot" />
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="icon" type="image/svg+xml" href="/bot/favicon.svg" />
+  <link rel="manifest" href="/bot/manifest.json" />
   <title>Core IA Bot</title>
   <script>
     /* Sin flash de login en la APK: marca app-ui ANTES del primer pintado */
@@ -290,6 +291,15 @@
     .toast.ok { border-color:rgba(34,197,94,.5); }
     .toast.err { border-color:rgba(248,113,113,.5); }
 
+    /* Banner de estado de conexión (arriba, no molesta) */
+    .netbanner {
+      position:fixed; left:0; right:0; top:0; z-index:90;
+      background:#3a2026; border-bottom:1px solid rgba(248,113,113,.35);
+      color:#ffb0bd; font-size:12px; text-align:center; padding:7px 12px;
+      transform:translateY(-100%); transition:transform .25s ease; pointer-events:none;
+    }
+    .netbanner.show { transform:translateY(0); }
+
     .msgbox { display:none; font-size:12px; padding:10px 12px; border-radius:var(--r-sm); margin-bottom:12px; line-height:1.5; }
     .msgbox.show { display:block; }
     .msgbox.err { background:rgba(248,113,113,.1); border:1px solid rgba(248,113,113,.35); color:var(--danger); }
@@ -434,6 +444,7 @@
   </style>
 </head>
 <body>
+  <div class="netbanner" id="netBanner">Sin conexión — el panel seguirá cuando vuelva tu internet</div>
   <div id="appBoot" style="display:none">
     <div class="boot-dot"></div>
     <div style="color:#8f8fa8;font-size:13px">Abriendo tu panel de Core IA…</div>

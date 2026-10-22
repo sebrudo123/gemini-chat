@@ -52,6 +52,19 @@ def test_bot_panel_redirects_slashless_to_slash(client):
     assert response.headers["location"].endswith("/bot/")
 
 
+def test_bot_panel_pwa_assets(client):
+    """El panel expone manifest y favicon (PWA instalable) y solo esos assets."""
+    manifest = client.get("/bot/manifest.json", follow_redirects=False)
+    assert manifest.status_code == 200
+    assert manifest.headers["content-type"].startswith("application/manifest")
+    assert '"Core IA Bot"' in manifest.text
+    favicon = client.get("/bot/favicon.svg", follow_redirects=False)
+    assert favicon.status_code == 200
+    assert favicon.headers["content-type"].startswith("image/svg")
+    # Lista cerrada: paths fuera de la whitelist no se sirven.
+    assert client.get("/bot/secrets.txt").status_code == 404
+
+
 def test_bot_panel_endpoints_require_auth(client):
     assert client.get("/api/admin/discord-bot/guilds").status_code == 401
     assert client.get("/api/admin/discord-bot/guilds/123/inventory").status_code == 401

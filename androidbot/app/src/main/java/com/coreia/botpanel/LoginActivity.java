@@ -38,6 +38,11 @@ public class LoginActivity extends AppCompatActivity {
     private static final String KEY_TOKEN = "panel_token";
     private static final String KEY_EMAIL = "panel_email";
 
+    /** Acceso del shell principal a la misma sesión (ajustes, cerrar sesión). */
+    public static final String PREFS_NAME = PREFS;
+    public static final String KEY_TOKEN_CACHE = KEY_TOKEN;
+    public static final String KEY_EMAIL_CACHE = KEY_EMAIL;
+
     private TextInputEditText inputEmail;
     private TextInputEditText inputPass;
     private TextInputEditText inputTotp;

@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Aviso nativo "Sin conexión" (ConnectivityManager) -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Instalar el APK de una actualización descargada por la propia app -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 

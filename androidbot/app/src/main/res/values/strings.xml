@@ -6,4 +6,9 @@
     <string name="nav_mensajes">Mensajes</string>
     <string name="nav_extras">Extras</string>
     <string name="nav_anuncios">Anuncios</string>
+    <string name="net_banner">Sin conexión — la app seguirá cuando vuelva tu internet</string>
+    <string name="settings_title">Ajustes</string>
+    <string name="settings_hint">Sesión de la app de Core IA Bot</string>
+    <string name="settings_check_updates">Buscar actualizaciones</string>
+    <string name="settings_logout">Cerrar sesión</string>
 </resources>

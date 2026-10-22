@@ -1,15 +1,23 @@
 package com.coreia.botpanel;
 
 import android.annotation.SuppressLint;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.os.Bundle;
+import android.view.LayoutInflater;
 import android.view.View;
+import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.TextView;
+import android.widget.Toast;
 
 import java.io.BufferedInputStream;
 import java.io.File;
@@ -20,8 +28,10 @@ import java.net.URL;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import com.google.android.material.bottomnavigation.BottomNavigationView;
+import com.google.android.material.bottomsheet.BottomSheetDialog;
 
 /**
  * Shell nativo del panel de Core IA Bot.
@@ -49,10 +59,12 @@ public class MainActivity extends AppCompatActivity {
 
     private WebView webView;
     private BottomNavigationView bottomNav;
+    private SwipeRefreshLayout swipe;
     private boolean loggedIn;
     private boolean overlayShown;
     /** Evita bucles: cuando Java marca la pestaña tras un aviso de JS. */
     private boolean suppressNavListener;
+    private boolean networkConnected = true;
 
     /** Puente que usa el panel para comprobación e instalación de actualizaciones. */
     private class UpdateBridge {
@@ -129,6 +141,14 @@ public class MainActivity extends AppCompatActivity {
         setContentView(com.coreia.botpanel.R.layout.activity_main);
         webView = findViewById(com.coreia.botpanel.R.id.webview);
         bottomNav = findViewById(com.coreia.botpanel.R.id.bottom_nav);
+        swipe = findViewById(com.coreia.botpanel.R.id.swipe);
+
+        final View gear = findViewById(com.coreia.botpanel.R.id.btnGear);
+        if (gear != null) {
+            gear.setOnClickListener(v -> showSettingsSheet());
+        }
+        setupSwipeRefresh();
+        registerNetworkCallback();
 
         final WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -140,7 +160,16 @@ public class MainActivity extends AppCompatActivity {
         settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
 
         webView.setBackgroundColor(Color.parseColor("#15151f"));
-        webView.setWebViewClient(new WebViewClient());
+        webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView view, final String url) {
+                super.onPageFinished(view, url);
+                // El recargado manual (pull) ya terminó: quita el indicador.
+                if (swipe != null && swipe.isRefreshing()) {
+                    swipe.setRefreshing(false);
+                }
+            }
+        });
 
         webView.addJavascriptInterface(new UpdateBridge(), "CoreIAUpdate");
         webView.addJavascriptInterface(new NativeBridge(), "CoreIAAndroid");
@@ -226,9 +255,201 @@ public class MainActivity extends AppCompatActivity {
     /** La barra nativa solo se muestra con sesión iniciada y sin overlay de update. */
     private void updateNavVisibility() {
         final boolean show = loggedIn && !overlayShown;
+        final View topbar = findViewById(com.coreia.botpanel.R.id.topbar);
+        if (topbar != null) {
+            topbar.setVisibility(show ? View.VISIBLE : View.GONE);
+        }
         if (bottomNav != null) {
             bottomNav.setVisibility(show ? View.VISIBLE : View.GONE);
         }
+        final TextView banner = findViewById(com.coreia.botpanel.R.id.netBanner);
+        if (banner != null) {
+            banner.setVisibility(show && !networkConnected ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    /** Pull-to-refresh del WebView (solo cuando el panel está arriba). */
+    private void setupSwipeRefresh() {
+        if (swipe == null) return;
+        swipe.setOnRefreshListener(() -> {
+            if (networkConnected && webView != null) {
+                webView.reload();
+            } else if (swipe.isRefreshing()) {
+                swipe.setRefreshing(false);
+            }
+        });
+        swipe.setOnChildScrollUpCallback((parent, child) ->
+                webView != null && webView.getScrollY() > 0);
+    }
+
+    /** Banner nativo de conexidad (ConnectivityManager, sin permisos raros). */
+    private void registerNetworkCallback() {
+        try {
+            final ConnectivityManager cm = (ConnectivityManager)
+                getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return;
+            final android.net.NetworkCallback cb = new android.net.NetworkCallback() {
+                @Override
+                public void onAvailable(final Network network) {
+                    networkConnected = true;
+                    runOnUiThread(() -> {
+                        final TextView banner = findViewById(com.coreia.botpanel.R.id.netBanner);
+                        if (banner != null) banner.setVisibility(View.GONE);
+                    });
+                }
+
+                @Override
+                public void onLost(final Network network) {
+                    networkConnected = isConnectedNow(cm);
+                    runOnUiThread(() -> {
+                        final boolean down = !networkConnected;
+                        if (down) {
+                            Toast.makeText(MainActivity.this,
+                                "Sin conexión a internet", Toast.LENGTH_SHORT).show();
+                        }
+                        updateNavVisibility();
+                    });
+                }
+            };
+            final android.net.NetworkRequest req = new android.net.NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build();
+            cm.registerNetworkCallback(req, cb);
+            networkConnected = isConnectedNow(cm);
+        } catch (Exception e) {
+            // Sin el aviso la app sigue funcionando igual.
+        }
+    }
+
+    private boolean isConnectedNow(final ConnectivityManager cm) {
+        final Network n = cm != null
+            ? cm.getActiveNetwork() : null;
+        if (n == null) return false;
+        final NetworkCapabilities caps = cm.getNetworkCapabilities(n);
+        return caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+    }
+
+    /** Hoja nativa de Ajustes: sesión, versión, updates y cerrar sesión. */
+    private void showSettingsSheet() {
+        final BottomSheetDialog sheet = new BottomSheetDialog(this);
+        sheet.setContentView(
+            LayoutInflater.from(this).inflate(
+                com.coreia.botpanel.R.layout.settings_sheet, null, false));
+
+        final TextView email = sheet.findViewById(com.coreia.botpanel.R.id.settingsEmail);
+        final TextView version = sheet.findViewById(com.coreia.botpanel.R.id.settingsVersion);
+        final View check = sheet.findViewById(com.coreia.botpanel.R.id.btnCheckUpdate);
+        final View logoutBtn = sheet.findViewById(com.coreia.botpanel.R.id.btnLogoutApp);
+
+        if (email != null) {
+            final String saved = getSharedPreferences(LoginActivity.PREFS_NAME, MODE_PRIVATE)
+                .getString(LoginActivity.KEY_EMAIL_CACHE, "");
+            email.setText(saved == null || saved.isEmpty()
+                ? "Sesión activa de Core IA" : "Sesión: " + saved);
+        }
+        if (version != null) {
+            version.setText("Versión " + com.coreia.botpanel.BuildConfig.VERSION_NAME
+                + " (" + com.coreia.botpanel.BuildConfig.VERSION_CODE + ")");
+        }
+        if (check != null) {
+            check.setOnClickListener(v -> {
+                sheet.dismiss();
+                checkForUpdate(true);
+            });
+        }
+        if (logoutBtn != null) {
+            logoutBtn.setOnClickListener(v -> {
+                sheet.dismiss();
+                logoutFromApp();
+            });
+        }
+        sheet.show();
+    }
+
+    /** Busca la última release y, si es más nueva, ofrece instalarla. */
+    private void checkForUpdate(final boolean manual) {
+        Toast.makeText(this, "Buscando actualizaciones…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            String apkUrl = "";
+            long latestCode = -1;
+            try {
+                final HttpURLConnection conn = (HttpURLConnection) new URL(
+                    "https://api.github.com/repos/sebrudo123/gemini-chat/releases/latest")
+                    .openConnection();
+                conn.setConnectTimeout(12000);
+                conn.setReadTimeout(20000);
+                conn.setRequestProperty("Accept", "application/vnd.github+json");
+                conn.setRequestProperty("User-Agent", "CoreIABotPanel-Android/1.0");
+                if (conn.getResponseCode() == 200) {
+                    final StringBuilder buf = new StringBuilder();
+                    final InputStream in = new BufferedInputStream(conn.getInputStream());
+                    final byte[] chunk = new byte[4096];
+                    int n;
+                    while ((n = in.read(chunk)) != -1) buf.append(new String(chunk, 0, n));
+                    in.close();
+                    final org.json.JSONObject rel = new org.json.JSONObject(buf.toString());
+                    latestCode = parseTagVersion(rel.optString("tag_name", ""));
+                    final org.json.JSONArray assets = rel.optJSONArray("assets");
+                    if (assets != null) {
+                        for (int i = 0; i < assets.length(); i++) {
+                            final org.json.JSONObject a = assets.getJSONObject(i);
+                            if ("coreia-bot.apk".equals(a.optString("name", ""))) {
+                                apkUrl = a.optString("browser_download_url", "");
+                                break;
+                            }
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                apkUrl = "";
+            }
+            final String url = apkUrl;
+            final long code = latestCode;
+            runOnUiThread(() -> {
+                if (code >= 0 && code > com.coreia.botpanel.BuildConfig.VERSION_CODE
+                        && !url.isEmpty()) {
+                    Toast.makeText(this, "Descargando la nueva versión…",
+                        Toast.LENGTH_LONG).show();
+                    downloadAndInstall(url);
+                } else if (manual) {
+                    Toast.makeText(this, code < 0
+                        ? "No se pudo comprobar. Revisa tu internet."
+                        : "Ya tienes la última versión (" + com.coreia.botpanel.BuildConfig.VERSION_NAME + ")",
+                        Toast.LENGTH_LONG).show();
+                }
+            });
+        }).start();
+    }
+
+    /** "bot-v1.0.25" → 25; sin match funciona de señal desconocida (-1). */
+    private static long parseTagVersion(final String tag) {
+        try {
+            return Long.parseLong(tag.replaceAll(".*v", "").trim());
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    /** Cerrar sesión desde Ajustes: borra credenciales nativas y de sesión. */
+    private void logoutFromApp() {
+        try {
+            getSharedPreferences(LoginActivity.PREFS_NAME, MODE_PRIVATE).edit()
+                .remove(LoginActivity.KEY_TOKEN_CACHE).apply();
+            if (webView != null) {
+                webView.evaluateJavascript(
+                    "try{localStorage.clear();sessionStorage.clear();}catch(e){}", null);
+                webView.clearCache(true);
+            }
+            final CookieManager cookies = CookieManager.getInstance();
+            cookies.removeAllCookies(null);
+            cookies.flush();
+        } catch (Exception e) {
+            // Lo importante es borrar el token nativo.
+        }
+        Toast.makeText(this, "Sesión cerrada", Toast.LENGTH_SHORT).show();
+        final Intent login = new Intent(this, LoginActivity.class);
+        login.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        startActivity(login);
+        finish();
     }
 
     private void evaluateJs(final String script) {
