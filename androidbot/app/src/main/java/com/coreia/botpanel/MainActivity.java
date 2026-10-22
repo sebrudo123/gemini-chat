@@ -133,17 +133,30 @@ public class MainActivity extends AppCompatActivity {
         updateNavVisibility();
 
         final String url = com.coreia.botpanel.BuildConfig.PANEL_URL;
+        // La Activity de login nativa entrega el token validado, y esta
+        // pantalla lo inyecta en el panel con #token=... (sesión directa).
+        final String token = getIntent() != null
+                ? getIntent().getStringExtra(LoginActivity.EXTRA_TOKEN) : null;
+        final String target = getIntent() != null
+                ? getIntent().getStringExtra(LoginActivity.EXTRA_TARGET) : null;
         if (savedInstanceState != null && !url.isEmpty()) {
             webView.restoreState(savedInstanceState);
-        } else if (!url.isEmpty()) {
-            webView.loadUrl(url);
-        } else {
+        } else if (url.isEmpty()) {
             webView.loadData(
                 "<h1 style='font-family:sans-serif;color:#8f7bff'>Core IA Bot</h1>"
                     + "<p style='font-family:sans-serif;color:#b4b4c8'>No hay URL de panel configurada.</p>",
                 "text/html; charset=utf-8",
                 "utf-8"
             );
+        } else if (target != null
+                && LoginActivity.TARGET_WEBVIEW_LOGIN.equals(target)) {
+            // Ruta Discord: el panel web gestiona el OAuth dentro del WebView.
+            webView.loadUrl(url);
+        } else if (token != null && !token.isEmpty()) {
+            // Sesión ya validada por el login nativo: entra directo.
+            webView.loadUrl(url + "#token=" + token);
+        } else {
+            webView.loadUrl(url);
         }
     }
 
