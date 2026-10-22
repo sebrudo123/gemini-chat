@@ -288,7 +288,7 @@ public class MainActivity extends AppCompatActivity {
             final ConnectivityManager cm = (ConnectivityManager)
                 getSystemService(Context.CONNECTIVITY_SERVICE);
             if (cm == null) return;
-            final android.net.NetworkCallback cb = new android.net.NetworkCallback() {
+            final ConnectivityManager.NetworkCallback cb = new ConnectivityManager.NetworkCallback() {
                 @Override
                 public void onAvailable(final Network network) {
                     networkConnected = true;
