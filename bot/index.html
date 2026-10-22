@@ -832,6 +832,21 @@
           </div>
 
           <div class="card" style="margin-top:14px">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-shield"/></svg></span>Moderación con IA</h2>
+            <p class="sub">Core IA lee los mensajes, detecta insultos, acoso o amenazas y actúa solo. Publica lo actuado en el canal de registros.</p>
+            <label class="switch"><span>Activar moderación con IA</span><input type="checkbox" id="cfgAimodOn"></label>
+            <label class="fl">Acción cuando el mensaje es tóxico</label>
+            <select id="cfgAimodAction">
+              <option value="delete">Borrar el mensaje</option>
+              <option value="timeout">Borrar + silencio de 10 minutos</option>
+              <option value="kick">Borrar + expulsar a quien escribió</option>
+            </select>
+            <label class="fl">Sensibilidad (0 a 100; a más bajo, más estricta)</label>
+            <input id="cfgAimodThreshold" type="number" min="0" max="100" value="75">
+            <button class="btn primary wide" id="btnSaveAimod" style="margin-top:12px"><svg class="ic"><use href="#ic-check"/></svg><span>Guardar moderación IA</span></button>
+          </div>
+
+          <div class="card" style="margin-top:14px">
             <h2><span class="tile"><svg class="ic"><use href="#ic-users"/></svg></span>Salas de voz temporales</h2>
             <p class="sub">Quien entre al lobby consigue una sala con su nombre; en cuanto quede vacía, se borra sola.</p>
             <label class="switch"><span>Activar salas temporales</span><input type="checkbox" id="cfgVoiceTempOn"></label>

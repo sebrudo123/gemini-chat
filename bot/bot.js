@@ -670,6 +670,9 @@
     $("cfgWelcomeDmOn").checked = flag("welcome_dm_enabled");
     $("cfgAntiraidOn").checked = flag("antiraid_enabled");
     $("cfgAntispamOn").checked = flag("antispam_enabled");
+    $("cfgAimodOn").checked = flag("aimod_enabled");
+    $("cfgAimodAction").value = state.config.aimod_action || "timeout";
+    $("cfgAimodThreshold").value = state.config.aimod_threshold || "75";
     $("cfgVoiceTempOn").checked = flag("voice_temp_enabled");
     $("cfgTranscriptOn").checked = flag("ticket_transcript_enabled");
     $("cfgAntiraidJoins").value = state.config.antiraid_joins || "5";
@@ -1600,6 +1603,13 @@
         antispam_secs: $("cfgAntispamSecs").value || "8",
         antispam_mentions: $("cfgAntispamMentions").value || "6",
       }, "Anti-spam guardado.");
+    };
+    $("btnSaveAimod").onclick = function () {
+      saveConfig({
+        aimod_enabled: $("cfgAimodOn").checked ? "1" : "0",
+        aimod_action: $("cfgAimodAction").value || "timeout",
+        aimod_threshold: $("cfgAimodThreshold").value || "75",
+      }, "Moderación con IA guardada.");
     };
     $("btnSaveVoice").onclick = function () {
       saveConfig({

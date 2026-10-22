@@ -76,6 +76,33 @@ def test_bot_app_home_shape(client):
     assert "messages_today" in data["stats"]
 
 
+def test_aimod_verdict_parsing(client, monkeypatch):
+    """Veredicto IA moderadora: JSON con tolerancia y fallos silenciosos."""
+    import llm
+
+
+    monkeypatch.setattr(
+        llm, "complete_text",
+        lambda message, system_instruction=None:
+            'bla {"toxic": true, "score": 88, "reason": "insulto"} fin',
+    )
+    verdict = discord_bot.aimod_verdict("texto")
+    assert verdict == {"toxic": True, "score": 88, "reason": "insulto"}
+
+    monkeypatch.setattr(
+        llm, "complete_text",
+        lambda message, system_instruction=None: "sin json aqui",
+    )
+    assert discord_bot.aimod_verdict("texto")["toxic"] is False
+    assert discord_bot.aimod_verdict("texto")["score"] == 0
+
+    def boom(message, system_instruction=None):
+        raise RuntimeError("motor caído")
+
+    monkeypatch.setattr(llm, "complete_text", boom)
+    assert discord_bot.aimod_verdict("texto")["toxic"] is False
+
+
 def test_bot_series_shape(client):
     """Serie histórica: días cronológicos con contadores por defecto a cero."""
     response = client.get("/api/admin/discord-bot/series?days=7", headers=auth(FOUNDER_ID))

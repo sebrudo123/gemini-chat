@@ -4420,6 +4420,10 @@ BOT_CONFIG_KEYS = (
     "antispam_msgs",
     "antispam_secs",
     "antispam_mentions",
+    # Moderación de contenido con IA (item 5)
+    "aimod_enabled",
+    "aimod_action",
+    "aimod_threshold",
     # Voz temporal (lobby)
     "voice_temp_enabled",
     "voice_lobby_id",
@@ -4987,6 +4991,7 @@ def _admin_bot_stats_payload(db: Session) -> dict[str, Any]:
         "antispam_warn": stats.get("antispam_warn", 0),
         "antispam_timeout": stats.get("antispam_timeout", 0),
         "antispam_kick": stats.get("antispam_kick", 0),
+        "aimod_actions": stats.get("aimod_actions", 0),
         # Extras nuevos
         "voice_temp_created": stats.get("voice_temp_created", 0),
         "ticket_transcripts": stats.get("ticket_transcripts", 0),
@@ -5086,6 +5091,7 @@ BOT_MOD_EVENT_KINDS = (
     "antispam_warn",
     "antispam_timeout",
     "antispam_kick",
+    "aimod_action",
     "ticket_close",
     "ticket_transcript",
     "voice_temp_created",

@@ -13,7 +13,7 @@ import logging
 import time
 from collections import defaultdict, deque
 from contextlib import suppress
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable
 
 import bot_extras
@@ -311,6 +311,41 @@ def _command_ai_reply(
         LOG.exception("IA no disponible para comando propio")
         return "Core IA todavía no tiene motor de IA disponible. Prueba de nuevo más tarde."
     return text or "No pude generar una respuesta con IA ahora mismo."
+
+
+def aimod_verdict(text: str) -> dict[str, Any]:
+    """Veredicto de toxicidad con el motor propio (JSON mínimo esquivo)."""
+    import llm
+
+    system = (
+        "Eres un modulo de moderación por IA. Revisa el mensaje del usuario "
+        "y responde EXACTAMENTE con JSON: "
+        '{"toxic": true|false, "score": 0-100, "reason": "motivo corto en español"}. '
+        "Sin texto fuera del JSON. Tóxico: insultos, acoso, amenazas o gore. "
+        "Dudas razonables = no tóxico con puntuación baja."
+    )
+    default = {"toxic": False, "score": 0, "reason": ""}
+    try:
+        out = llm.complete_text(text[:500], system_instruction=system)
+    except Exception:  # noqa: BLE001 - sin veredicto se asume inocuo
+        return default
+    if not out:
+        return default
+    try:
+        start = out.find("{")
+        end = out.rfind("}")
+        if start == -1 or end <= start:
+            return default
+        data = json.loads(out[start:end + 1])
+        if not isinstance(data, dict):
+            return default
+        return {
+            "toxic": bool(data.get("toxic")),
+            "score": int(data.get("score") or 0),
+            "reason": str(data.get("reason") or "")[:200],
+        }
+    except (ValueError, TypeError):
+        return default
 
 
 def _resolve_channel(guild: Any, config: dict[str, str], key: str) -> Any:
@@ -994,6 +1029,71 @@ class BotManager:
         return True
 
     _CMD_COOLDOWN: "defaultdict[Any, float]" = defaultdict(float)
+    _AIMOD_COOLDOWN: "defaultdict[Any, float]" = defaultdict(float)
+
+    async def _aimod_check(self, message: Any, config: dict[str, str]) -> bool:
+        """Moderación de contenido con IA (item 5). True si actuó aquí.
+
+        Muestrea con cooldown por usuario, pide veredicto al motor propio
+        (JSON tóxico/puntuación/motivo) y aplica la acción configurada:
+        borrar, silencio de 10 minutos o expulsión. Registra evento, contador
+        y aviso en el canal de registros. Segunda lectura nunca: si actuó,
+        el mensaje ya no suma XP ni pasa a comandos.
+        """
+        if not _config_bool(config, "aimod_enabled", False):
+            return False
+        content = (message.content or "").strip()
+        if len(content) < 6:
+            return False
+        guild = message.guild
+        if guild is None:
+            return False
+        user_key = (guild.id, message.author.id)
+        now = time.time()
+        if now - self._AIMOD_COOLDOWN[user_key] < 8:
+            return False
+        self._AIMOD_COOLDOWN[user_key] = now
+
+        verdict = await asyncio.to_thread(aimod_verdict, content)
+        threshold = _config_int(config, "aimod_threshold", 75)
+        if not verdict.get("toxic") or int(verdict.get("score") or 0) < threshold:
+            return False
+
+        action = (config.get("aimod_action") or "timeout").strip().lower()
+        reason = "Core IA: moderación automática por IA"
+        baked = []
+        try:
+            if action in ("delete", "timeout", "kick"):
+                with suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    await message.delete()
+                baked.append("mensaje borrado")
+            if action == "timeout":
+                until = datetime.now(timezone.utc) + timedelta(seconds=600)
+                with suppress(discord.Forbidden, discord.HTTPException):
+                    await message.author.edit(timed_out_until=until, reason=reason)
+                baked.append(f"{message.author.display_name} silenciado 10 minutos")
+            elif action == "kick":
+                with suppress(discord.Forbidden, discord.HTTPException):
+                    await message.author.kick(reason=reason)
+                baked.append(f"{message.author.display_name} expulsado")
+        except Exception:  # noqa: BLE001 - el resto del flujo sigue
+            LOG.exception("Moderación IA: fallo aplicando la acción")
+
+        bot_extras.bump_stat("aimod_actions", guild_id=str(guild.id))
+        bot_extras.record_event(
+            "aimod_action",
+            f"{action} · puntuación {verdict.get('score', 0)} · {verdict.get('reason', '')}",
+            str(guild.id),
+        )
+        await self._send_log(
+            guild,
+            "Moderación con IA",
+            f"Acción **{action}** con puntuación de toxicidad {verdict.get('score', 0)}/100. "
+            f"Motivo: {verdict.get('reason') or 'contenido inapropiado'}.",
+            0x6D5DFC,
+            config,
+        )
+        return bool(baked)
 
     async def _custom_command(self, message: Any, config: dict[str, str]) -> bool:
         """Comandos propios del servidor (item 3) y respuestas con IA.
@@ -2156,6 +2256,8 @@ class BotManager:
                     return
                 config = await asyncio.to_thread(load_guild_config, message.guild.id)
                 if await self._antispam_check(message, config):
+                    return
+                if await self._aimod_check(message, config):
                     return
                 if await self._custom_command(message, config):
                     return
