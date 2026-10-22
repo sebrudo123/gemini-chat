@@ -65,6 +65,60 @@ def test_admin_endpoints_require_auth(client):
     assert client.get("/api/admin/users").status_code == 401
 
 
+def test_admin_set_user_password_and_login(client):
+    """El fundador puede fijar una contraseña nueva y con ella se puede entrar."""
+    founder = auth(FOUNDER_ID)
+
+    from database import SessionLocal
+    from models import User
+
+    with SessionLocal() as db:
+        db_user = User(
+            email="pw-reset-test@coreia.com",
+            username="pw-reset-test",
+            display_name=" PW test",
+            password_hash="casi-inexistente",
+            email_verified=True,
+        )
+        db.add(db_user)
+        db.commit()
+        db.refresh(db_user)
+        uid = db_user.id
+
+    try:
+        bad = client.post(
+            "/api/auth/login",
+            json={"email": "pw-reset-test@coreia.com", "password": "incorrecta-123"},
+        )
+        assert bad.status_code == 401
+
+        response = client.post(
+            f"/api/admin/users/{uid}/password",
+            json={"password": "nueva-segura-99"},
+            headers=founder,
+        )
+        assert response.status_code == 200
+
+        login = client.post(
+            "/api/auth/login",
+            json={"email": "pw-reset-test@coreia.com", "password": "nueva-segura-99"},
+        )
+        assert login.status_code == 200
+        assert login.json()["token"]
+
+        wrong = client.post(
+            "/api/auth/login",
+            json={"email": "pw-reset-test@coreia.com", "password": "anterior"},
+        )
+        assert wrong.status_code == 401
+    finally:
+        client.delete(f"/api/admin/users/{uid}", headers=founder)
+
+    assert client.post(
+        "/api/admin/users/424242/password", json={"password": "corta"}, headers=founder
+    ).status_code in (422, 404)
+
+
 def test_admin_endpoints_forbidden_for_normal_user(client):
     headers = auth("800000000000000002")
     assert client.get("/api/admin/stats", headers=headers).status_code == 403

@@ -3677,6 +3677,12 @@ class AdminUserUpdate(BaseModel):
     reset_2fa: bool | None = None
 
 
+class AdminUserPassword(BaseModel):
+    """Contraseña nueva establecida por el administrador."""
+
+    password: str = Field(..., min_length=8, max_length=128)
+
+
 class NoticeRequest(BaseModel):
     """Aviso global publicado por el administrador."""
 
@@ -3901,6 +3907,30 @@ def admin_update_user(
     db.refresh(user)
     if changes:
         record_audit(db, admin, "user.update", str(user.id), ", ".join(changes))
+    return {"user": _serialize_admin_user(db, user)}
+
+
+@app.post("/api/admin/users/{user_id}/password")
+def admin_set_password(
+    user_id: int,
+    payload: AdminUserPassword,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Fija (o reajusta) la contraseña de un usuario con correo.
+
+    Utilizado por el fundador para desbloquear su propio acceso cuando
+    no recuerda la contraseña. El usuario afectado pierde sus sesiones
+    abiertas para que ingrese con las credenciales nuevas.
+    """
+    user = _get_admin_target(db, user_id)
+    if not user.email:
+        raise HTTPException(status_code=400, detail="El usuario no tiene correo.")
+    user.password_hash = hash_password(payload.password)
+    user.session_epoch = int(user.session_epoch or 0) + 1
+    db.commit()
+    db.refresh(user)
+    record_audit(db, admin, "user.password_set", str(user.id), "")
     return {"user": _serialize_admin_user(db, user)}
 
 
