@@ -4525,6 +4525,8 @@ BOT_CONFIG_KEYS = (
     "min_account_age_days",
     "welcome_message",
     "goodbye_message",
+    "welcome_ai_enabled",
+    "goodbye_ai_enabled",
     "welcome_image_enabled",
     "welcome_dm_enabled",
     "welcome_dm_message",
