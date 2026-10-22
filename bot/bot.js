@@ -1,19 +1,87 @@
 /* Core IA Bot — panel de administración del bot de Discord. */
+
+/* Diagnóstico a la vista: si algo falla al arrancar, se PINTA en pantalla
+   (banner rojo) con el error y la versión de la app. Así un fallo silencioso
+   del WebView nunca vuelve a parecer "botones muertos". */
 (function () {
+  function helmet(message, extra) {
+    try {
+      var box = document.getElementById("bootError");
+      if (!box) {
+        box = document.createElement("div");
+        box.id = "bootError";
+        box.style.cssText =
+          "position:fixed;top:0;left:0;right:0;z-index:2147483000;" +
+          "background:#4a1520;color:#ffd9de;font:12px/1.45 monospace;" +
+          "padding:10px 12px;white-space:pre-wrap;max-height:45vh;overflow:auto;";
+        (document.body || document.documentElement).appendChild(box);
+      }
+      var app = "navegador";
+      try {
+        if (window.CoreIAUpdate && window.CoreIAUpdate.getVersionCode) {
+          app = "APK " + window.CoreIAUpdate.getVersionCode();
+        }
+      } catch (err) { /* sin puente */ }
+      box.textContent = (box.textContent ? box.textContent + "\n---\n" : "") +
+        "[error] " + message + (extra ? "\n" + String(extra).slice(0, 400) : "") +
+        "\n[app] " + app + " · " + String(navigator.userAgent || "").slice(0, 90);
+    } catch (err) { /* sin salida posible */ }
+  }
+  window.__coreiaBootError = helmet;
+  window.addEventListener("error", function (e) {
+    if (e && e.error) helmet(e.message, e.error.stack);
+    else helmet((e && e.message) || "error desconocido");
+  });
+  window.addEventListener("unhandledrejection", function (e) {
+    var r = e && e.reason;
+    helmet(
+      "promesa sin catch: " + ((r && (r.message || r.statusText)) || String(r) || "—"),
+      r && r.stack
+    );
+  });
+})();
+
+(function () {
+  try {
   "use strict";
 
   var TOKEN_KEY = "coreia_bot_token";
   var FALLBACK_TOKEN_KEY = "coreia_token";
+  var PANEL_VERSION = "1.0.19";
+
+  /* Storage seguro: si el WebView bloquea localStorage (algo que pasa en
+     algunos Android viejos), el panel sigue funcionando con memoria. */
+  var LS = (function () {
+    try {
+      window.localStorage.setItem("coreia_ls_test", "1");
+      window.localStorage.removeItem("coreia_ls_test");
+      return window.localStorage;
+    } catch (err) {
+      var mem = {};
+      return {
+        getItem: function (k) { return Object.prototype.hasOwnProperty.call(mem, k) ? mem[k] : null; },
+        setItem: function (k, v) { mem[k] = String(v); },
+        removeItem: function (k) { delete mem[k]; },
+      };
+    }
+  })();
+
+  /* Query string sin URLSearchParams (ausente en WebViews antiguos). */
+  var qsParam = function (name) {
+    var search = String(window.location.search || "");
+    var match = search.match(new RegExp("[?&]" + name + "=([^&]*)"));
+    return match ? decodeURIComponent(match[1]) : null;
+  };
 
   /* Cuando el panel vive en Vercel (estático) las llamadas van a la API de
      Render; en Render el origen ya es el correcto. ?api= fuerza otro destino. */
   var API_BASE = (function () {
-    var forced = new URLSearchParams(window.location.search).get("api");
+    var forced = qsParam("api");
     if (forced) {
-      localStorage.setItem("coreia_api", forced);
+      LS.setItem("coreia_api", forced);
       return forced;
     }
-    var saved = localStorage.getItem("coreia_api");
+    var saved = LS.getItem("coreia_api");
     if (saved) return saved;
     return window.location.hostname.indexOf("vercel.app") !== -1
       ? "https://gemini-chat-backend-vyrz.onrender.com"
@@ -21,10 +89,10 @@
   })();
 
   var state = {
-    token: localStorage.getItem(TOKEN_KEY) || localStorage.getItem(FALLBACK_TOKEN_KEY) || "",
+    token: LS.getItem(TOKEN_KEY) || LS.getItem(FALLBACK_TOKEN_KEY) || "",
     bot: null,
     guilds: [],
-    guildId: localStorage.getItem("coreia_bot_guild") || "",
+    guildId: LS.getItem("coreia_bot_guild") || "",
     inventory: null,
     config: {},
   };
@@ -91,7 +159,7 @@
 
   function handleAuthSuccess(token) {
     state.token = token;
-    localStorage.setItem(TOKEN_KEY, token);
+    LS.setItem(TOKEN_KEY, token);
     showApp(true);
   }
 
@@ -136,7 +204,7 @@
       .then(function (data) {
         state.token = value;
         state.bot = data.bot;
-        localStorage.setItem(TOKEN_KEY, value);
+        LS.setItem(TOKEN_KEY, value);
         showApp(true);
       })
       .catch(function (err) {
@@ -149,7 +217,7 @@
   }
 
   function logout() {
-    localStorage.removeItem(TOKEN_KEY);
+    LS.removeItem(TOKEN_KEY);
     state.token = "";
     state.bot = null;
     state.guilds = [];
@@ -312,7 +380,7 @@
       item.className = "row-item" + (guild.id === state.guildId ? " sel" : "");
       item.onclick = function () {
         state.guildId = guild.id;
-        localStorage.setItem("coreia_bot_guild", guild.id);
+        LS.setItem("coreia_bot_guild", guild.id);
         renderStats();
         refreshInventory();
         switchView("resumen");
@@ -1192,7 +1260,7 @@
       $("loginMsg").textContent =
         "No tienes permisos para usar este panel. Solo el fundador de Core IA puede entrar.";
       $("loginMsg").className = "msgbox err show";
-      localStorage.removeItem(TOKEN_KEY);
+      LS.removeItem(TOKEN_KEY);
       state.token = "";
       showApp(false);
       return;
@@ -1206,7 +1274,7 @@
     if (token && token[1]) {
       // Solo guarda el token: la validación ocurre contra el backend al arrancar.
       state.token = decodeURIComponent(token[1]);
-      localStorage.setItem(TOKEN_KEY, state.token);
+      LS.setItem(TOKEN_KEY, state.token);
     }
   }
 
@@ -1214,6 +1282,17 @@
   /* Bindings                                                    */
   /* ---------------------------------------------------------- */
   function bind() {
+    /* Insignia de versión: confirma en pantalla qué corre el dispositivo. */
+    var verEl = $("panelVer");
+    if (verEl) {
+      var apkCode = 0;
+      try {
+        if (window.CoreIAUpdate && window.CoreIAUpdate.getVersionCode) {
+          apkCode = parseInt(window.CoreIAUpdate.getVersionCode(), 10) || 0;
+        }
+      } catch (err) { /* navegador normal */ }
+      verEl.textContent = "Panel " + PANEL_VERSION + (apkCode ? " · APK build " + apkCode : "");
+    }
     $("discordBtn").onclick = function () {
       window.location.href =
         API_BASE + "/api/admin/discord-bot/login?panel_origin=" + encodeURIComponent(window.location.origin);
@@ -1330,7 +1409,7 @@
         showApp(true);
       })
       .catch(function (err) {
-        localStorage.removeItem(TOKEN_KEY);
+        LS.removeItem(TOKEN_KEY);
         state.token = "";
         $("loginMsg").textContent =
           err && /403|fundador|permisos/i.test(err.message)
@@ -1341,5 +1420,11 @@
       });
   } else {
     showApp(false);
+  }
+  } catch (err) {
+    if (window.__coreiaBootError) {
+      window.__coreiaBootError("bloque principal del panel: " + err.message, err.stack);
+    }
+    throw err;
   }
 })();
