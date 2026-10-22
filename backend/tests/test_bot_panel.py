@@ -527,3 +527,69 @@ def test_config_theme_validation(client, monkeypatch):
     # Ningún valor del preset válido → nada que guardar → 400 y sin cambios.
     assert rechazo.status_code == 400
     assert guardadas.get("accent_color") in ("", "#22c55e")
+
+
+
+
+def test_ai_welcome_uses_generated_text(client, monkeypatch):
+    """Con welcome_ai_enabled el saludo sale redactado por IA (item 5)."""
+    import asyncio
+    import discord_bot
+    import main as m
+
+    enviado: dict[str, list] = {"embeds": []}
+
+    monkeypatch.setattr(discord_bot, "_ai_welcome_text",
+                        lambda memb: "¡Hola Laurita! Me alegro verte por acá")
+
+    import asyncio as _asyncio
+
+    class FakeChannel:
+        async def send(self, **kw):
+            enviado["embeds"].append(kw)
+    canal = FakeChannel()
+
+    class FakeGuild:
+        name = "Core IA"
+        id = 1551284673165000885
+        member_count = 5
+
+        def get_channel(self, cid):
+            return canal if cid == 100 else None
+
+        def get_role(self, rid):
+            return None
+
+    FakeGuild.__name__ = "FakeGuild"
+
+    class FakeMember:
+        guild = FakeGuild()
+        mention = "@lauti"
+        display_name = "lauti"
+        display_avatar = type("FakeAvatar", (), {"url": "http://a/x.png"})()
+        created_at = None
+        joined_at = None
+        roles = []
+
+    monkeypatch.setattr(discord_bot, "load_guild_config", lambda gid: {
+        "welcome_channel_id": "100",
+        "welcome_ai_enabled": "1",
+        "welcome_message": "plantilla fija",
+    })
+    monkeypatch.setattr(discord_bot, "_resolve_channel",
+                        lambda guild, cfg, key: canal
+                        if key == "welcome_channel_id" else None)
+    monkeypatch.setattr(m.bot_extras, "bump_stat", lambda *a, **k: None)
+    monkeypatch.setattr(m.bot_extras, "bump_guild_stat", lambda *a, **k: None)
+    monkeypatch.setattr(m.bot_extras, "record_event", lambda *a, **k: None)
+
+    manager = discord_bot.BotManager()
+    async def noop_log(*a, **k):
+        return None
+    manager._send_log = noop_log
+
+    asyncio.run(manager._on_member_join(FakeMember()))
+    assert enviado["embeds"], "debía enviar el embed de bienvenida"
+    desc = enviado["embeds"][0]["embed"].description
+    assert "Laurita" in desc
+    assert "plantilla fija" not in desc
