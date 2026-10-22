@@ -1274,7 +1274,11 @@ def _static_response(filename: str) -> FileResponse:
         media = "image/x-icon"
     else:
         media = "text/html"
-    return FileResponse(path, media_type=media)
+    # La WebView de la APK guarda copias viejas de bot.js: obligarla a
+    # revalidar para que los fixes del panel lleguen al instalar de nuevo.
+    return FileResponse(path, media_type=media, headers={
+        "Cache-Control": "no-cache",
+    })
 
 
 @app.get("/")
