@@ -24,7 +24,8 @@ def upload_token(monkeypatch):
     return {"x-upload-token": "tok-test-123"}
 
 
-def publish(client, headers, version_code=9, version_name="1.0.9", changelog="Bugfixes."):
+def publish(client, headers, version_code=9, version_name="1.0.9", changelog="Bugfixes.",
+            app="panel"):
     return client.post(
         "/api/bot/update/upload",
         json={
@@ -32,6 +33,7 @@ def publish(client, headers, version_code=9, version_name="1.0.9", changelog="Bu
             "version_name": version_name,
             "changelog": changelog,
             "apk_base64": APK_B64,
+            "app": app,
         },
         headers=headers,
     )
@@ -83,7 +85,7 @@ def test_upload_rejects_invalid_base64(client, upload_token):
 def test_upload_publishes_and_check_serves_apk(client, upload_token, monkeypatch):
     published: dict[str, int] = {"count": 0}
 
-    async def fake_notify(manifest):
+    async def fake_notify(manifest, app="panel"):
         published["count"] += 1
         return 0
 
@@ -156,6 +158,66 @@ def test_upload_announces_with_embed(client, upload_token, monkeypatch):
     assert "Mejora la barra inferior" in bullets
     assert embed["footer"]["text"].strip() != ""
     assert "timestamp" in embed
+
+
+def test_ia_upload_and_check(client, upload_token, monkeypatch):
+    """La IA publica en su propio manifest y su APK sale por /app/update."""
+    async def fake_notify(manifest, app="panel"):
+        return 0
+
+    async def fake_guilds(token: str = ""):
+        return []
+
+    monkeypatch.setattr(main, "_notify_bot_update", fake_notify)
+    monkeypatch.setattr(main.discord_bot, "fetch_bot_guilds", fake_guilds)
+
+    response = publish(client, upload_token, version_code=3, version_name="1.0.3",
+                       app="ia")
+    assert response.status_code == 200
+    assert response.json()["app"] == "ia"
+
+    check = client.get("/app/update/check?current=2").json()
+    assert check["has_update"] is True
+    assert check["version_code"] == 3
+    assert check["apk_url"].endswith("/app/update/latest.apk")
+
+    apk = client.get("/app/update/latest.apk")
+    assert apk.status_code == 200
+    assert apk.content == APK_BYTES
+    assert "coreia.apk" in apk.headers["content-disposition"]
+
+    # El check del panel no ve la versión de la IA
+    panel = client.get("/bot/update/check").json()
+    assert panel["version_code"] != 3
+
+
+def test_ia_announce_title(client, upload_token, monkeypatch):
+    """El anuncio de la IA usa su propio título en el embed."""
+    sent: dict[str, list] = {"embeds": []}
+
+    async def fake_guilds(token: str = ""):
+        return [{"id": "999"}]
+
+    def fake_load_config(guild_id: int) -> dict[str, str]:
+        return {"update_channel_id": "555"}
+
+    async def fake_send_embed(channel_id: int, embed, token: str = ""):
+        sent["embeds"].append((channel_id, embed))
+
+    monkeypatch.setattr(main.discord_bot, "fetch_bot_guilds", fake_guilds)
+    monkeypatch.setattr(main.discord_bot, "load_guild_config", fake_load_config)
+    monkeypatch.setattr(main.discord_bot, "send_channel_embed", fake_send_embed)
+    monkeypatch.setattr(main.discord_bot, "send_channel_message", fake_send_embed)
+
+    response = publish(client, upload_token, version_code=4, version_name="1.0.4",
+                       changelog="Nueva versión de la IA.", app="ia")
+    assert response.status_code == 200
+    assert response.json()["notified_guilds"] == 1
+
+    channel_id, embed = sent["embeds"][0]
+    assert channel_id == 555
+    assert "IA" in embed["title"]
+    assert "1.0.4" in embed["title"]
 
 
 def test_update_check_without_manifest(client, monkeypatch, tmp_path):

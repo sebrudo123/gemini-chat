@@ -4776,15 +4776,57 @@ class BotUpdateUpload(BaseModel):
     changelog: str = Field(default="", max_length=4000)
     apk_base64: str = Field(..., min_length=100, max_length=90_000_000)
     release_url: str = Field(default="", max_length=400)
+    # Qué app declara la versión: el panel del bot o la IA (app principal).
+    app: str = Field(default="panel", pattern="^(ia|panel)$")
 
 
 BOT_UPDATE_MANIFEST_KEY = "bot:update:manifest"
 BOT_UPDATE_APK_KEY = "bot:update:apk"
+IA_UPDATE_MANIFEST_KEY = "ia:update:manifest"
+IA_UPDATE_APK_KEY = "ia:update:apk"
+
+# Toda la información por app: claves de almacenamiento, nombre para el
+# anuncio del bot y datos de descarga. Solo las actualizaciones del panel
+# del bot y de la IA se anuncian en Discord (el resto no se publica).
+UPDATE_APPS: dict[str, dict[str, str]] = {
+    "panel": {
+        "manifest": BOT_UPDATE_MANIFEST_KEY,
+        "apk": BOT_UPDATE_APK_KEY,
+        "titulo": "Actualización del panel del bot — v{version}",
+        "descripcion": (
+            "Nueva versión del panel del bot publicada en GitHub Actions. "
+            "Los servidores conectados la reciben en el canal de actualizaciones."
+        ),
+        "instalacion": (
+            "Abre la app del panel: al arrancar aparece el aviso de "
+            "actualización con el botón «Instalar»."
+        ),
+        "ruta_check": "/bot/update/latest.apk",
+        "archivo": "coreia-bot.apk",
+    },
+    "ia": {
+        "manifest": IA_UPDATE_MANIFEST_KEY,
+        "apk": IA_UPDATE_APK_KEY,
+        "titulo": "Actualización de la IA — v{version}",
+        "descripcion": (
+            "Nueva versión de la IA publicada en GitHub Actions. "
+            "Los servidores conectados la reciben en el canal de actualizaciones."
+        ),
+        "instalacion": (
+            "Abre la app de la IA: al arrancar aparece el aviso de "
+            "actualización con el botón «Actualizar ahora»."
+        ),
+        "ruta_check": "/app/update/latest.apk",
+        "archivo": "coreia.apk",
+    },
+}
 
 
-def _read_update_manifest(db: Session) -> dict[str, Any]:
+def _read_update_manifest(
+    db: Session, manifest_key: str = BOT_UPDATE_MANIFEST_KEY
+) -> dict[str, Any]:
     """Lee el manifiesto de la última versión publicada (o vacío)."""
-    raw = get_setting(db, BOT_UPDATE_MANIFEST_KEY, "")
+    raw = get_setting(db, manifest_key, "")
     if not raw:
         return {}
     try:
@@ -4810,15 +4852,13 @@ def _update_changelog_bullets(changelog: str) -> str:
     return text or "Correcciones y mejoras de rendimiento."
 
 
-def _update_announce_embed(manifest: dict[str, Any]) -> dict[str, Any]:
+def _update_announce_embed(manifest: dict[str, Any], app: str = "panel") -> dict[str, Any]:
     """Embed de Discord para el anuncio de una nueva versión del APK."""
+    meta = UPDATE_APPS.get(app, UPDATE_APPS["panel"])
     version = str(manifest.get("version_name") or "").strip() or "desconocida"
     embed: dict[str, Any] = {
-        "title": f"Actualización de Core IA Bot — v{version}",
-        "description": (
-            "Nueva versión del panel del bot publicada en GitHub Actions. "
-            "Los servidores conectados la reciben en el canal de actualizaciones."
-        ),
+        "title": str(meta["titulo"]).format(version=version),
+        "description": str(meta["descripcion"]),
         "color": 0x6D5DFC,
         "fields": [
             {
@@ -4828,10 +4868,7 @@ def _update_announce_embed(manifest: dict[str, Any]) -> dict[str, Any]:
             },
             {
                 "name": "Cómo instalarla",
-                "value": (
-                    "Abre la app del panel: al arrancar aparece el aviso de "
-                    "actualización con el botón «Instalar»."
-                ),
+                "value": str(meta["instalacion"]),
                 "inline": False,
             },
         ],
@@ -4844,7 +4881,7 @@ def _update_announce_embed(manifest: dict[str, Any]) -> dict[str, Any]:
     return embed
 
 
-async def _notify_bot_update(manifest: dict[str, Any]) -> int:
+async def _notify_bot_update(manifest: dict[str, Any], app: str = "panel") -> int:
     """Anuncia la nueva versión en Discord con un embed del propio bot.
 
     Publica en el canal de actualizaciones de cada servidor (o en el de
@@ -4854,7 +4891,7 @@ async def _notify_bot_update(manifest: dict[str, Any]) -> int:
     version = str(manifest.get("version_name") or "").strip()
     if not version:
         return 0
-    embed = _update_announce_embed(manifest)
+    embed = _update_announce_embed(manifest, app)
     notified = 0
     try:
         guilds = await discord_bot.fetch_bot_guilds()
@@ -4902,34 +4939,31 @@ async def bot_update_upload(
         "published_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "apk_size": len(apk_bytes),
     }
-    set_setting(db, BOT_UPDATE_APK_KEY, payload.apk_base64)
-    set_setting(db, BOT_UPDATE_MANIFEST_KEY, json.dumps(manifest, ensure_ascii=False))
+    app_name = payload.app  # cuidado: `app` global es la instancia FastAPI
+    set_setting(db, UPDATE_APPS[app_name]["apk"], payload.apk_base64)
+    set_setting(db, UPDATE_APPS[app_name]["manifest"], json.dumps(manifest, ensure_ascii=False))
     notified = 0
     try:
-        notified = await _notify_bot_update(manifest)
+        notified = await _notify_bot_update(manifest, app_name)
     except Exception:  # noqa: BLE001 - el aviso nunca bloquea la publicación
         notified = 0
     return {
         "ok": True,
+        "app": app_name,
         "published": manifest["published_at"],
         "notified_guilds": notified,
     }
 
 
-@app.get("/bot/update/check", include_in_schema=False)
-def bot_update_check(
-    request: Request,
-    current: int = 0,
-    db: Session = Depends(get_db),
+def _update_check_payload(
+    request: Request, db: Session, app: str, current: int
 ) -> dict[str, Any]:
-    """Comprobar si hay una versión más nueva del APK del panel."""
-    manifest = _read_update_manifest(db)
+    """Respuesta pública del check de versión para una app del sistema."""
+    meta = UPDATE_APPS[app]
+    manifest = _read_update_manifest(db, meta["manifest"])
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     if not manifest or "version_code" not in manifest:
-        return {
-            "has_update": False,
-            "current": current,
-            "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        }
+        return {"has_update": False, "current": current, "checked_at": now}
     latest = int(manifest.get("version_code") or 0)
     base = str(request.base_url).rstrip("/")
     return {
@@ -4941,15 +4975,35 @@ def bot_update_check(
         "changelog": manifest.get("changelog", ""),
         "release_url": manifest.get("release_url", ""),
         "published_at": manifest.get("published_at", ""),
-        "apk_url": f"{base}/bot/update/latest.apk",
-        "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "apk_url": f"{base}{meta['ruta_check']}",
+        "checked_at": now,
     }
 
 
-@app.get("/bot/update/latest.apk", include_in_schema=False)
-def bot_update_latest_apk(db: Session = Depends(get_db)) -> Response:
-    """Descarga del última APK publicado para el instalador de Android."""
-    apk_b64 = get_setting(db, BOT_UPDATE_APK_KEY, "")
+@app.get("/bot/update/check", include_in_schema=False)
+def bot_update_check(
+    request: Request,
+    current: int = 0,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Comprobar si hay una versión más nueva del APK del panel."""
+    return _update_check_payload(request, db, "panel", current)
+
+
+@app.get("/app/update/check", include_in_schema=False)
+def app_update_check(
+    request: Request,
+    current: int = 0,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Comprobar si hay una versión más nueva de la IA (app principal)."""
+    return _update_check_payload(request, db, "ia", current)
+
+
+def _latest_apk_response(db: Session, app: str) -> Response:
+    """Descarga del último APK publicado para el instalador de Android."""
+    meta = UPDATE_APPS[app]
+    apk_b64 = get_setting(db, meta["apk"], "")
     if not apk_b64:
         raise HTTPException(status_code=404, detail="No hay APK publicado todavía.")
     try:
@@ -4960,10 +5014,22 @@ def bot_update_latest_apk(db: Session = Depends(get_db)) -> Response:
         data,
         media_type="application/vnd.android.package-archive",
         headers={
-            "Content-Disposition": 'attachment; filename="coreia-bot.apk"',
+            "Content-Disposition": f'attachment; filename="{meta["archivo"]}"',
             "Cache-Control": "no-store",
         },
     )
+
+
+@app.get("/bot/update/latest.apk", include_in_schema=False)
+def bot_update_latest_apk(db: Session = Depends(get_db)) -> Response:
+    """Descarga del último APK publicado del panel del bot."""
+    return _latest_apk_response(db, "panel")
+
+
+@app.get("/app/update/latest.apk", include_in_schema=False)
+def app_update_latest_apk(db: Session = Depends(get_db)) -> Response:
+    """Descarga del último APK publicado de la IA (app principal)."""
+    return _latest_apk_response(db, "ia")
 
 
 # --------------------------------------------------------------------------- #

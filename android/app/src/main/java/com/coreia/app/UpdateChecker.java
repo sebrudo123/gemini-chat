@@ -13,7 +13,6 @@ import android.widget.Toast;
 import androidx.appcompat.app.AlertDialog;
 import androidx.core.content.FileProvider;
 
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedInputStream;
@@ -35,12 +34,12 @@ import java.net.URL;
  */
 public class UpdateChecker {
 
-    private static final String REPO = "sebrudo123/gemini-chat";
-    private static final String API_URL = "https://api.github.com/repos/" + REPO + "/releases/latest";
+    private static final String CHECK_URL_BASE =
+            "https://gemini-chat-backend-vyrz.onrender.com/app/update/check?current=";
 
     private final Activity activity;
     private boolean forceUpdate = false;
-    private String tagName = "";
+    private String versionName = "";
     private String apkUrl = "";
 
     public UpdateChecker(Activity activity) {
@@ -74,16 +73,15 @@ public class UpdateChecker {
         }
         return fallback;
     }
-
     private class CheckTask extends AsyncTask<Void, Void, Boolean> {
 
         @Override
         protected Boolean doInBackground(Void... voids) {
             HttpURLConnection conn = null;
             try {
-                URL url = new URL(API_URL);
+                URL url = new URL(CHECK_URL_BASE + currentVersionCode());
                 conn = (HttpURLConnection) url.openConnection();
-                conn.setRequestProperty("Accept", "application/vnd.github+json");
+                conn.setRequestProperty("Accept", "application/json");
                 conn.setRequestProperty("User-Agent", "CoreIA-Android-App");
                 conn.setConnectTimeout(10000);
                 conn.setReadTimeout(10000);
@@ -102,20 +100,12 @@ public class UpdateChecker {
                 }
 
                 JSONObject json = new JSONObject(sb.toString());
-                tagName = json.optString("tag_name", "");
-                JSONArray assets = json.optJSONArray("assets");
-                if (assets != null) {
-                    for (int i = 0; i < assets.length(); i++) {
-                        JSONObject asset = assets.getJSONObject(i);
-                        if (asset.optString("name", "").endsWith(".apk")) {
-                            apkUrl = asset.optString("browser_download_url", "");
-                            break;
-                        }
-                    }
+                if (!json.optBoolean("has_update", false)) {
+                    return false;
                 }
-
-                String version = tagName.replaceFirst("^v", "");
-                int latestCode = parseVersionCode(version, currentVersionCode());
+                versionName = json.optString("version_name", "");
+                apkUrl = json.optString("apk_url", "");
+                int latestCode = json.optInt("version_code", -1);
                 return latestCode > currentVersionCode() && !apkUrl.isEmpty();
             } catch (Exception e) {
                 return false;
@@ -139,7 +129,7 @@ public class UpdateChecker {
     private void showUpdateDialog() {
         new AlertDialog.Builder(activity)
                 .setTitle("Nueva versión disponible")
-                .setMessage("Hay una actualización disponible (" + tagName
+                .setMessage("Hay una actualización de la IA (" + versionName
                         + "). ¿Quieres instalarla ahora?")
                 .setCancelable(!forceUpdate)
                 .setPositiveButton("Actualizar ahora", (dialog, which) -> downloadAndInstall())
