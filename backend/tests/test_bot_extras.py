@@ -126,8 +126,31 @@ def test_stats_shape(client, monkeypatch):
         "schedules_active",
         "welcomes",
         "verifications",
+        "antiraid_triggers",
+        "antispam_warn",
+        "voice_temp_created",
+        "ticket_transcripts",
     ):
         assert key in data
+
+
+def test_modlog_returns_only_protection_events(client):
+    """El endpoint /modlog filtra los eventos de moderación y protección."""
+    bot_extras.record_event("antiraid_trigger", "oleada detectada", "111")
+    bot_extras.record_event("antispam_timeout", "usuario · flood", "111")
+    bot_extras.record_event("test_event", "no es de moderación", "111")
+
+    headers = auth()
+    data = client.get("/api/admin/discord-bot/modlog", headers=headers).json()
+    kinds = {event["kind"] for event in data["events"]}
+    assert "antiraid_trigger" in kinds
+    assert "antispam_timeout" in kinds
+    assert "test_event" not in kinds
+
+    filtered = client.get(
+        "/api/admin/discord-bot/modlog?guild_id=111", headers=headers
+    ).json()
+    assert all(event["guild"] == "111" for event in filtered["events"])
 
 
 def test_events_endpoint(client, monkeypatch):
