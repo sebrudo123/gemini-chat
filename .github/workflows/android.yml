@@ -148,12 +148,3 @@ jobs:
               fh.write("\n\n".join(parts) + "\n")
           PY
 
-      - name: Publish APK to a Release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: Core IA v1.0.${{ github.run_number }}
-          body_path: android/CHANGELOG_BODY.md
-          files: android/coreia.apk
-          make_latest: true
