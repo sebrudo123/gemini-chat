@@ -1343,7 +1343,9 @@ def serve_bot_panel_js() -> FileResponse:
     path = BOT_PANEL_ROOT / "bot.js"
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Panel del bot no disponible.")
-    return FileResponse(path, media_type="application/javascript")
+    # Sin caché: la WebView de la APK debe revalidar para recibir fixes.
+    return FileResponse(path, media_type="application/javascript",
+        headers={"Cache-Control": "no-cache"})
 
 
 _PANEL_ASSETS: dict[str, str] = {
