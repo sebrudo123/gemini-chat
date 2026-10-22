@@ -593,6 +593,79 @@ def require_admin(profile: dict[str, Any] = Depends(get_current_user)) -> dict[s
     return profile
 
 
+def panel_role(profile: dict[str, Any] | None, db: Session) -> str | None:
+    """Nivel de acceso al panel (item 8): founder / admin / moderator / None.
+
+    Los fundadores entran siempre (id de Discord o ADMIN_EMAILS); el resto
+    solo si su fila de usuarios tiene rol `admin` o `moderator` asignado
+    por un fundador en la API de usuarios.
+    """
+    if not profile:
+        return None
+    if is_founder(profile):
+        return "founder"
+    if is_admin(profile):
+        # Correo fundador vía ADMIN_EMAILS: equipo completo con permisos de
+        # administración (ya se filtraba igual en require_admin).
+        return "admin"
+    uid = str(profile.get("id") or "")
+    user: User | None = None
+    if uid.isdigit():
+        user = db.get(User, int(uid))
+    if user is None:
+        email = (profile.get("email") or "").strip().lower()
+        if email:
+            user = (
+                db.query(User)
+                .filter(func.lower(User.email) == email)
+                .first()
+            )
+        elif uid:
+            user = (
+                db.query(User)
+                .filter(User.discord_id == uid)
+                .first()
+            )
+        else:
+            uid = profile.get("discord_id") or ""
+            if uid:
+                user = db.query(User).filter(User.discord_id == uid).first()
+    if user is None or user.is_banned or user.is_active is False:
+        return None
+    role = (user.role or "").strip().lower()
+    if role in ("admin", "moderator"):
+        return role
+    return None
+
+
+def require_panel_read(
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Panel del bot: lectura para fundador, admin y moderador."""
+    role = panel_role(profile, db)
+    if role is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acceso reservado al equipo del panel del bot.",
+        )
+    return profile
+
+
+def require_panel_write(
+    profile: dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Panel del bot: escritura para fundador y admin (no moderador)."""
+    role = panel_role(profile, db)
+    if role not in ("founder", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acceso reservado al fundador o a un admin del panel.",
+        )
+    return profile
+
+
 def founder_needs_2fa(profile: dict[str, Any] | None, db: Session) -> bool:
     """Indica si el fundador debe activar la 2FA antes de usar la plataforma."""
     if not settings.founder_2fa_required or not is_admin(profile):
@@ -3717,7 +3790,7 @@ class AdminUserUpdate(BaseModel):
     username: str | None = Field(default=None, min_length=1, max_length=64)
     email: str | None = Field(default=None, max_length=255)
     email_verified: bool | None = None
-    role: str | None = Field(default=None, pattern="^(user|moderator|support)$")
+    role: str | None = Field(default=None, pattern="^(user|moderator|support|admin)$")
     notes: str | None = Field(default=None, max_length=2000)
     tags: str | None = Field(default=None, max_length=255)
     reset_2fa: bool | None = None
@@ -4338,7 +4411,7 @@ async def bot_wake(request: Request, key: str = "") -> dict[str, Any]:
 @app.get("/api/admin/discord-bot")
 def admin_discord_bot(
     request: Request,
-    _: dict[str, Any] = Depends(require_admin),
+    _: dict[str, Any] = Depends(require_panel_read),
 ) -> dict[str, Any]:
     """Estado del bot y URL para encenderlo desde fuera."""
     return {"bot": _admin_bot_payload(request)}
@@ -4347,7 +4420,7 @@ def admin_discord_bot(
 @app.post("/api/admin/discord-bot/start")
 async def admin_discord_bot_start(
     request: Request,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_panel_write),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Enciende el bot desde el panel de administración."""
@@ -4364,7 +4437,7 @@ async def admin_discord_bot_start(
 @app.post("/api/admin/discord-bot/stop")
 async def admin_discord_bot_stop(
     request: Request,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_panel_write),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Apaga el bot desde el panel de administración."""
@@ -4501,7 +4574,7 @@ def admin_discord_bot_login(
 
 @app.get("/api/admin/discord-bot/guilds")
 async def admin_discord_bot_guilds(
-    _: dict[str, Any] = Depends(require_admin),
+    _: dict[str, Any] = Depends(require_panel_read),
 ) -> dict[str, Any]:
     """Servidores de Discord en los que está instalado el bot."""
     try:
@@ -4514,7 +4587,7 @@ async def admin_discord_bot_guilds(
 @app.get("/api/admin/discord-bot/guilds/{guild_id}/inventory")
 async def admin_discord_bot_guild_inventory(
     guild_id: int,
-    _: dict[str, Any] = Depends(require_admin),
+    _: dict[str, Any] = Depends(require_panel_read),
 ) -> dict[str, Any]:
     """Canales y roles reales de un servidor, leídos desde Discord."""
     if guild_id <= 0:
@@ -4529,7 +4602,7 @@ async def admin_discord_bot_guild_inventory(
 @app.get("/api/admin/discord-bot/guilds/{guild_id}/config")
 def admin_discord_bot_guild_config(
     guild_id: int,
-    _: dict[str, Any] = Depends(require_admin),
+    _: dict[str, Any] = Depends(require_panel_read),
 ) -> dict[str, Any]:
     """Configuración guardada del bot para un servidor concreto."""
     if guild_id <= 0:
@@ -4544,7 +4617,7 @@ def admin_discord_bot_guild_config(
 def admin_discord_bot_guild_config_update(
     guild_id: int,
     payload: BotGuildConfigUpdate,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_panel_write),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Guarda la configuración del bot en la base de datos."""
@@ -4572,7 +4645,7 @@ def admin_discord_bot_guild_config_update(
 async def admin_discord_bot_test_message(
     guild_id: int,
     payload: BotTestMessageRequest,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_panel_write),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Envía un mensaje de prueba para comprobar el bot y sus permisos."""
@@ -4622,7 +4695,7 @@ async def admin_discord_bot_test_message(
 @app.post("/api/admin/discord-bot/sync")
 async def admin_discord_bot_sync(
     request: Request,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_panel_write),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Vuelve a sincronizar los comandos de barra en Discord."""
@@ -4887,7 +4960,7 @@ def _schedule_payload(row: BotSchedule) -> dict[str, Any]:
 @app.get("/api/admin/discord-bot/schedules")
 def admin_bot_schedules(
     guild_id: str = "",
-    _: dict[str, Any] = Depends(require_admin),
+    _: dict[str, Any] = Depends(require_panel_read),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Mensajes programados del bot (diarios o semanales)."""
@@ -4900,7 +4973,7 @@ def admin_bot_schedules(
 @app.post("/api/admin/discord-bot/schedules")
 def admin_bot_schedule_create(
     payload: BotScheduleCreate,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_panel_write),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Crea un mensaje programado del bot."""
@@ -4928,7 +5001,7 @@ def admin_bot_schedule_create(
 def admin_bot_schedule_toggle(
     schedule_id: int,
     payload: BotScheduleUpdate,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_panel_write),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Activa o desactiva un mensaje programado."""
@@ -4947,7 +5020,7 @@ def admin_bot_schedule_toggle(
 @app.delete("/api/admin/discord-bot/schedules/{schedule_id}")
 def admin_bot_schedule_delete(
     schedule_id: int,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_panel_write),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Elimina un mensaje programado."""
@@ -5000,7 +5073,7 @@ def _admin_bot_stats_payload(db: Session) -> dict[str, Any]:
 
 @app.get("/api/admin/discord-bot/stats")
 def admin_bot_stats(
-    _: dict[str, Any] = Depends(require_admin),
+    _: dict[str, Any] = Depends(require_panel_read),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Estadísticas de hoy: IA, verificaciones, bienvenidas e interacciones."""
@@ -5010,7 +5083,7 @@ def admin_bot_stats(
 @app.get("/api/admin/discord-bot/series")
 def admin_bot_series(
     days: int = 14,
-    _: dict[str, Any] = Depends(require_admin),
+    _: dict[str, Any] = Depends(require_panel_read),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Serie histórica diaria para las graficas del panel y la APK.
@@ -5080,7 +5153,7 @@ def admin_bot_series(
 @app.get("/api/admin/discord-bot/guild-stats")
 def admin_bot_guild_stats(
     days: int = 14,
-    _: dict[str, Any] = Depends(require_admin),
+    _: dict[str, Any] = Depends(require_panel_read),
 ) -> dict[str, Any]:
     """Actividad por servidor (item 7): mensajes, bienvenidas, tickets.
 
@@ -5093,7 +5166,7 @@ def admin_bot_guild_stats(
 
 @app.get("/api/admin/discord-bot/events")
 def admin_bot_events(
-    _: dict[str, Any] = Depends(require_admin),
+    _: dict[str, Any] = Depends(require_panel_read),
 ) -> dict[str, Any]:
     """Últimos eventos del bot (bienvenidas, verificaciones, errores...)."""
     return {"events": bot_extras.load_events()}
@@ -5117,7 +5190,7 @@ BOT_MOD_EVENT_KINDS = (
 def admin_bot_modlog(
     guild_id: str | None = None,
     limit: int = 50,
-    _: dict[str, Any] = Depends(require_admin),
+    _: dict[str, Any] = Depends(require_panel_read),
 ) -> dict[str, Any]:
     """Dashboard de moderación: eventos de protección y sanciones."""
     limit = max(1, min(150, limit))
@@ -5133,7 +5206,7 @@ def admin_bot_modlog(
 
 @app.get("/api/admin/discord-bot/app-home")
 async def admin_bot_app_home(
-    _: dict[str, Any] = Depends(require_admin),
+    _: dict[str, Any] = Depends(require_panel_read),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Todo lo que la APK pinta en su Resumen nativo, en una llamada sola.
@@ -5190,7 +5263,7 @@ def _backup_payload(db: Session) -> dict[str, Any]:
 
 @app.get("/api/admin/discord-bot/modlog.csv", include_in_schema=False)
 def admin_bot_modlog_csv(
-    _: dict[str, Any] = Depends(require_admin),
+    _: dict[str, Any] = Depends(require_panel_read),
 ) -> Response:
     """Registro completo de moderación en CSV (item 6: respaldos)."""
     buffer = io.StringIO()
@@ -5217,7 +5290,7 @@ def admin_bot_modlog_csv(
 
 @app.get("/api/admin/discord-bot/backup")
 def admin_bot_backup(
-    _: dict[str, Any] = Depends(require_admin),
+    _: dict[str, Any] = Depends(require_panel_read),
     db: Session = Depends(get_db),
 ) -> Response:
     """Descarga la configuración completa del bot como JSON respaldable."""
@@ -5235,7 +5308,7 @@ def admin_bot_backup(
 @app.post("/api/admin/discord-bot/backup")
 def admin_bot_backup_restore(
     payload: dict[str, Any],
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_panel_write),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Restaura un respaldo JSON desde el panel (fusión, no destruye extras)."""
@@ -5305,7 +5378,7 @@ def _label_roles(
 @app.get("/api/admin/discord-bot/guilds/{guild_id}/role-menu")
 def admin_bot_role_menu_list(
     guild_id: int,
-    _: dict[str, Any] = Depends(require_admin),
+    _: dict[str, Any] = Depends(require_panel_read),
 ) -> dict[str, Any]:
     """Menús de roles publicados en el servidor."""
     store = bot_extras.load_store(guild_id, bot_extras.ROLEMENU_STORE)
@@ -5316,7 +5389,7 @@ def admin_bot_role_menu_list(
 async def admin_bot_role_menu_create(
     guild_id: int,
     payload: BotRoleMenuCreate,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_panel_write),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Publica un menú de roles con select múltiple y lo registra."""
@@ -5337,7 +5410,7 @@ async def admin_bot_role_menu_create(
 async def admin_bot_role_menu_delete(
     guild_id: int,
     menu_id: str,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_panel_write),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Borra un menú de roles publicado."""
@@ -5354,7 +5427,7 @@ async def admin_bot_role_menu_delete(
 @app.get("/api/admin/discord-bot/guilds/{guild_id}/polls")
 def admin_bot_polls_list(
     guild_id: int,
-    _: dict[str, Any] = Depends(require_admin),
+    _: dict[str, Any] = Depends(require_panel_read),
 ) -> dict[str, Any]:
     """Encuestas activas del servidor."""
     store = bot_extras.load_store(guild_id, bot_extras.POLL_STORE)
@@ -5365,7 +5438,7 @@ def admin_bot_polls_list(
 async def admin_bot_poll_create(
     guild_id: int,
     payload: BotPollCreate,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_panel_write),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Publica una encuesta con botones (emoji por opción opcional)."""
@@ -5390,7 +5463,7 @@ async def admin_bot_poll_create(
 async def admin_bot_poll_delete(
     guild_id: int,
     poll_id: str,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_panel_write),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Cierra y borra una encuesta publicada."""
@@ -5408,7 +5481,7 @@ async def admin_bot_poll_delete(
 @app.get("/api/admin/discord-bot/guilds/{guild_id}/levels")
 def admin_bot_levels(
     guild_id: int,
-    _: dict[str, Any] = Depends(require_admin),
+    _: dict[str, Any] = Depends(require_panel_read),
 ) -> dict[str, Any]:
     """Top de niveles del servidor (para el panel)."""
     return {"top": bot_extras.level_top(guild_id, 15)}
@@ -5417,7 +5490,7 @@ def admin_bot_levels(
 @app.get("/api/admin/discord-bot/reminders")
 def admin_bot_reminders(
     guild_id: str = "",
-    _: dict[str, Any] = Depends(require_admin),
+    _: dict[str, Any] = Depends(require_panel_read),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Recordatorios pendientes de enviar."""
@@ -5447,7 +5520,7 @@ def admin_bot_reminders(
 @app.delete("/api/admin/discord-bot/reminders/{reminder_id}")
 def admin_bot_reminder_delete(
     reminder_id: int,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_panel_write),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Borra un recordatorio pendiente."""
@@ -5470,7 +5543,7 @@ class BotGiveawayCreate(BaseModel):
 @app.get("/api/admin/discord-bot/guilds/{guild_id}/giveaways")
 def admin_bot_giveaways_list(
     guild_id: int,
-    _: dict[str, Any] = Depends(require_admin),
+    _: dict[str, Any] = Depends(require_panel_read),
 ) -> dict[str, Any]:
     """Sorteos activos del servidor."""
     store = bot_extras.load_store(guild_id, bot_extras.GIVEAWAY_STORE)
@@ -5481,7 +5554,7 @@ def admin_bot_giveaways_list(
 async def admin_bot_giveaway_create(
     guild_id: int,
     payload: BotGiveawayCreate,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_panel_write),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Publica un sorteo con botón de participación y lo registra."""
@@ -5503,7 +5576,7 @@ async def admin_bot_giveaway_create(
 async def admin_bot_giveaway_delete(
     guild_id: int,
     giveaway_id: str,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_panel_write),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Cancela un sorteo borrando su mensaje."""
@@ -5526,7 +5599,7 @@ class BotFeedCreate(BaseModel):
 @app.get("/api/admin/discord-bot/guilds/{guild_id}/feeds")
 def admin_bot_feeds(
     guild_id: int,
-    _: dict[str, Any] = Depends(require_admin),
+    _: dict[str, Any] = Depends(require_panel_read),
 ) -> dict[str, Any]:
     """Avisos de YouTube/Twitch configurados en el servidor."""
     store = bot_extras.load_store(guild_id, bot_extras.FEED_STORE)
@@ -5537,7 +5610,7 @@ def admin_bot_feeds(
 async def admin_bot_feed_create(
     guild_id: int,
     payload: BotFeedCreate,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_panel_write),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Añade un aviso de YouTube (URL/@handle) o Twitch (nombre de canal)."""
@@ -5581,7 +5654,7 @@ async def admin_bot_feed_create(
 def admin_bot_feed_delete(
     guild_id: int,
     feed_id: str,
-    admin: dict[str, Any] = Depends(require_admin),
+    admin: dict[str, Any] = Depends(require_panel_write),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Elimina un aviso de YouTube/Twitch."""
@@ -5596,7 +5669,7 @@ def admin_bot_feed_delete(
 
 @app.get("/api/admin/discord-bot/member-stats")
 def admin_bot_member_stats(
-    _: dict[str, Any] = Depends(require_admin),
+    _: dict[str, Any] = Depends(require_panel_read),
 ) -> dict[str, Any]:
     """Bienvenidas y despedidas de los últimos 7 días."""
     return {"days": bot_extras.member_stats_last_days(7)}

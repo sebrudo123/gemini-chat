@@ -946,6 +946,11 @@
         <!-- AJUSTES -->
         <section class="view" id="view-ajustes">
           <div class="card">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-users"/></svg></span>Equipo del panel</h2>
+            <p class="sub">Solo el fundador. Async: <b>admin</b> todo el panel; <b>moderator</b> solo consulta; <b>user</b> sin acceso. Acción registrada en auditoría.</p>
+            <div class="list" id="teamList"><div class="skeleton">Cargando…</div></div>
+          </div>
+          <div class="card">
             <h2><span class="tile"><svg class="ic"><use href="#ic-shield"/></svg></span>Roles</h2>
             <p class="sub">Roles reales del servidor. El rol del bot debe estar por encima de estos.</p>
             <label class="fl">Rol de verificado</label>
@@ -965,6 +970,11 @@
             <p class="sub">Últimos eventos: bienvenidas, verificaciones, programados, errores…</p>
             <div class="list" id="eventList"><div class="skeleton">Cargando…</div></div>
             <button class="btn wide" id="btnEvents" style="margin-top:12px"><svg class="ic"><use href="#ic-refresh"/></svg><span>Actualizar registros</span></button>
+          </div>
+          <div class="card">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-list"/></svg></span>Auditoría del equipo</h2>
+            <p class="sub">Registro real de acciones de administración: quién cambió qué y cuándo.</p>
+            <div class="list" id="auditList"><div class="skeleton">Cargando…</div></div>
           </div>
           <div class="card">
             <h2><span class="tile"><svg class="ic"><use href="#ic-box"/></svg></span>Respaldo de configuración</h2>

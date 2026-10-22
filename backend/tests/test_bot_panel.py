@@ -104,6 +104,54 @@ def test_aimod_verdict_parsing(client, monkeypatch):
     assert discord_bot.aimod_verdict("texto")["toxic"] is False
 
 
+def test_panel_roles_read_write_levels(client, monkeypatch):
+    """Item 8: moderator lee el panel; admin escribe; user normal no entra."""
+    async def fake_fetch(token: str = "") -> list:
+        return []
+
+    monkeypatch.setattr(discord_bot, "fetch_bot_guilds", fake_fetch)
+    member_id = "800000000000000090"
+    headers = {
+        "Authorization": "Bearer " + main.create_session_token(
+            {
+                "provider": "discord",
+                "id": member_id,
+                "username": "panel-mod",
+                "display_name": "Panel Mod",
+                "email": None,
+                "avatar_url": None,
+            }
+        )
+    }
+    up = client.get("/api/auth/me", headers=headers)
+    assert up.status_code == 200
+
+    users = client.get("/api/admin/users", headers=auth(FOUNDER_ID)).json()["users"]
+    target = next(user for user in users if user["discord_id"] == member_id)
+
+    # sin rol de equipo: 403 incluso en lectura
+    assert client.get("/api/admin/discord-bot/stats", headers=headers).status_code == 403
+
+    client.patch(
+        f"/api/admin/users/{target['id']}", json={"role": "moderator"}, headers=auth(FOUNDER_ID)
+    )
+    # moderator: lectura ok, escritura 403
+    assert client.get("/api/admin/discord-bot/stats", headers=headers).status_code == 200
+    assert client.post("/api/admin/discord-bot/stop", headers=headers).status_code == 403
+
+    resp = client.patch(
+        f"/api/admin/users/{target['id']}", json={"role": "admin"}, headers=auth(FOUNDER_ID)
+    )
+    assert resp.status_code == 200
+    # admin: escritura permitida (sync puede 400/409 por el bot, pero no 403)
+    sync = client.post("/api/admin/discord-bot/sync", headers=headers)
+    assert sync.status_code != 403
+
+    # auditoría registra el cambio de rol
+    audit = client.get("/api/admin/audit?limit=50", headers=auth(FOUNDER_ID)).json()["logs"]
+    assert any("role=" in log["detail"] for log in audit)
+
+
 def test_bot_guild_stats_shape(client):
     """Métricas por servidor: total y última actividad (item 7)."""
     bot_extras.bump_guild_stat(987654321, "messages")

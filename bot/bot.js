@@ -264,7 +264,7 @@
       refreshRoleMenus(); refreshPolls(); refreshLevels(); refreshGiveaways(); refreshReminders();
     }
     if (name === "anuncios") { refreshSchedules(); refreshFeeds(); }
-    if (name === "ajustes") refreshEvents();
+    if (name === "ajustes") { refreshEvents(); refreshTeam(); refreshAudit(); }
     if (name === "resumen") { refreshBotStats(); refreshMemberStats(); refreshModLog(); }
   }
 
@@ -1523,6 +1523,81 @@
     }
   }
 
+/* Equipo del panel (roles admin/moderator): visible al ser fundador */
+function renderTeam(users) {
+  var host = $("teamList");
+  if (!host) return;
+  var html = "";
+  for (var i = 0; i < users.length; i++) {
+    var u = users[i];
+    var label = u.display_name || u.username || ("#" + u.id);
+    var email = u.email || "";
+    html += '<div class="row-item team-row" data-id="' + u.id + '">'
+      + "<div style='flex:1;min-width:0'><div>" + String(label).replace(/</g, "&lt;")
+      + (email ? " <span class='mini'>" + String(email).replace(/</g, "&lt;") + "</span>" : "")
+      + "</div></div><select class='team-role' style='width:auto'>"
+      + ['user', 'moderator', 'support', 'admin'].map(function (r) {
+          return '<option value="' + r + '"' + ((u.role || 'user') === r ? ' selected' : '') + '>' + r + '</option>';
+        }).join("")
+      + "</select>"
+      + "<button class='btn team-save' style='margin-left:8px;font-size:12px' data-save='" + u.id + "'>Guardar</button>"
+      + "</div>";
+  }
+  host.innerHTML = html || '<div class="skeleton">Sin usuarios visibles.</div>';
+}
+
+function refreshTeam() {
+  api("/api/admin/users?limit=40")
+    .then(function (data) { renderTeam(data.users || data.items || []); })
+    .catch(function (err) {
+      var host = $("teamList");
+      if (host) {
+        host.innerHTML = "<div class='skeleton'>Lista de equipo no disponible: "
+          + (err && err.message ? String(err.message).slice(0, 80) : "requiere fundador") + ".</div>";
+      }
+    });
+}
+document.addEventListener("click", function (ev) {
+  var target = ev.target;
+  if (!target || !target.getAttribute) return;
+  var saveId = target.getAttribute("data-save");
+  if (saveId === null) return;
+  var row = target.closest(".team-row");
+  var roleSel = row ? row.querySelector(".team-role") : null;
+  if (!roleSel) return;
+  api("/api/admin/users/" + saveId, { method: "PATCH", body: { role: roleSel.value } })
+    .then(function () {
+      toast("Rol actualizado a " + roleSel.value + ".", "ok");
+      refreshTeam();
+    })
+    .catch(function (err) { toast(err.message || "No se pudo cambiar el rol.", "err"); });
+});
+
+  function refreshAudit() {
+    api("/api/admin/audit?limit=30")
+      .then(function (data) {
+        var host = $("auditList");
+        if (!host) return;
+        var logs = data.logs || [];
+        if (!logs.length) {
+          host.innerHTML = '<div class="skeleton">Sin acciones registradas todavía.</div>';
+          return;
+        }
+        host.innerHTML = logs.map(function (log) {
+          return "<div class='row-item'><div>"
+            + "<div>" + String(log.actor || "?").replace(/</g, "&lt;") + " · <b>"
+            + String(log.action || "").replace(/</g, "&lt;") + "</b></div>"
+            + (log.detail ? "<div class='mini'>" + String(log.detail).replace(/</g, "&lt;") + "</div>" : "")
+            + "<div class='mini'>" + String(log.created_at || "").slice(0, 16).replace("T", " ") + "</div>"
+            + "</div></div>";
+        }).join("");
+      })
+      .catch(function () {
+        var host = $("auditList");
+        if (host) host.innerHTML = "<div class='skeleton'>Auditoría no disponible (requiere permisos).</div>";
+      });
+  }
+
   function bind() {
     /* Estado de conexión: banner arriba y reintento del panel al volver internet. */
     setNetBanner(!window.navigator.onLine);
@@ -1571,6 +1646,7 @@
     $("btnCsvUsers").onclick = function () {
       downloadCsv("/api/admin/export/users?format=csv", "coreia-usuarios.csv");
     };
+
     $("btnCmdAdd").onclick = function () {
       pullCommandsFromDom();
       state.commands.push({ name: "/", response: "", ai: false });
