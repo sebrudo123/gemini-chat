@@ -45,6 +45,79 @@ import com.google.android.material.bottomsheet.BottomSheetDialog;
  */
 public class MainActivity extends AppCompatActivity {
 
+    /** Desbloqueo por biometría: candado de sesión de la app (item 4). */
+    private boolean bioUnlocked;
+    private boolean bioPromptShown;
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        enforceBiometrics();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        // Al salir de la app se vuelve a pedir la huella al reabrir.
+        bioUnlocked = false;
+        bioPromptShown = false;
+    }
+
+    /** Si el usuario activó biometría, cada vuelta al primer plano pide
+     * huella/FaceID/desbloqueo del equipo antes de mostrar el panel. */
+    private void enforceBiometrics() {
+        if (bioUnlocked || bioPromptShown) return;
+        final android.content.SharedPreferences prefs = getSharedPreferences(
+            LoginActivity.PREFS_NAME, MODE_PRIVATE);
+        if (!"1".equals(prefs.getString(LoginActivity.KEY_BIO_ENABLED, ""))) {
+            bioUnlocked = true;
+            return;
+        }
+        final androidx.biometric.BiometricManager manager =
+            androidx.biometric.BiometricManager.from(this);
+        final int can = manager.canAuthenticate(
+            androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK
+                | androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL);
+        if (can != androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS) {
+            bioUnlocked = true; // sin sensor disponible: no bloquear para siempre
+            return;
+        }
+        bioPromptShown = true;
+        try {
+            final androidx.biometric.BiometricPrompt prompt =
+                new androidx.biometric.BiometricPrompt(this,
+                    androidx.core.content.ContextCompat.getMainExecutor(this),
+                    new androidx.biometric.BiometricPrompt.AuthenticationCallback() {
+                        @Override
+                        public void onAuthenticationSucceeded(
+                                @NonNull androidx.biometric.BiometricPrompt.AuthenticationResult result) {
+                            bioUnlocked = true;
+                            bioPromptShown = false;
+                        }
+
+                        @Override
+                        public void onAuthenticationError(
+                                int code, @NonNull CharSequence err) {
+                            // Canceló o falló: la app se cierra.
+                            Toast.makeText(MainActivity.this,
+                                "Desbloqueo cancelado", Toast.LENGTH_SHORT).show();
+                            bioPromptShown = false;
+                            finish();
+                        }
+                    });
+            prompt.authenticate(new androidx.biometric.BiometricPrompt.PromptInfo.Builder()
+                .setTitle("Desbloquea Core IA")
+                .setSubtitle("Confirma tu identidad para entrar al panel")
+                .setAllowedAuthenticators(
+                    androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK
+                        | androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+                .build());
+        } catch (Exception e) {
+            bioPromptShown = false;
+            bioUnlocked = true; // sin biometría posible: no bloquear
+        }
+    }
+
     /** Destinos de la barra inferior (mismos nombres que switchView del panel). */
     private static final String[] TABS = {"resumen", "servidores", "mensajes", "extras", "anuncios"};
     private static final int[] TAB_IDS = {
