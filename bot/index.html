@@ -758,6 +758,8 @@
             </div>
             <textarea id="cfgWelcomeDm" placeholder="¡Hola {name}! Bienvenido a {server}. Verifícate para entrar a todos los canales."></textarea>
             <label class="switch"><span>Enviar MP de bienvenida</span><input type="checkbox" id="cfgWelcomeDmOn"></label>
+            <label class="switch"><span>Redactar el saludo con IA</span><input type="checkbox" id="cfgWelcomeAi"></label>
+            <p class="mini">La IA escribe un saludo personalizado para cada miembro; si no está disponible vuelve a la plantilla.</p>
           </div>
           <div class="card">
             <h2><span class="tile"><svg class="ic"><use href="#ic-door"/></svg></span>Mensaje de despedida</h2>
@@ -767,6 +769,7 @@
               <span class="chip">{count}</span><span class="chip">{joined}</span>
             </div>
             <textarea id="cfgGoodbyeMsg" placeholder="{name} ha salido de {server}. ¡Hasta pronto!"></textarea>
+            <label class="switch"><span>Redactar la despedida con IA</span><input type="checkbox" id="cfgGoodbyeAi"></label>
             <button class="btn primary wide" id="btnSaveGoodbye" style="margin-top:10px"><svg class="ic"><use href="#ic-check"/></svg><span>Guardar despedida</span></button>
           </div>
         </section>
