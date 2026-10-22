@@ -4556,6 +4556,9 @@ BOT_CONFIG_KEYS = (
     # Voz temporal (lobby)
     "voice_temp_enabled",
     "voice_lobby_id",
+    # Tema del panel (item 3): oscuro/claro + color de acento de marca
+    "theme_mode",
+    "accent_color",
 )
 
 
@@ -4683,7 +4686,14 @@ def admin_discord_bot_guild_config_update(
     for key, raw in (payload.values or {}).items():
         if key not in BOT_CONFIG_KEYS or not isinstance(raw, str):
             continue
-        values[key] = raw.strip()[:1500]
+        cleaned = raw.strip()[:1500]
+        if key == "theme_mode" and cleaned not in ("dark", "light"):
+            continue
+        if key == "accent_color" and cleaned not in (
+            "", "#6d5dfc", "#3b82f6", "#22c55e", "#ec4899", "#f97316",
+        ):
+            continue
+        values[key] = cleaned
     if not values:
         raise HTTPException(
             status_code=400,
