@@ -304,6 +304,17 @@
     .msgbox.show { display:block; }
     .msgbox.err { background:rgba(248,113,113,.1); border:1px solid rgba(248,113,113,.35); color:var(--danger); }
 
+    /* Gráfica de actividad (barras DOM, sin librerías) */
+    .scol-wrap { display:flex; align-items:flex-end; gap:3px; height:132px; margin-top:10px; }
+    .scol { flex:1; display:flex; flex-direction:column; align-items:center; height:100%; min-width:0; justify-content:flex-end; }
+    .sbar {
+      width:100%; max-width:22px; min-height:3px; border-radius:6px 6px 3px 3px;
+      background:linear-gradient(180deg,#8f7bff,#4a3fd0);
+      transition:height .3s ease;
+    }
+    .sbar.now { background:linear-gradient(180deg,#ffb457,#e08a2d); }
+    .scol span { font-size:9.5px; color:var(--faint); margin-top:5px; white-space:nowrap; }
+
     /* ---------- Login ---------- */
     .login-wrap {
       display:flex; align-items:center; justify-content:center;
@@ -582,6 +593,12 @@
               <div class="stat"><div class="tile"><svg class="ic"><use href="#ic-userplus"/></svg></div><div><b id="stWelcomes">—</b><span class="lbl">Bienvenidas</span></div></div>
               <div class="stat"><div class="tile"><svg class="ic"><use href="#ic-clock"/></svg></div><div><b id="stScheduled">—</b><span class="lbl">Programados</span></div></div>
             </div>
+          </div>
+
+          <div class="card" style="margin-top:14px">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-list"/></svg></span>Actividad · últimos 14 días</h2>
+            <div class="scol-wrap" id="seriesChart"><div class="skeleton">Cargando…</div></div>
+            <p class="sub" id="seriesLegend" style="margin-top:8px"></p>
           </div>
 
           <div class="card" style="margin-top:14px">

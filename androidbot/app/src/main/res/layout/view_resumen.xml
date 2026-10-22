@@ -191,6 +191,50 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
             android:layout_marginBottom="10dp"
+            android:text="@string/resumen_actividad"
+            android:textColor="#8f8fa8"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.08" />
+
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardBackgroundColor="#1b1b27"
+            app:cardCornerRadius="18dp"
+            app:cardElevation="0dp"
+            app:strokeColor="#2b2b40"
+            app:strokeWidth="1dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="14dp">
+
+                <LinearLayout
+                    android:id="@+id/chartHost"
+                    android:layout_width="match_parent"
+                    android:layout_height="132dp"
+                    android:orientation="horizontal"
+                    android:padding="4dp" />
+
+                <TextView
+                    android:id="@+id/chartLegend"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:textColor="#7a7a92"
+                    android:textSize="11sp" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Servidores (lista) -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:layout_marginBottom="10dp"
             android:text="@string/resumen_servidores"
             android:textColor="#8f8fa8"
             android:textSize="12sp"

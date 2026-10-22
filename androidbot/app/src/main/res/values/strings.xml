@@ -14,6 +14,7 @@
     <string name="resumen_hoy">HOY EN EL SERVIDOR</string>
     <string name="resumen_servidores">SERVIDORES</string>
     <string name="resumen_modlog">REGISTRO DE MODERACIÓN</string>
+    <string name="resumen_actividad">ACTIVIDAD · ÚLTIMOS 14 DÍAS</string>
     <string name="stat_messages">Mensajes IA</string>
     <string name="stat_welcomes">Bienvenidas</string>
     <string name="stat_verifs">Verificaciones</string>

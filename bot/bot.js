@@ -274,7 +274,40 @@
     return api("/api/admin/discord-bot").then(function (data) {
       state.bot = data.bot;
       renderBotStatus();
+      api("/api/admin/discord-bot/series?days=14")
+        .then(function (s) { renderSeries(s.series || []); })
+        .catch(function () { renderSeries([]); });
     });
+  }
+
+  function renderSeries(series) {
+    var box = $("seriesChart");
+    if (!box) return;
+    if (!series.length) {
+      box.innerHTML = '<div class="skeleton">Sin datos suficientes todavía</div>';
+      return;
+    }
+    var max = 1;
+    var totalMods = 0;
+    for (var i = 0; i < series.length; i++) {
+      if (series[i].messages > max) max = series[i].messages;
+      totalMods += series[i].mods;
+    }
+    var html = "";
+    for (var j = 0; j < series.length; j++) {
+      var s = series[j];
+      var h = Math.max(4, Math.round((s.messages / max) * 108));
+      html += '<div class="scol" title="' + s.day + ": " + s.messages + ' mensajes IA">'
+        + '<div class="sbar' + (j === series.length - 1 ? " now" : "") + '" style="height:' + h + 'px"></div>'
+        + '<span>' + (j === series.length - 1 ? "hoy" : s.label) + "</span></div>";
+    }
+    box.innerHTML = html;
+    var legend = $("seriesLegend");
+    if (legend) {
+      legend.textContent = totalMods > 0
+        ? "Mensajes IA por día (barra morada; la naranja es hoy). Protección del periodo: " + totalMods + " acciones."
+        : "Mensajes IA por día (morada) y hoy (naranja).";
+    }
   }
 
   function refreshGuilds() {

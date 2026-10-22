@@ -76,6 +76,21 @@ def test_bot_app_home_shape(client):
     assert "messages_today" in data["stats"]
 
 
+def test_bot_series_shape(client):
+    """Serie histórica: días cronológicos con contadores por defecto a cero."""
+    response = client.get("/api/admin/discord-bot/series?days=7", headers=auth(FOUNDER_ID))
+    assert response.status_code == 200
+    data = response.json()
+    assert data["days"] == 7
+    s = data["series"]
+    assert len(s) == 7
+    assert s[0]["day"] <= s[-1]["day"]  # cronológico asc
+    for entry in s:
+        assert {"day", "label", "messages", "welcomes", "verifications", "mods"} == set(entry.keys())
+    # clamp de días
+    assert client.get("/api/admin/discord-bot/series?days=999", headers=auth(FOUNDER_ID)).json()["days"] == 30
+
+
 def test_bot_panel_endpoints_require_auth(client):
     assert client.get("/api/admin/discord-bot/guilds").status_code == 401
     assert client.get("/api/admin/discord-bot/guilds/123/inventory").status_code == 401

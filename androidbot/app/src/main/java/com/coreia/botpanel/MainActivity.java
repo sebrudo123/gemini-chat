@@ -17,6 +17,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.TextView;
+import android.widget.LinearLayout;
 import android.widget.Toast;
 
 import java.io.BufferedInputStream;
@@ -295,6 +296,8 @@ public class MainActivity extends AppCompatActivity {
             .getString(LoginActivity.KEY_TOKEN_CACHE, "");
         ApiClient.get(base + "/api/admin/discord-bot/app-home", token,
             (code, body) -> runOnUiThread(() -> fillResumen(code, body)));
+        ApiClient.get(base + "/api/admin/discord-bot/series?days=14", token,
+            (code, body) -> runOnUiThread(() -> renderSeriesNative(code, body)));
     }
 
     private void fillResumen(final int code, final String body) {
@@ -366,6 +369,69 @@ public class MainActivity extends AppCompatActivity {
             return fmt.parse(iso).getTime();
         } catch (Exception e) {
             return 0;
+        }
+    }
+
+    /** Serie de 14 días → columnas nativas (paralelo al gráfico del panel). */
+    private void renderSeriesNative(final int code, final String body) {
+        if (code != 200) return;
+        final LinearLayout host = findViewById(com.coreia.botpanel.R.id.chartHost);
+        if (host == null) return;
+        try {
+            final org.json.JSONArray series = new org.json.JSONObject(body)
+                .optJSONArray("series");
+            if (series == null || series.length() == 0) {
+                host.removeAllViews();
+                host.addView(makeEmptyRow("Sin datos suficientes todavía."));
+                return;
+            }
+            long max = 1;
+            long totalMods = 0;
+            for (int i = 0; i < series.length(); i++) {
+                final org.json.JSONObject s = series.optJSONObject(i);
+                if (s != null) {
+                    max = Math.max(max, s.optLong("messages", 0));
+                    totalMods += s.optLong("mods", 0);
+                }
+            }
+            final long scale = Math.max(1, max);
+            final int barMaxPx = Math.round(
+                android.util.TypedValue.applyDimension(
+                    android.util.TypedValue.COMPLEX_UNIT_DIP, 108f,
+                    getResources().getDisplayMetrics()));
+            host.removeAllViews();
+            for (int j = 0; j < series.length(); j++) {
+                final org.json.JSONObject s = series.optJSONObject(j);
+                if (s == null) continue;
+                final long value = s.optLong("messages", 0);
+                final int barPx = (int) Math.max(
+                    android.util.TypedValue.applyDimension(
+                        android.util.TypedValue.COMPLEX_UNIT_DIP, 3f,
+                        getResources().getDisplayMetrics()),
+                    (float) value / scale * barMaxPx);
+                final android.view.View bar = new android.view.View(this);
+                final LinearLayout.LayoutParams lp =
+                    new LinearLayout.LayoutParams(0, barPx, 1f);
+                lp.setMargins(2, 0, 2, 0);
+                bar.setLayoutParams(lp);
+                // morada; la de hoy, naranja
+                bar.setBackground(new android.graphics.drawable.GradientDrawable(
+                    android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                    new int[]{j == series.length() - 1 ? 0xFFFFB457 : 0xFF8F7BFF,
+                              j == series.length() - 1 ? 0xFFE08A2D : 0xFF4A3FD0}));
+                bar.setOnClickListener(v -> Toast.makeText(this,
+                    s.optString("day", "") + ": " + value + " mensajes IA",
+                    Toast.LENGTH_SHORT).show());
+                host.addView(bar);
+            }
+            final TextView legend = findViewById(com.coreia.botpanel.R.id.chartLegend);
+            if (legend != null) {
+                legend.setText(totalMods > 0
+                    ? "Mensajes IA por día · protección: " + totalMods + " acciones (14 días)"
+                    : "Mensajes IA por día (14 días). Toca una barra para el detalle.");
+            }
+        } catch (Exception e) {
+            // Serie inválida: sin gráfico no cae la app.
         }
     }
 

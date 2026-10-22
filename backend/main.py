@@ -4994,6 +4994,76 @@ def admin_bot_stats(
     return _admin_bot_stats_payload(db)
 
 
+@app.get("/api/admin/discord-bot/series")
+def admin_bot_series(
+    days: int = 14,
+    _: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Serie histórica diaria para las graficas del panel y la APK.
+
+    Controladores ya persistidos por el bot (bot:stats:{día}) y mensajes IA
+    de la tabla Usage; devuelve los últimos `days` días en orden cronológico,
+    rellenando con cero los que no tienen registro.
+    """
+    days = max(1, min(30, days))
+    today = datetime.now(timezone.utc).date()
+    dates = [today - timedelta(offset) for offset in range(days - 1, -1, -1)]
+    date_strings = [d.strftime("%Y-%m-%d") for d in dates]
+    index = {day: i for i, day in enumerate(date_strings)}
+
+    series = [
+        {
+            "day": day,
+            "label": day[8:10] + "/" + day[5:7],
+            "messages": 0,
+            "welcomes": 0,
+            "verifications": 0,
+            "mods": 0,
+        }
+        for day in date_strings
+    ]
+
+    # Contadores del bot por día (bienvenidas, verificaciones, protección).
+    stat_rows = (
+        db.query(AppSetting)
+        .filter(AppSetting.key.like("bot:stats:%"))
+        .filter(AppSetting.key >= f"bot:stats:{date_strings[0]}")
+        .filter(AppSetting.key <= f"bot:stats:{date_strings[-1]}")
+        .all()
+    )
+    for row in stat_rows:
+        day = (row.key or "")["bot:stats:".__len__():]
+        if day not in index:
+            continue
+        try:
+            data = json.loads(row.value or "{}")
+        except (ValueError, TypeError):
+            continue
+        entry = series[index[day]]
+        entry["welcomes"] = int(data.get("welcomes", 0) or 0)
+        entry["verifications"] = int(data.get("verifications", 0) or 0)
+        total_mods = (
+            int(data.get("antiraid_triggers", 0) or 0)
+            + int(data.get("antispam_warn", 0) or 0)
+            + int(data.get("antispam_timeout", 0) or 0)
+            + int(data.get("antispam_kick", 0) or 0)
+        )
+        entry["mods"] = total_mods
+
+    messages = (
+        db.query(Usage.day, func.sum(Usage.messages))
+        .filter(Usage.day.in_(date_strings))
+        .group_by(Usage.day)
+        .all()
+    )
+    for day, total in messages:
+        if day in index:
+            series[index[day]]["messages"] = int(total or 0)
+
+    return {"days": days, "series": series}
+
+
 @app.get("/api/admin/discord-bot/events")
 def admin_bot_events(
     _: dict[str, Any] = Depends(require_admin),
