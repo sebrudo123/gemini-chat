@@ -707,6 +707,7 @@
 
   function renderConfigTexts() {
     $("cfgWelcomeMsg").value = state.config.welcome_message || "";
+    renderWelcomePreview();
     $("cfgGoodbyeMsg").value = state.config.goodbye_message || "";
     var flag = function (key) {
       return ["1", "true", "on"].includes(String(state.config[key] || "").toLowerCase());
@@ -736,6 +737,66 @@
     $("cfgWelcomeDm").value = state.config.welcome_dm_message || "";
   }
 
+  /* ---------------------------------------------------------- */
+  /* Bienvenida enriquecida: plantillas + vista previa (item 10)  */
+  /* ---------------------------------------------------------- */
+  var WELCOME_TEMPLATES = {
+    clasico: "🎉 ¡Bienvenido {user} a **{server}**!\n\nEres el miembro nº {count}. Pásate por {verify_channel} para desbloquear todos los canales y, si quieres, preséntate: ¡nos alegra tenerte aquí!",
+    gamer: "🎮 ¡BIENVENIDO {user}!\n\n🏆 Eres el jugador nº {count}\n📅 Cuenta creada: {created}\n✅ Verifícate en {verify_channel} para entrar en juego\n\nDisfruta de **{server}** y juega limpio ⚔️",
+    familia: "🌻 Hola {name}, ¡qué alegría verte en **{server}**!\n\n• Preséntate y cuéntanos de ti\n• Echa un ojo a las reglas del servidor\n• Si te falta algo, {verify_channel} es tu sitio\n\nMiembro nº {count} · bienvenido a la familia 💜",
+    minimal: "Bienvenido {user} a {server} 👋\nMiembro nº {count} · verifícate en {verify_channel}.",
+  };
+
+  function welcomeSampleValues() {
+    var guild = null;
+    for (var i = 0; i < state.guilds.length; i++) {
+      if (String(state.guilds[i].id) === String(state.guildId)) {
+        guild = state.guilds[i];
+        break;
+      }
+    }
+    return {
+      user: "@NuevoMiembro",
+      name: "NuevoMiembro",
+      server: guild && guild.name ? guild.name : "Tu servidor",
+      count: guild && guild.member_count ? String(guild.member_count) : "1234",
+      created: "12/03/2021",
+      joined: "hoy",
+      verify_channel: "#verificación",
+    };
+  }
+
+  function fillWelcomePlaceholders(text) {
+    var values = welcomeSampleValues();
+    return String(text || "").replace(/\{(user|name|server|count|created|joined|verify_channel)\}/g, function (_, key) {
+      return values[key] !== undefined ? values[key] : "";
+    });
+  }
+
+  function escapeWelcome(text) {
+    return String(text || "")
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function renderWelcomePreview() {
+    var host = $("welcomePreview");
+    if (!host) return;
+    var raw = escapeWelcome($("cfgWelcomeMsg").value.trim());
+    if (!raw) {
+      host.innerHTML = '<span class="mini">Escribe el mensaje para ver cómo quedará…</span>';
+      return;
+    }
+    raw = fillWelcomePlaceholders(raw);
+    raw = raw.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+    host.innerHTML = raw;
+  }
+
+  function applyWelcomeTemplate() {
+    var key = $("welcomeTemplate").value;
+    if (!key || !WELCOME_TEMPLATES[key]) return;
+    $("cfgWelcomeMsg").value = WELCOME_TEMPLATES[key];
+    renderWelcomePreview();
+  }
   function refreshMemberStats() {
     api("/api/admin/discord-bot/member-stats").then(function (data) {
       var days = data.days || [];
@@ -1619,6 +1680,8 @@ document.addEventListener("click", function (ev) {
     $("loginBtn").onclick = loginEmail;
     $("tokenBtn").onclick = loginToken;
     $("btnLogout").onclick = logout;
+    $("btnUseTemplate").onclick = applyWelcomeTemplate;
+    $("cfgWelcomeMsg").addEventListener("input", renderWelcomePreview);
 
     /* Descargas CSV con el token en la cabecera (fetch + blob) */
     function downloadCsv(path, filename) {

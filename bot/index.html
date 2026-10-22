@@ -320,6 +320,14 @@
       background:var(--card-2);
     }
 
+    /* Vista previa de la bienvenida (item 10) */
+    .wpreview {
+      border:1px dashed var(--stroke-2); border-radius:14px; padding:12px 14px;
+      background:var(--card-2, #171726); color:#d9d9e6; font-size:13.5px; line-height:1.55;
+      white-space:pre-wrap; word-break:break-word;
+    }
+    .wpreview b { color:#fff; font-weight:700; }
+
     /* ---------- Login ---------- */
     .login-wrap {
       display:flex; align-items:center; justify-content:center;
@@ -692,6 +700,19 @@
               <span class="chip">{verify_channel}</span>
             </div>
             <textarea id="cfgWelcomeMsg" placeholder="¡Bienvenido a {server}, {user}!"></textarea>
+            <label class="fl" style="margin-top:10px">Plantillas listas</label>
+            <div class="row" style="gap:8px">
+              <select id="welcomeTemplate" style="flex:1">
+                <option value="">Elegir una plantilla…</option>
+                <option value="clasico">Clásico (cordial con reglas)</option>
+                <option value="gamer">Gamer (con toque de juego)</option>
+                <option value="familia">Comunidad (cálida)</option>
+                <option value="minimal">Minimalista</option>
+              </select>
+              <button class="btn ghostish" id="btnUseTemplate" style="font-size:12px">Aplicar</button>
+            </div>
+            <label class="fl" style="margin-top:10px">Vista previa</label>
+            <div class="wpreview" id="welcomePreview"><span class="mini">Escribe el mensaje para ver cómo quedará…</span></div>
             <label class="switch"><span>Tarjeta de bienvenida con imagen generada</span><input type="checkbox" id="cfgWelcomeImage"></label>
             <p class="mini">El bot genera una tarjeta con el avatar y el número de miembro al entrar alguien.</p>
             <button class="btn primary wide" id="btnSaveWelcome" style="margin-top:10px"><svg class="ic"><use href="#ic-check"/></svg><span>Guardar bienvenida</span></button>
