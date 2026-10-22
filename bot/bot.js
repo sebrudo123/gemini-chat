@@ -177,6 +177,10 @@
   function handleAuthSuccess(token) {
     state.token = token;
     LS.setItem(TOKEN_KEY, token);
+    try {
+      // En la APK, el nativo usa el mismo token para el Resumen sin WebView.
+      if (nativeBridge && nativeBridge.onToken) nativeBridge.onToken(token);
+    } catch (err) { /* navegador normal: sin puente */ }
     showApp(true);
   }
 
@@ -1572,6 +1576,10 @@
       // Solo guarda el token: la validación ocurre contra el backend al arrancar.
       state.token = decodeURIComponent(token[1]);
       LS.setItem(TOKEN_KEY, state.token);
+      // En la APK: entregárselo al nativo para el Resumen sin WebView.
+      try {
+        if (nativeBridge && nativeBridge.onToken) nativeBridge.onToken(state.token);
+      } catch (err) { /* navegador normal: sin puente */ }
     }
   }
 
@@ -1895,6 +1903,10 @@ document.addEventListener("click", function (ev) {
   window.CoreIAJS = { switchView: switchView };
   if (state.token) {
     if (appMode) appBootOverlay(true);
+    // La APK necesita el token también en el nativo (Resumen sin WebView).
+    try {
+      if (nativeBridge && nativeBridge.onToken) nativeBridge.onToken(state.token);
+    } catch (errToken) { /* navegador normal: sin puente */ }
     api("/api/admin/discord-bot")
       .then(function (data) {
         state.bot = data.bot;

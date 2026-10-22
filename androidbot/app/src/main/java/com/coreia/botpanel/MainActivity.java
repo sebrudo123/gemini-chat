@@ -102,6 +102,20 @@ public class MainActivity extends AppCompatActivity {
         }
 
         @JavascriptInterface
+        public void onToken(final String token) {
+            // Login hecho dentro del panel web (OAuth Discord): el nativo
+            // necesita el mismo token para las llamadas del Resumen.
+            if (token == null || token.isEmpty()) return;
+            getSharedPreferences(LoginActivity.PREFS_NAME, MODE_PRIVATE)
+                .edit()
+                .putString(LoginActivity.KEY_TOKEN_CACHE, token)
+                .apply();
+            runOnUiThread(() -> {
+                if (dashActive) loadResumen(); // repinta con el token válido
+            });
+        }
+
+        @JavascriptInterface
         public void onLoginState(final boolean logged) {
             runOnUiThread(() -> {
                 loggedIn = logged;
