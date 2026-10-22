@@ -470,3 +470,30 @@ def test_panel_login_rejects_unknown_origin(client, monkeypatch):
     """Un origen no listado no puede robar la redirección del panel."""
     monkeypatch.setattr(main.settings, "allowed_origins", [])
     assert main._trusted_panel_origin("https://malicioso.ejemplo") == main._panel_origin()
+
+
+def test_events_endpoint_filters_by_since(client, monkeypatch):
+    """El poller de la APK lee eventos nuevos filtrados por fecha."""
+    monkeypatch.setattr(
+        bot_extras, "load_events",
+        lambda: [
+            {"t": "2026-10-22T12:00:00+00:00", "kind": "welcome",
+             "detail": "lauti", "guild": "1551284673165000885"},
+            {"t": "2026-10-22T10:00:00+00:00", "kind": "moderation",
+             "detail": "timeout", "guild": "1551284673165000885"},
+        ],
+    )
+    token_h = auth(FOUNDER_ID)
+
+    todo = client.get("/api/admin/discord-bot/events", headers=token_h).json()
+    assert len(todo["events"]) == 2
+
+    nuevos = client.get(
+        "/api/admin/discord-bot/events",
+        params={"since": "2026-10-22T11:00:00+00:00"},
+        headers=token_h,
+    ).json()
+    assert [e["kind"] for e in nuevos["events"]] == ["welcome"]
+
+    requerido = client.get("/api/admin/discord-bot/events")
+    assert requerido.status_code in (401, 403)
