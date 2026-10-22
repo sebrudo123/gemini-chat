@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Aviso nativo "Sin conexión" (ConnectivityManager) -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Notificaciones de actividad del bot (poll periódico del panel) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Instalar el APK de una actualización descargada por la propia app -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
