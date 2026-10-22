@@ -295,6 +295,42 @@ def _resolve_role(guild: Any, config: dict[str, str], key: str) -> Any:
     return guild.get_role(role_id) if role_id else None
 
 
+def _ai_welcome_text(member: Any) -> str:
+    """Redacta un saludo de bienvenida con IA para el miembro nuevo (item 5)."""
+    cuenta = ""
+    if member.created_at:
+        cuenta = f"Su cuenta tiene {_account_age_days(member)} días de antigüedad."
+    texto = (
+        f"Redacta un saludo de bienvenida de Discord de una o dos frases, "
+        f"cálido y en español, para {member.display_name} que acaba de "
+        f"entrar al servidor. {cuenta} No uses placeholders ni menciones; "
+        f"no escribas la palabra servidor repetidamente."
+    )
+    return _command_ai_reply(
+        "Eres Core IA, bot amistoso de un servidor de Discord. Solo devuelve "
+        "el texto del saludo, sin comillas ni explicaciones.",
+        texto,
+        member.guild.name,
+        member.display_name,
+    )
+
+
+def _ai_goodbye_text(member: Any) -> str:
+    """Redacta una despedida breve con IA (item 5)."""
+    texto = (
+        f"Redacta una despedida breve de Discord de una frase, amable y en "
+        f"español, para {member.display_name} que acaba de salir del "
+        f"servidor. No uses placeholders ni menciones."
+    )
+    return _command_ai_reply(
+        "Eres Core IA, bot amistoso de un servidor de Discord. Solo devuelve "
+        "el texto de la despedida, sin comillas ni explicaciones.",
+        texto,
+        member.guild.name,
+        member.display_name,
+    )
+
+
 def _command_ai_reply(
     system_prompt: str, user_message: str, guild_name: str, user_name: str
 ) -> str:
@@ -856,13 +892,27 @@ class BotManager:
                 if verify_channel
                 else "el canal de verificación",
             }
+            ai_text = ""
+            if _config_bool(config, "welcome_ai_enabled"):
+                ai_text = await asyncio.to_thread(_ai_welcome_text, member)
+            description = ai_text or _render_template(template, values)
             embed = discord.Embed(
                 title=f"¡Bienvenido/a a {member.guild.name}!",
-                description=_render_template(template, values),
+                description=description,
                 color=0x6D5DFC,
             )
+            if ai_text:
+                # La IA redactó el texto: junto al saludo va la referencia
+                # al canal de verificación para no perder el flujo.
+                if verified_role and verify_channel is not None:
+                    embed.description = (
+                        f"{description}\n\nPasa por {verify_channel.mention} "
+                        "para verificarte."
+                    )
+                embed.set_footer(text="Core IA · Bienvenida redactada con IA")
+            else:
+                embed.set_footer(text="Core IA · Bienvenida")
             embed.set_thumbnail(url=member.display_avatar.url)
-            embed.set_footer(text="Core IA · Bienvenida")
             view = self._make_verify_view() if verified_role else None
             try:
                 send_kwargs: dict[str, Any] = {
@@ -1421,13 +1471,19 @@ class BotManager:
                 if member.joined_at
                 else "—",
             }
+            ai_text = ""
+            if _config_bool(config, "goodbye_ai_enabled"):
+                ai_text = await asyncio.to_thread(_ai_goodbye_text, member)
             embed = discord.Embed(
                 title="Hasta pronto",
-                description=_render_template(template, values),
+                description=ai_text or _render_template(template, values),
                 color=0x94A3B8,
             )
             embed.set_thumbnail(url=member.display_avatar.url)
-            embed.set_footer(text="Core IA · Despedida")
+            embed.set_footer(
+                text="Core IA · Despedida"
+                + (" redactada con IA" if ai_text else "")
+            )
             try:
                 await goodbye.send(
                     embed=embed,
