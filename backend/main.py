@@ -5174,6 +5174,33 @@ def _backup_payload(db: Session) -> dict[str, Any]:
     }
 
 
+@app.get("/api/admin/discord-bot/modlog.csv", include_in_schema=False)
+def admin_bot_modlog_csv(
+    _: dict[str, Any] = Depends(require_admin),
+) -> Response:
+    """Registro completo de moderación en CSV (item 6: respaldos)."""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["fecha", "tipo", "servidor", "detalle"])
+    for event in bot_extras.load_events():
+        if event.get("kind") not in BOT_MOD_EVENT_KINDS:
+            continue
+        writer.writerow([
+            event.get("t", ""),
+            event.get("kind", ""),
+            event.get("guild", ""),
+            (event.get("detail") or "").replace("\n", " "),
+        ])
+    return Response(
+        buffer.getvalue().encode("utf-8-sig"),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": 'attachment; filename="coreia-moderacion.csv"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 @app.get("/api/admin/discord-bot/backup")
 def admin_bot_backup(
     _: dict[str, Any] = Depends(require_admin),

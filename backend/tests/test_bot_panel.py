@@ -6,6 +6,7 @@ from collections import deque
 from fastapi.testclient import TestClient
 
 import discord_bot
+import bot_extras
 import main
 from main import app
 
@@ -101,6 +102,19 @@ def test_aimod_verdict_parsing(client, monkeypatch):
 
     monkeypatch.setattr(llm, "complete_text", boom)
     assert discord_bot.aimod_verdict("texto")["toxic"] is False
+
+
+def test_bot_modlog_csv(client):
+    """CSV de moderación: descarga anexada y filas de eventos."""
+    bot_extras.record_event("antiraid_block", "prueba csv", "123")
+    response = client.get("/api/admin/discord-bot/modlog.csv", headers=auth(FOUNDER_ID))
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    body = response.text
+    assert "fecha,tipo,servidor,detalle" in body
+    assert "antiraid_block" in body
+    # requiere admin
+    assert client.get("/api/admin/discord-bot/modlog.csv").status_code == 401
 
 
 def test_bot_series_shape(client):

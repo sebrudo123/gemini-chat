@@ -1496,6 +1496,35 @@
     $("loginBtn").onclick = loginEmail;
     $("tokenBtn").onclick = loginToken;
     $("btnLogout").onclick = logout;
+
+    /* Descargas CSV con el token en la cabecera (fetch + blob) */
+    function downloadCsv(path, filename) {
+      var headers = {};
+      if (state.token) headers.Authorization = "Bearer " + state.token;
+      fetch(API_BASE + path, { headers: headers })
+        .then(function (res) {
+          if (!res.ok) throw new Error("No se pudo exportar (código " + res.status + ").");
+          return res.text();
+        })
+        .then(function (text) {
+          var blob = new Blob([text], { type: "text/csv;charset=utf-8" });
+          var link = document.createElement("a");
+          link.href = URL.createObjectURL(blob);
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+          URL.revokeObjectURL(link.href);
+          link.remove();
+          toast("Archivo listo: " + filename, "ok");
+        })
+        .catch(function (err) { toast(err.message || "No se pudo exportar.", "err"); });
+    }
+    $("btnCsvMod").onclick = function () {
+      downloadCsv("/api/admin/discord-bot/modlog.csv", "coreia-moderacion.csv");
+    };
+    $("btnCsvUsers").onclick = function () {
+      downloadCsv("/api/admin/export/users?format=csv", "coreia-usuarios.csv");
+    };
     $("btnCmdAdd").onclick = function () {
       pullCommandsFromDom();
       state.commands.push({ name: "/", response: "", ai: false });
