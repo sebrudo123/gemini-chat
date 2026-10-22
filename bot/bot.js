@@ -719,6 +719,8 @@
     $("cfgAimodOn").checked = flag("aimod_enabled");
     $("cfgAimodAction").value = state.config.aimod_action || "timeout";
     $("cfgAimodThreshold").value = state.config.aimod_threshold || "75";
+    $("cfgTranslateOn").checked = flag("translate_enabled");
+    $("cfgTranslateTo").value = state.config.translate_to || "es";
     $("cfgVoiceTempOn").checked = flag("voice_temp_enabled");
     $("cfgTranscriptOn").checked = flag("ticket_transcript_enabled");
     $("cfgAntiraidJoins").value = state.config.antiraid_joins || "5";
@@ -1761,6 +1763,12 @@ document.addEventListener("click", function (ev) {
         aimod_action: $("cfgAimodAction").value || "timeout",
         aimod_threshold: $("cfgAimodThreshold").value || "75",
       }, "Moderación con IA guardada.");
+    };
+    $("btnSaveTranslate").onclick = function () {
+      saveConfig({
+        translate_enabled: $("cfgTranslateOn").checked ? "1" : "0",
+        translate_to: $("cfgTranslateTo").value || "es",
+      }, "Traducción automática guardada.");
     };
     $("btnSaveVoice").onclick = function () {
       saveConfig({

@@ -4497,6 +4497,9 @@ BOT_CONFIG_KEYS = (
     "aimod_enabled",
     "aimod_action",
     "aimod_threshold",
+    # Traducción automática por reacción (item 9)
+    "translate_enabled",
+    "translate_to",
     # Voz temporal (lobby)
     "voice_temp_enabled",
     "voice_lobby_id",

@@ -852,6 +852,22 @@
           </div>
 
           <div class="card" style="margin-top:14px">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-globe"/></svg></span>Traducción automática</h2>
+            <p class="sub">Quien reaccione con 🌐 a un mensaje recibe su traducción al idioma del servidor. Respuesta citada, con caché y límite por usuario.</p>
+            <label class="switch"><span>Activar traducción con 🌐</span><input type="checkbox" id="cfgTranslateOn"></label>
+            <label class="fl">Idioma destino</label>
+            <select id="cfgTranslateTo">
+              <option value="es">Español</option>
+              <option value="en">Inglés</option>
+              <option value="pt">Portugués</option>
+              <option value="fr">Francés</option>
+              <option value="de">Alemán</option>
+              <option value="it">Italiano</option>
+            </select>
+            <button class="btn primary wide" id="btnSaveTranslate" style="margin-top:12px"><svg class="ic"><use href="#ic-check"/></svg><span>Guardar traducción</span></button>
+          </div>
+
+          <div class="card" style="margin-top:14px">
             <h2><span class="tile"><svg class="ic"><use href="#ic-users"/></svg></span>Salas de voz temporales</h2>
             <p class="sub">Quien entre al lobby consigue una sala con su nombre; en cuanto quede vacía, se borra sola.</p>
             <label class="switch"><span>Activar salas temporales</span><input type="checkbox" id="cfgVoiceTempOn"></label>

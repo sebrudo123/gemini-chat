@@ -348,6 +348,23 @@ def aimod_verdict(text: str) -> dict[str, Any]:
         return default
 
 
+def _bot_translate(text: str, target: str) -> str:
+    """Traduce un mensaje al idioma pedido con el motor propio (item 9)."""
+    import llm
+
+    system = (
+        f"Eres un traductor automático. Traduce el texto del usuario al idioma "
+        f"'{target}' preservando el tono y menciones. Responde SOLO con la "
+        "traducción, sin comillas, sin comentarios ni explicaciones."
+    )
+    try:
+        out = llm.complete_text(text[:1500], system_instruction=system)
+    except Exception:  # noqa: BLE001 - sin traducción no se molesta al chat
+        LOG.exception("Traducción automática fallida")
+        return ""
+    return (out or "").strip()
+
+
 def _resolve_channel(guild: Any, config: dict[str, str], key: str) -> Any:
     channel_id = _snowflake(config.get(key))
     channel = guild.get_channel(channel_id) if channel_id else None
@@ -1031,6 +1048,76 @@ class BotManager:
 
     _CMD_COOLDOWN: "defaultdict[Any, float]" = defaultdict(float)
     _AIMOD_COOLDOWN: "defaultdict[Any, float]" = defaultdict(float)
+    _TRANSLATE_COOLDOWN: "defaultdict[Any, float]" = defaultdict(float)
+    _TRANSLATE_CACHE: dict[tuple[str, str], str] = {}
+
+    async def _on_translate_reaction(self, payload: Any) -> None:
+        """Reacción 🌐 sobre un mensaje → traducción al idioma del servidor.
+
+        Config por servidor: `translate_enabled` + `translate_to` (es por
+        defecto). El resultado se cachea por mensaje+idioma, se limita por
+        usuario (10 s) y se responde citando el mensaje original.
+        """
+        if str(getattr(payload.emoji, "name", "")) != "🌐":
+            return
+        if getattr(payload, "guild_id", None) is None:
+            return
+        if payload.member is not None and getattr(payload.member, "bot", False):
+            return
+        guild = self._client_guild(payload.guild_id)
+        if guild is None:
+            return
+        if self._guild_id and str(guild.id) != self._guild_id:
+            return
+        config = await asyncio.to_thread(load_guild_config, guild.id)
+        if not _config_bool(config, "translate_enabled", False):
+            return
+        user_key = (guild.id, payload.user_id)
+        now = time.time()
+        if now - self._TRANSLATE_COOLDOWN[user_key] < 10:
+            return
+        self._TRANSLATE_COOLDOWN[user_key] = now
+
+        channel = guild.get_channel(payload.channel_id)
+        if channel is None:
+            return
+        try:
+            message = await channel.fetch_message(payload.message_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return
+        content = (message.content or "").strip()
+        if not content or message.author.bot:
+            return
+        target = (config.get("translate_to") or "es").strip() or "es"
+        cache_key = (f"{guild.id}:{payload.message_id}", target)
+        cached = self._TRANSLATE_CACHE.get(cache_key)
+        if cached:
+            text = cached
+        else:
+            text = await asyncio.to_thread(_bot_translate, content, target)
+            if not text:
+                return
+            self._TRANSLATE_CACHE[cache_key] = text
+            if len(self._TRANSLATE_CACHE) > 200:
+                # Caché acotada: se descarta el más viejo (orden de inserción).
+                first = next(iter(self._TRANSLATE_CACHE))
+                self._TRANSLATE_CACHE.pop(first, None)
+        await channel.send(
+            content=f"🌐 **Traducción ({target}):** {text[:1500]}",
+            reference=message,
+            mention_author=False,
+        )
+        bot_extras.bump_guild_stat(guild.id, "translations")
+
+    def _client_guild(self, guild_id: int | None) -> Any:
+        """Servidor de Discord desde la caché del cliente (None si no está)."""
+        try:
+            client = self._client
+            if client is None:
+                return None
+            return client.get_guild(int(guild_id or 0))
+        except Exception:  # noqa: BLE001
+            return None
 
     async def _aimod_check(self, message: Any, config: dict[str, str]) -> bool:
         """Moderación de contenido con IA (item 5). True si actuó aquí.
@@ -2248,6 +2335,14 @@ class BotManager:
                 await self._on_voice_change(member, before, after)
             except Exception:
                 LOG.exception("Error en voz temporal de %s", member)
+
+        @client.event
+        async def on_raw_reaction_add(payload: "discord.RawReactionActionEvent") -> None:
+            """Traducción bajo demanda (item 9): reacción 🌐 sobre un mensaje."""
+            try:
+                await self._on_translate_reaction(payload)
+            except Exception:  # noqa: BLE001 - nunca rompe el flujo del bot
+                LOG.exception("Error en traducción por reacción")
 
         @client.event
         async def on_message(message: "discord.Message") -> None:

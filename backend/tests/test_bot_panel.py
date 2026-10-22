@@ -152,6 +152,25 @@ def test_panel_roles_read_write_levels(client, monkeypatch):
     assert any("role=" in log["detail"] for log in audit)
 
 
+def test_bot_translate_helper(client, monkeypatch):
+    """Traducción con IA: limpia espacios y falla en silencio (item 9)."""
+    import llm
+
+    monkeypatch.setattr(
+        llm,
+        "complete_text",
+        lambda message, system_instruction=None: "  Hola mundo  ",
+    )
+    assert discord_bot._bot_translate("Hello world", "es") == "Hola mundo"
+    assert "español" not in discord_bot._bot_translate("Hello", "es")
+
+    def boom(message, system_instruction=None):
+        raise RuntimeError("motor caído")
+
+    monkeypatch.setattr(llm, "complete_text", boom)
+    assert discord_bot._bot_translate("Hello", "es") == ""
+
+
 def test_bot_guild_stats_shape(client):
     """Métricas por servidor: total y última actividad (item 7)."""
     bot_extras.bump_guild_stat(987654321, "messages")
