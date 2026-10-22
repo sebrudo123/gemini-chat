@@ -1452,25 +1452,72 @@ def enabled_providers() -> list[str]:
     return providers
 
 
+_OAUTH_CODE_CACHE: dict[str, tuple[float, str]] = {}
+OAUTH_CODE_CACHE_TTL = 120.0
+OAUTH_USER_AGENT = "CoreIA-Panel/1.0 (+https://gemini-chat-backend-vyrz.onrender.com)"
+
+
 async def _exchange_code(token_url: str, data: dict[str, Any]) -> str:
-    """Intercambia el `code` OAuth por un access token."""
-    async with httpx.AsyncClient(timeout=15) as client:
+    """Intercambia el `code` OAuth por un access token.
+
+    El User-Agent de navegador es obligatorio: Discord corre tras Cloudflare
+    y bloquea (error 1010) clientes con UA de librería tipo `python-httpx`,
+    lo que se veía como "No se pudo obtener el token del proveedor".
+    También queda un caché corto del código por si el WebView repite el
+    callback (el mismo `code` no se puede canjear dos veces).
+    """
+    code = str(data.get("code") or "")
+    now = time.time()
+    if code:
+        cached = _OAUTH_CODE_CACHE.get(code)
+        if cached and now - cached[0] < OAUTH_CODE_CACHE_TTL:
+            return cached[1]
+    async with httpx.AsyncClient(
+        timeout=15, headers={"User-Agent": OAUTH_USER_AGENT},
+    ) as client:
         response = await client.post(
             token_url,
             data=data,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
     if response.status_code != 200:
-        raise HTTPException(status_code=401, detail="No se pudo obtener el token del proveedor.")
+        reason = ""
+        try:
+            reason = str(response.json().get("error") or "")
+        except (ValueError, TypeError):
+            pass
+        logging.getLogger("coreia").error(
+            "Exchange OAuth falló (%s): %s", response.status_code, response.text[:200]
+        )
+        humano = {
+            "invalid_client": "credenciales de la app rechazadas por Discord",
+            "invalid_grant": "el código expiró o ya se usó; acepta de nuevo en Discord",
+            "invalid_request": "solicitud incompleta",
+        }.get(reason, reason or f"HTTP {response.status_code}")
+        raise HTTPException(
+            status_code=401,
+            detail=f"El proveedor no entregó el token ({humano}). Intenta de nuevo.",
+        )
     access_token = response.json().get("access_token")
     if not access_token:
         raise HTTPException(status_code=401, detail="El proveedor no devolvió un access token.")
+    if code:
+        _OAUTH_CODE_CACHE[code] = (now, access_token)
+        if len(_OAUTH_CODE_CACHE) > 500:
+            vencidas = [
+                k for k, (t, _) in _OAUTH_CODE_CACHE.items()
+                if now - t >= OAUTH_CODE_CACHE_TTL
+            ]
+            for k in vencidas:
+                _OAUTH_CODE_CACHE.pop(k, None)
     return access_token
 
 
 async def _fetch_profile(url: str, access_token: str) -> dict[str, Any]:
     """Obtiene el perfil del usuario desde el endpoint del proveedor."""
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(
+        timeout=15, headers={"User-Agent": OAUTH_USER_AGENT},
+    ) as client:
         response = await client.get(url, headers={"Authorization": f"Bearer {access_token}"})
     if response.status_code != 200:
         raise HTTPException(status_code=401, detail="No se pudo obtener el perfil del proveedor.")
