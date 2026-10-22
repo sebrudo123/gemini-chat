@@ -2,11 +2,14 @@ package com.coreia.botpanel;
 
 import android.annotation.SuppressLint;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.view.inputmethod.EditorInfo;
 import android.widget.TextView;
 
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.textfield.TextInputEditText;
@@ -42,6 +45,8 @@ public class LoginActivity extends AppCompatActivity {
     public static final String PREFS_NAME = PREFS;
     public static final String KEY_TOKEN_CACHE = KEY_TOKEN;
     public static final String KEY_EMAIL_CACHE = KEY_EMAIL;
+    /** Biometría: "1" activada, "0" declinada, vacío = nunca se preguntó. */
+    public static final String KEY_BIO_ENABLED = "biometric_enabled";
 
     private TextInputEditText inputEmail;
     private TextInputEditText inputPass;
@@ -201,10 +206,55 @@ public class LoginActivity extends AppCompatActivity {
     }
 
     private void openMain(final String token) {
+        maybeOfferBiometrics();
         final Intent intent = new Intent(this, MainActivity.class);
         intent.putExtra(EXTRA_TOKEN, token);
         startActivity(intent);
         finish();
+    }
+
+    /** Primera vez: si el equipo tiene huella/FaceID, se ofrece proteger
+     * la app. Si no tiene sensores o el usuario cancela, queda apagada. */
+    private void maybeOfferBiometrics() {
+        final SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        if (!prefs.getString(KEY_BIO_ENABLED, "").isEmpty()) return;
+        final androidx.biometric.BiometricManager manager =
+            androidx.biometric.BiometricManager.from(this);
+        final int can = manager.canAuthenticate(
+            androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK
+                | androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL);
+        if (can != androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS) {
+            prefs.edit().putString(KEY_BIO_ENABLED, "0").apply();
+            return;
+        }
+        try {
+            final androidx.biometric.BiometricPrompt prompt =
+                new androidx.biometric.BiometricPrompt(this,
+                    ContextCompat.getMainExecutor(this),
+                    new androidx.biometric.BiometricPrompt.AuthenticationCallback() {
+                        @Override
+                        public void onAuthenticationSucceeded(
+                                @NonNull androidx.biometric.BiometricPrompt.AuthenticationResult result) {
+                            prefs.edit().putString(KEY_BIO_ENABLED, "1").apply();
+                        }
+
+                        @Override
+                        public void onAuthenticationError(
+                                int code, @NonNull CharSequence err) {
+                            prefs.edit().putString(KEY_BIO_ENABLED, "0").apply();
+                        }
+                    });
+            prompt.authenticate(new androidx.biometric.BiometricPrompt.PromptInfo.Builder()
+                .setTitle("Proteger Core IA con biometría")
+                .setSubtitle("Cada vez que abras la app pedirá huella o desbloqueo del equipo")
+                .setNegativeButtonText("No, gracias")
+                .setAllowedAuthenticators(
+                    androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK
+                        | androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+                .build());
+        } catch (Exception e) {
+            prefs.edit().putString(KEY_BIO_ENABLED, "0").apply();
+        }
     }
 
     /** Login con Discord: el WebView del panel lo gestiona (OAuth real). */
