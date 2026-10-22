@@ -205,6 +205,7 @@ public class MainActivity extends AppCompatActivity {
         webView.addJavascriptInterface(new NativeBridge(), "CoreIAAndroid");
 
         setupBottomNav();
+        setupEventPoller();
 
         // Hasta que el panel confirme sesión, la barra nativa está oculta.
         loggedIn = false;
@@ -636,6 +637,29 @@ public class MainActivity extends AppCompatActivity {
         final TextView banner = findViewById(com.coreia.botpanel.R.id.netBanner);
         if (banner != null) {
             banner.setVisibility(show && !networkConnected ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    /** Aviso de actividad del bot: encuesta ligera cada ~15 min (WorkManager).
+     * Los eventos nuevos (bienvenidas, moderación, raid, errores) salen como
+     * notificación local — gratis, sin servidor de push. */
+    private void setupEventPoller() {
+        if (android.os.Build.VERSION.SDK_INT >= 33
+            && androidx.core.content.ContextCompat.checkSelfPermission(this,
+                android.Manifest.permission.POST_NOTIFICATIONS)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(
+                new String[] { android.Manifest.permission.POST_NOTIFICATIONS }, 312);
+        }
+        try {
+            final androidx.work.PeriodicWorkRequest req =
+                new androidx.work.PeriodicWorkRequest.Builder(
+                    NotifierWorker.class, 15, java.util.concurrent.TimeUnit.MINUTES)
+                    .build();
+            androidx.work.WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+                "coreia-eventos", androidx.work.ExistingPeriodicWorkPolicy.KEEP, req);
+        } catch (Exception e) {
+            // Sin el poller la app sigue funcionando (sin notificaciones).
         }
     }
 
