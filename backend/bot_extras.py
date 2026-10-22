@@ -13,6 +13,7 @@ import json
 import math
 import random
 import secrets
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -1071,3 +1072,143 @@ def member_stats_last_days(days: int = 7) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Estadísticas por servidor (buffer en memoria + flush cada 45 s)
+# --------------------------------------------------------------------------- #
+GUILD_STATS_PREFIX = "bot:guildstats:"
+GUILD_STATS_MAX_DAYS = 31
+_GUILD_STATS_LOCK = threading.Lock()
+_GUILD_STATS_BUFFER: dict[str, dict[str, dict[str, int]]] = {}
+_GUILD_STATS_TIMER: threading.Timer | None = None
+_GUILD_STATS_PURGED = ""
+
+
+def _today_str() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def bump_guild_stat(guild_id: int | str, field: str) -> None:
+    """Acumula en memoria un contador diario por servidor.
+
+    El flush a base de datos ocurre una vez cada 45 s: los mensajes
+    frecuentes no generan una escritura cada uno.
+    """
+    global _GUILD_STATS_TIMER
+    day = _today_str()
+    with _GUILD_STATS_LOCK:
+        servers = _GUILD_STATS_BUFFER.setdefault(day, {})
+        fields = servers.setdefault(str(guild_id), {})
+        fields[field] = fields.get(field, 0) + 1
+        if _GUILD_STATS_TIMER is None:
+            timer = threading.Timer(45.0, flush_guild_stats)
+            timer.daemon = True
+            timer.start()
+            _GUILD_STATS_TIMER = timer
+
+
+def flush_guild_stats() -> None:
+    """Vuelca el buffer a app_settings y purga lo más viejo de 31 días."""
+    global _GUILD_STATS_BUFFER, _GUILD_STATS_TIMER, _GUILD_STATS_PURGED
+    with _GUILD_STATS_LOCK:
+        pending = _GUILD_STATS_BUFFER
+        _GUILD_STATS_BUFFER = {}
+        _GUILD_STATS_TIMER = None
+    if not pending:
+        return
+    db = SessionLocal()
+    try:
+        for day, servers in pending.items():
+            key = GUILD_STATS_PREFIX + day
+            row = db.get(AppSetting, key)
+            try:
+                data = json.loads(row.value) if row and row.value else {}
+                data = data if isinstance(data, dict) else {}
+            except (ValueError, TypeError):
+                data = {}
+            for guild_id, fields in servers.items():
+                entry = data.setdefault(str(guild_id), {})
+                if not isinstance(entry, dict):
+                    entry = data[str(guild_id)] = {}
+                for field, value in fields.items():
+                    try:
+                        entry[field] = int(entry.get(field, 0)) + int(value)
+                    except (TypeError, ValueError):
+                        entry[field] = int(value)
+            payload = json.dumps(data, ensure_ascii=False)
+            if row is not None:
+                row.value = payload
+            else:
+                db.add(AppSetting(key=key, value=payload))
+        db.commit()
+        if _GUILD_STATS_PURGED != _today_str():
+            cutoff = (
+                datetime.now(timezone.utc) - timedelta(days=GUILD_STATS_MAX_DAYS + 2)
+            ).strftime("%Y-%m-%d")
+            old_rows = (
+                db.query(AppSetting)
+                .filter(AppSetting.key.like(GUILD_STATS_PREFIX + "%"))
+                .filter(AppSetting.key < GUILD_STATS_PREFIX + cutoff)
+                .all()
+            )
+            for old in old_rows:
+                db.delete(old)
+            db.commit()
+            _GUILD_STATS_PURGED = _today_str()
+    except SQLAlchemyError:
+        db.rollback()
+    finally:
+        db.close()
+
+
+def load_guild_stats(days: int = 14) -> dict[str, dict[str, Any]]:
+    """Totales por servidor de los últimos N días y última actividad."""
+    today = datetime.now(timezone.utc).date()
+    window = max(1, min(GUILD_STATS_MAX_DAYS, days))
+    cutoff = (today - timedelta(days=window - 1)).strftime("%Y-%m-%d")
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(AppSetting)
+            .filter(AppSetting.key.like(GUILD_STATS_PREFIX + "%"))
+            .filter(AppSetting.key >= GUILD_STATS_PREFIX + cutoff)
+            .filter(AppSetting.key <= GUILD_STATS_PREFIX + _today_str())
+            .all()
+        )
+        totals: dict[str, dict[str, Any]] = {}
+        for row in sorted(
+            [r for r in rows if r.value].__iter__(),
+            key=lambda r: (r.key or ""),
+        ):
+            if not row or not row.value:
+                continue
+            day = (row.key or "")[len(GUILD_STATS_PREFIX):]
+            try:
+                data = json.loads(row.value)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            for guild_id, fields in data.items():
+                if not isinstance(fields, dict):
+                    continue
+                entry = totals.setdefault(str(guild_id), {
+                    "messages": 0,
+                    "welcomes": 0,
+                    "goodbyes": 0,
+                    "tickets": 0,
+                    "total": 0,
+                })
+                for field in ("messages", "welcomes", "goodbyes", "tickets"):
+                    try:
+                        value = int(fields.get(field, 0))
+                    except (TypeError, ValueError):
+                        value = 0
+                    entry[field] += value
+                    entry["total"] += value
+                if entry["total"] > 0:
+                    entry["last_active"] = day
+        return totals
+    finally:
+        db.close()

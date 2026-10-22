@@ -104,6 +104,21 @@ def test_aimod_verdict_parsing(client, monkeypatch):
     assert discord_bot.aimod_verdict("texto")["toxic"] is False
 
 
+def test_bot_guild_stats_shape(client):
+    """Métricas por servidor: total y última actividad (item 7)."""
+    bot_extras.bump_guild_stat(987654321, "messages")
+    bot_extras.flush_guild_stats()
+    response = client.get(
+        "/api/admin/discord-bot/guild-stats?days=14", headers=auth(FOUNDER_ID)
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["days"] == 14
+    server = (data["servers"] or {}).get("987654321") or {}
+    assert server.get("messages", 0) >= 1
+    assert "total" in server
+
+
 def test_bot_modlog_csv(client):
     """CSV de moderación: descarga anexada y filas de eventos."""
     bot_extras.record_event("antiraid_block", "prueba csv", "123")

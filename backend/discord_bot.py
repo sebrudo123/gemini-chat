@@ -864,6 +864,7 @@ class BotManager:
                         send_kwargs["files"] = [file]
                 await welcome.send(**send_kwargs)
                 bot_extras.bump_stat("welcomes", guild_id=str(member.guild.id))
+                bot_extras.bump_guild_stat(member.guild.id, "welcomes")
                 bot_extras.record_event(
                     "welcome", member.display_name, str(member.guild.id)
                 )
@@ -1346,6 +1347,7 @@ class BotManager:
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
                 bot_extras.bump_stat("goodbyes", guild_id=str(member.guild.id))
+                bot_extras.bump_guild_stat(member.guild.id, "goodbyes")
             except (discord.Forbidden, discord.HTTPException):
                 LOG.exception("No se pudo enviar la despedida de %s", member)
 
@@ -1609,6 +1611,7 @@ class BotManager:
                 bot_extras.record_event(
                     "ticket_close", channel.name, str(guild.id)
                 )
+                bot_extras.bump_guild_stat(guild.id, "tickets")
                 if _config_bool(config, "ticket_transcript_enabled", True):
                     await self._send_ticket_transcript(channel, guild, config)
                 await asyncio.sleep(2)
@@ -2255,6 +2258,7 @@ class BotManager:
                 if self._guild_id and str(message.guild.id) != self._guild_id:
                     return
                 config = await asyncio.to_thread(load_guild_config, message.guild.id)
+                bot_extras.bump_guild_stat(message.guild.id, "messages")
                 if await self._antispam_check(message, config):
                     return
                 if await self._aimod_check(message, config):

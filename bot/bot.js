@@ -317,7 +317,52 @@
       if (!state.guildId && state.guilds.length) state.guildId = state.guilds[0].id;
       renderGuilds();
       renderStats();
+      refreshGuildStats();
     });
+  }
+
+  function refreshGuildStats() {
+    api("/api/admin/discord-bot/guild-stats?days=14")
+      .then(function (data) {
+        var host = $("guildStatCard");
+        if (!host) return;
+        var stats = data.servers || {};
+        var entry = stats[state.guildId] || {
+          messages: 0, welcomes: 0, goodbyes: 0, tickets: 0, total: 0,
+        };
+        var name = "";
+        for (var i = 0; i < state.guilds.length; i++) {
+          if (String(state.guilds[i].id) === String(state.guildId)) {
+            name = state.guilds[i].name;
+            break;
+          }
+        }
+        var html = '<div class="stats" style="grid-template-columns:1fr 1fr">'
+          + tile("Mensajes IA", entry.messages)
+          + tile("Bienvenidas", entry.welcomes)
+          + tile("Tickets cerrados", entry.tickets)
+          + tile("Salidas", entry.goodbyes)
+          + "</div>";
+        if (!entry.total) {
+          html += '<p class="mini" style="margin-top:8px;color:var(--danger)">'
+            + "Servidor inactivo: sin actividad de Core IA en los últimos 14 días."
+            + (name ? " (" + name + ")" : "") + "</p>";
+        } else if (entry.last_active) {
+          html += '<p class="mini" style="margin-top:8px">Última actividad de Core IA: '
+            + entry.last_active + ".</p>";
+        }
+        host.innerHTML = html;
+      })
+      .catch(function () {
+        var host = $("guildStatCard");
+        if (host) host.innerHTML = '<div class="skeleton">Métricas no disponibles</div>';
+      });
+  }
+
+  function tile(label, value) {
+    var v = typeof value === "number" ? value : Number(value || 0);
+    return '<div class="stat"><div class="tile"><svg class="ic" style="width:16px;height:16px;fill:none">'
+      + "</svg></div><div><b>" + (isNaN(v) ? 0 : v) + '</b><span class="lbl">' + label + "</span></div></div>";
   }
 
   function refreshInventory() {
@@ -493,6 +538,7 @@
         LS.setItem("coreia_bot_guild", guild.id);
         renderStats();
         refreshInventory();
+        refreshGuildStats();
         switchView("resumen");
         toast("Servidor activo: " + guild.name, "ok");
       };

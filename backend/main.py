@@ -5077,6 +5077,20 @@ def admin_bot_series(
     return {"days": days, "series": series}
 
 
+@app.get("/api/admin/discord-bot/guild-stats")
+def admin_bot_guild_stats(
+    days: int = 14,
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """Actividad por servidor (item 7): mensajes, bienvenidas, tickets.
+
+    La APK y el panel lo usan para diagnosticar servidores muertos
+    (total en 0 de los últimos N días = inactivo).
+    """
+    days = max(1, min(30, days))
+    return {"days": days, "servers": bot_extras.load_guild_stats(days)}
+
+
 @app.get("/api/admin/discord-bot/events")
 def admin_bot_events(
     _: dict[str, Any] = Depends(require_admin),
