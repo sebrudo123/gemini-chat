@@ -1,6 +1,8 @@
 """Pruebas del panel de administración del bot (REST y formulario)."""
 
 import pytest
+from collections import deque
+
 from fastapi.testclient import TestClient
 
 import discord_bot
@@ -129,6 +131,67 @@ def test_bot_guild_config_roundtrip(client):
         "/api/admin/discord-bot/guilds/111/config", headers=headers
     ).json()["config"]
     assert stored["verify_role_id"] == "800"
+
+
+def test_bot_guild_config_new_protection_keys(client):
+    """Las llaves de anti-raid/anti-spam/voz/transcript pasan el PATCH."""
+    values = {
+        "antiraid_enabled": "1",
+        "antiraid_joins": "5",
+        "antiraid_secs": "60",
+        "antiraid_min_age_days": "7",
+        "antiraid_action": "kick",
+        "antispam_enabled": "1",
+        "antispam_msgs": "6",
+        "antispam_secs": "8",
+        "antispam_mentions": "6",
+        "voice_temp_enabled": "1",
+        "voice_lobby_id": "12345",
+        "ticket_transcript_enabled": "1",
+    }
+    response = client.patch(
+        "/api/admin/discord-bot/guilds/222/config",
+        json={"values": values},
+        headers=auth(FOUNDER_ID),
+    )
+    assert response.status_code == 200
+    stored = client.get(
+        "/api/admin/discord-bot/guilds/222/config", headers=auth(FOUNDER_ID)
+    ).json()["config"]
+    for key, value in values.items():
+        assert stored[key] == value
+
+
+def test_antispam_level_escalates():
+    assert discord_bot.antispam_level(0) == "warn"
+    assert discord_bot.antispam_level(1) == "warn"
+    assert discord_bot.antispam_level(2) == "timeout"
+    assert discord_bot.antispam_level(3) == "kick"
+
+
+def test_join_burst_window():
+    burst: deque[float] = deque()
+    now = 1000.0
+    for offset in (50.0, 40.0, 30.0, 20.0):
+        burst.append(now - offset)
+    # 5 entradas dentro de la ventana de 60 s
+    burst.append(now)
+    assert discord_bot.evaluate_join_burst(burst, now, 60, 5) is True
+    assert discord_bot.evaluate_join_burst(burst, now, 60, 6) is False
+    # vencidas todas: fuera de ventana
+    assert discord_bot.evaluate_join_burst(deque([now - 500]), now, 60, 1) is False
+
+
+def test_config_bool_parses_flags():
+    config = {"a": "1", "b": "true", "c": "ON", "d": "sí", "e": "0", "f": "no", "g": ""}
+    assert discord_bot._config_bool(config, "a") is True
+    assert discord_bot._config_bool(config, "b") is True
+    assert discord_bot._config_bool(config, "c") is True
+    assert discord_bot._config_bool(config, "d") is True
+    assert discord_bot._config_bool(config, "e") is False
+    assert discord_bot._config_bool(config, "f") is False
+    assert discord_bot._config_bool(config, "g") is False
+    assert discord_bot._config_bool(config, "ausente", default=True) is True
 
 
 def test_bot_guild_config_rejects_unknown_keys(client):

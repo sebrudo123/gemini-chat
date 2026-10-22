@@ -184,7 +184,7 @@ async def _discord_request(
 
 async def fetch_bot_guilds(token: str = "") -> list[dict[str, Any]]:
     """Lista los servidores en los que está el bot."""
-    data = await _discord_request("GET", "/users/@me/guilds", token=token)
+    data = await _discord_request("GET", "/users/@me/guilds?with_counts=true", token=token)
     return [
         {
             "id": str(item.get("id", "")),
@@ -370,6 +370,56 @@ def _account_age_days(member: Any) -> int:
     if not created:
         return 0
     return max(0, (discord.utils.utcnow() - created).days)
+
+
+# --------------------------------------------------------------------------- #
+# Anti-raid, anti-spam y voz temporal (estado en memoria, por servidor)
+# --------------------------------------------------------------------------- #
+
+JOIN_BURST: dict[int, deque[float]] = defaultdict(deque)
+RAID_MODE: dict[int, float] = {}
+SPAM_WINDOW: dict[tuple[int, int], deque[float]] = defaultdict(lambda: deque(maxlen=200))
+SPAM_STRIKES: dict[tuple[int, int], deque[float]] = defaultdict(deque)
+TEMP_VOICE_IDS: set[int] = set()
+
+RAID_LOCK_SECONDS = 300.0
+SPAM_STRIKE_SECONDS = 600.0
+
+
+def _config_bool(config: dict[str, str], key: str, default: bool = False) -> bool:
+    raw = (config.get(key) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "on", "yes", "si", "sí")
+
+
+def _prune_window(window: deque, now: float, secs: float) -> None:
+    """Suelta de la ventana deslizante los timestamps más viejos que ``secs``."""
+    while window and now - window[0] > secs:
+        window.popleft()
+
+
+def _window_count(window: deque, now: float, secs: float) -> int:
+    """Cuántos eventos conserva la ventana tras cortar los vencidos."""
+    _prune_window(window, now, secs)
+    return len(window)
+
+
+def evaluate_join_burst(
+    timestamps: deque, now: float, window_secs: int, threshold: int
+) -> bool:
+    """True si la oleada de entradas alcanzó el umbral en la ventana."""
+    _prune_window(timestamps, now, window_secs)
+    return len(timestamps) >= threshold
+
+
+def antispam_level(strike_count: int) -> str:
+    """Acción a tomar según la reincidencia: avisar / silenciar / expulsar."""
+    if strike_count <= 1:
+        return "warn"
+    if strike_count <= 2:
+        return "timeout"
+    return "kick"
 
 
 def _is_manager(interaction: Any) -> bool:
@@ -702,6 +752,9 @@ class BotManager:
             return
         config = await asyncio.to_thread(load_guild_config, member.guild.id)
 
+        if await self._antiraid_check(member, config):
+            return
+
         verified_role = _resolve_role(member.guild, config, "verify_role_id")
         unverified = _resolve_role(member.guild, config, "unverified_role_id")
         if unverified and unverified != verified_role and unverified not in member.roles:
@@ -850,6 +903,229 @@ class BotManager:
             ),
             "attachment://coreia-welcome.png",
         )
+
+    async def _apply_restriction(self, member: Any, action: str, reason: str) -> bool:
+        """Aplica kick/ban/timeout a un miembro. True si la acción se ejecutó."""
+        try:
+            if action == "ban":
+                await member.ban(reason=reason, delete_message_seconds=0)
+            elif action == "timeout":
+                from datetime import timedelta as _Td
+
+                await member.timeout(_Td(minutes=60), reason=reason)
+            else:
+                await member.kick(reason=reason)
+            return True
+        except (discord.Forbidden, discord.HTTPException, AttributeError, TypeError):
+            LOG.warning("No se pudo aplicar %s a %s", action, member)
+            return False
+
+    async def _antiraid_check(self, member: Any, config: dict[str, str]) -> bool:
+        """Protección anti-raid. True si el ingreso fue gestionado aquí."""
+        guild = member.guild
+        now = time.time()
+        window_secs = max(5, _config_int(config, "antiraid_secs", 60))
+        threshold = max(2, _config_int(config, "antiraid_joins", 5))
+        min_age = max(0, _config_int(config, "antiraid_min_age_days", 7))
+        burst = JOIN_BURST[guild.id]
+        burst.append(now)
+        raid_active = RAID_MODE.get(guild.id, 0.0) > now
+        action = (config.get("antiraid_action") or "kick").strip().lower()
+
+        if not _config_bool(config, "antiraid_enabled", True):
+            return False
+        if _account_age_days(member) >= min_age and not raid_active:
+            return False
+        if not raid_active and not evaluate_join_burst(
+            burst, now, window_secs, threshold
+        ):
+            return False
+
+        if not raid_active:
+            RAID_MODE[guild.id] = now + RAID_LOCK_SECONDS
+            bot_extras.record_event(
+                "antiraid_trigger",
+                f"{len(burst)} entradas en {window_secs} s · modo raid {int(RAID_LOCK_SECONDS // 60)} min",
+                str(guild.id),
+            )
+            bot_extras.bump_stat("antiraid_triggers", guild_id=str(guild.id))
+            await self._send_log(
+                guild,
+                "Modo raid activado",
+                f"La protección anti-raid entró en marcha: {len(burst)} entradas en "
+                f"{window_secs} segundos de cuentas nuevas. Acción predeterminada: **{action}**.",
+                0xB12430,
+                config,
+            )
+        bot_extras.bump_stat("antiraid_blocked", guild_id=str(guild.id))
+        bot_extras.record_event("antiraid_block", str(member), str(guild.id))
+        applied = await self._apply_restriction(
+            member,
+            action,
+            f"Core IA anti-raid (cuenta de {_account_age_days(member)} días)",
+        )
+        await self._send_log(
+            guild,
+            "Entrada bloqueada",
+            f"{member.mention} ingresó durante el modo raid con una cuenta de "
+            f"{_account_age_days(member)} días. Acción: **{action}**"
+            + ("" if applied else " · *falló la ejecución (sin permisos)*"),
+            0xB12430,
+            config,
+        )
+        return True
+
+    async def _antispam_check(self, message: Any, config: dict[str, str]) -> bool:
+        """Protección anti-spam por mensaje. True si se debe ignorar el mensaje."""
+        if not _config_bool(config, "antispam_enabled", True):
+            return False
+        guild = message.guild
+        key = (guild.id, message.author.id)
+        now = time.time()
+        window_secs = max(3, _config_int(config, "antispam_secs", 8))
+        limit = max(2, _config_int(config, "antispam_msgs", 6))
+        mention_limit = max(2, _config_int(config, "antispam_mentions", 6))
+
+        mention_flood = (
+            len(message.mentions) >= mention_limit
+            or len(message.role_mentions) >= mention_limit
+        )
+        win = SPAM_WINDOW[key]
+        win.append(now)
+        flooded = not mention_flood and _window_count(win, now, window_secs) >= limit
+        if not mention_flood and not flooded:
+            return False
+
+        strikes = SPAM_STRIKES[key]
+        strikes.append(now)
+        _prune_window(strikes, now, SPAM_STRIKE_SECONDS)
+        level = antispam_level(len(strikes))
+        if mention_flood and level == "warn":
+            level = "timeout"  # las menciones masivas se castigan directo
+
+        if level == "warn":
+            bot_extras.bump_stat("antispam_warn", guild_id=str(guild.id))
+            bot_extras.record_event("antispam_warn", str(message.author), str(guild.id))
+            with suppress(
+                NameError, discord.Forbidden, discord.HTTPException, AttributeError
+            ):
+                note = await message.channel.send(
+                    f"{message.author.mention}, baja el ritmo para evitar el flood."
+                )
+                await note.delete(delay=6)
+            return False
+
+        verdict = "flood de mensajes" if not mention_flood else "menciones masivas"
+        record = {"timeout": ("antispam_timeout", "silenciado 60 min"), "kick": ("antispam_kick", "expulsado")}.get(
+            level, ("antispam_warn", "revisado")
+        )
+        bot_extras.bump_stat(record[0], guild_id=str(guild.id))
+        bot_extras.record_event(record[0], f"{message.author} · {verdict}", str(guild.id))
+        applied = await self._apply_restriction(
+            message.author, level, f"Core IA anti-spam: {verdict}"
+        )
+        await self._send_log(
+            guild,
+            "Anti-spam: " + ("silencio 60 min" if level == "timeout" else "expulsión"),
+            f"{message.author.mention} — {verdict}. Sanción aplicada: **{record[1]}**"
+            + ("" if applied else " · *falló la ejecución (sin permisos)*"),
+            0xB12430,
+            config,
+        )
+        return True
+
+    async def _send_ticket_transcript(
+        self, channel: Any, guild: Any, config: dict[str, str]
+    ) -> None:
+        """Genera el HTML del ticket y lo manda al canal de registros."""
+        try:
+            import html as _htmlm
+            import io
+
+            def _row(msg: Any) -> str:
+                name = _htmlm.escape(str(msg.author))
+                when = msg.created_at.strftime("%Y-%m-%d %H:%M UTC")
+                body = _htmlm.escape(msg.content or "")
+                for att in getattr(msg, "attachments", ()) or ():
+                    body += f'<br><a href="{_htmlm.escape(att.url)}">[archivo]</a>'
+                botmark = " bot" if getattr(msg.author, "bot", False) else ""
+                return (
+                    f'<div class="m{botmark}"><span class="w">{name}</span> '
+                    f'<span class="t">{when}</span><p>{body or "(—)"}</p></div>'
+                )
+
+            rows: list[str] = []
+            async for msg in channel.history(limit=200, oldest_first=True):
+                rows.append(_row(msg))
+            stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+            html_doc = (
+                "<!doctype html><html><head><meta charset='utf-8'>"
+                f"<title>Transcripción · {str(channel.name)}</title>"
+                "<style>body{background:#141622;color:#e9e9f2;font:15px/1.6 system-ui,sans-serif;max-width:900px;margin:2em auto;padding:0 1em}"
+                ".m{border-left:3px solid #6d5dfc;padding:.4em 1em;margin:.7em 0;background:#1c1f2e;border-radius:8px}"
+                ".m.bot{border-color:#43b581}.w{color:#9d8cff;font-weight:600}"
+                + ".t{color:#8b8fa8;font-size:.85em;margin-left:.5em}p{margin:.35em 0 0}"
+                + "a{color:#7dd6ff}h1{font-size:1.2em}</style></head><body>"
+                f"<h1>Transcripción de {str(channel.name)} · {str(guild.name)}</h1>"
+                f"<p class='t'>Generada por Core IA el {stamp}</p>"
+                + "".join(rows)
+                + "</body></html>"
+            )
+            file = discord.File(
+                io.BytesIO(html_doc.encode("utf-8")),
+                filename=f"transcripcion-{channel.name}.html",
+            )
+            log_channel = _resolve_channel(guild, config, "log_channel_id")
+            if log_channel is not None:
+                await log_channel.send(
+                    content=f"Transcripción del ticket **{channel.name}**",
+                    file=file,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            bot_extras.record_event("ticket_transcript", channel.name, str(guild.id))
+            bot_extras.bump_stat("ticket_transcripts", guild_id=str(guild.id))
+        except (discord.Forbidden, discord.HTTPException):
+            LOG.exception("No se pudo generar el transcript del ticket %s", channel)
+
+    async def _on_voice_change(self, member: Any, before: Any, after: Any) -> None:
+        """Crea salas de voz temporales al entrar al lobby y limpia las vacías."""
+        if self._guild_id and str(member.guild.id) != self._guild_id:
+            return
+        guild = member.guild
+        config = await asyncio.to_thread(load_guild_config, guild.id)
+        left = before.channel if before else None
+        if left is not None and (
+            left.id in TEMP_VOICE_IDS
+            or (getattr(left, "name", "") or "").startswith("Sala · ")
+        ):
+            if not left.members:
+                TEMP_VOICE_IDS.discard(left.id)
+                try:
+                    await left.delete(reason="Core IA · sala temporal vacía")
+                    bot_extras.record_event("voice_temp_closed", left.name, str(guild.id))
+                except (discord.Forbidden, discord.HTTPException):
+                    LOG.warning("No se pudo borrar la sala temporal %s", left)
+
+        lobby = _resolve_channel(guild, config, "voice_lobby_id")
+        if (
+            after.channel is None
+            or lobby is None
+            or after.channel.id != lobby.id
+            or not _config_bool(config, "voice_temp_enabled", True)
+        ):
+            return
+        try:
+            temp = await guild.create_voice_channel(
+                f"Sala · {member.display_name}", category=lobby.category
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            LOG.warning("No se pudo crear la sala temporal de %s", member)
+            return
+        TEMP_VOICE_IDS.add(temp.id)
+        bot_extras.record_event("voice_temp_created", member.display_name, str(guild.id))
+        bot_extras.bump_stat("voice_temp_created", guild_id=str(guild.id))
+        with suppress(discord.Forbidden, discord.HTTPException):
+            await member.move_to(temp)
 
     async def _on_member_remove(self, member: Any) -> None:
         """Publica la despedida cuando alguien sale del servidor."""
@@ -1144,6 +1420,8 @@ class BotManager:
                 bot_extras.record_event(
                     "ticket_close", channel.name, str(guild.id)
                 )
+                if _config_bool(config, "ticket_transcript_enabled", True):
+                    await self._send_ticket_transcript(channel, guild, config)
                 await asyncio.sleep(2)
                 try:
                     await channel.delete(reason="Ticket cerrado")
@@ -1772,6 +2050,14 @@ class BotManager:
                 await self._on_member_remove(member)
 
         @client.event
+        async def on_voice_state_update(member: "discord.Member", before: Any, after: Any) -> None:
+            """Salas de voz temporales (lobby + limpieza automática)."""
+            try:
+                await self._on_voice_change(member, before, after)
+            except Exception:
+                LOG.exception("Error en voz temporal de %s", member)
+
+        @client.event
         async def on_message(message: "discord.Message") -> None:
             """Suma XP por actividad en los servidores activados."""
             try:
@@ -1780,6 +2066,8 @@ class BotManager:
                 if self._guild_id and str(message.guild.id) != self._guild_id:
                     return
                 config = await asyncio.to_thread(load_guild_config, message.guild.id)
+                if await self._antispam_check(message, config):
+                    return
                 if (config.get("levels_enabled") or "").lower() not in ("1", "true", "on"):
                     return
                 result = await asyncio.to_thread(

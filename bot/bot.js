@@ -248,7 +248,7 @@
     }
     if (name === "anuncios") { refreshSchedules(); refreshFeeds(); }
     if (name === "ajustes") refreshEvents();
-    if (name === "resumen") { refreshBotStats(); refreshMemberStats(); }
+    if (name === "resumen") { refreshBotStats(); refreshMemberStats(); refreshModLog(); }
   }
 
   /* ---------------------------------------------------------- */
@@ -463,6 +463,7 @@
     $("cfgLevelupChannel").innerHTML = channelOptions(state.config.levelup_channel_id);
     $("cfgTicketCategory").innerHTML = categoryOptions(state.config.ticket_category_id);
     $("cfgTicketStaffRole").innerHTML = roleOptions(state.config.ticket_staff_role_id);
+    $("cfgVoiceLobby").innerHTML = voiceOptions(state.config.voice_lobby_id);
     ["ticketChannel", "gwChannel", "fdChannel"].forEach(function (id) {
       if (!$(id).dataset.ready) {
         $(id).innerHTML = channelOptions(null);
@@ -490,6 +491,17 @@
       line.insertAdjacentHTML("beforeend", dot + "<span>" + escapeHtml(role.name) + "</span>");
       wrap.appendChild(line);
     });
+  }
+
+  function voiceOptions(selectedId) {
+    var channels = (state.inventory && state.inventory.channels) || [];
+    var options = "<option value=''>— sin lobby —</option>";
+    channels.filter(function (c) { return c.type === 2; }).forEach(function (channel) {
+      options +=
+        "<option value='" + channel.id + "'" + (channel.id === selectedId ? " selected" : "") + ">" +
+        escapeHtml(channel.name) + "</option>";
+    });
+    return options;
   }
 
   function roleOptions(selectedId) {
@@ -540,15 +552,23 @@
   function renderConfigTexts() {
     $("cfgWelcomeMsg").value = state.config.welcome_message || "";
     $("cfgGoodbyeMsg").value = state.config.goodbye_message || "";
-    $("cfgWelcomeImage").checked = ["1", "true", "on"].includes(
-      String(state.config.welcome_image_enabled || "").toLowerCase()
-    );
-    $("cfgLevelsOn").checked = ["1", "true", "on"].includes(
-      String(state.config.levels_enabled || "").toLowerCase()
-    );
-    $("cfgWelcomeDmOn").checked = ["1", "true", "on"].includes(
-      String(state.config.welcome_dm_enabled || "").toLowerCase()
-    );
+    var flag = function (key) {
+      return ["1", "true", "on"].includes(String(state.config[key] || "").toLowerCase());
+    };
+    $("cfgWelcomeImage").checked = flag("welcome_image_enabled");
+    $("cfgLevelsOn").checked = flag("levels_enabled");
+    $("cfgWelcomeDmOn").checked = flag("welcome_dm_enabled");
+    $("cfgAntiraidOn").checked = flag("antiraid_enabled");
+    $("cfgAntispamOn").checked = flag("antispam_enabled");
+    $("cfgVoiceTempOn").checked = flag("voice_temp_enabled");
+    $("cfgTranscriptOn").checked = flag("ticket_transcript_enabled");
+    $("cfgAntiraidJoins").value = state.config.antiraid_joins || "5";
+    $("cfgAntiraidSecs").value = state.config.antiraid_secs || "60";
+    $("cfgAntiraidMinAge").value = state.config.antiraid_min_age_days || "7";
+    $("cfgAntiraidAction").value = state.config.antiraid_action || "kick";
+    $("cfgAntispamMsgs").value = state.config.antispam_msgs || "6";
+    $("cfgAntispamSecs").value = state.config.antispam_secs || "8";
+    $("cfgAntispamMentions").value = state.config.antispam_mentions || "6";
   }
 
   function renderDmTexts() {
@@ -650,7 +670,54 @@
       $("stVerifications").textContent = data.verifications;
       $("stWelcomes").textContent = data.welcomes;
       $("stScheduled").textContent = data.schedules_active;
+      $("stRaid").textContent = data.antiraid_triggers || 0;
+      $("stRaidBlocked").textContent = data.antiraid_blocked || 0;
+      $("stWarn").textContent = data.antispam_warn || 0;
+      $("stTimeout").textContent = (data.antispam_timeout || 0) + (data.antispam_kick || 0);
     }).catch(function () { /* silencioso: es decorativo */ });
+  }
+
+  var MOD_KIND_LABELS = {
+    antiraid_trigger: "Modo raid activado",
+    antiraid_block: "Entrada parada",
+    antispam_warn: "Aviso de flood",
+    antispam_timeout: "Silenciado (anti-spam)",
+    antispam_kick: "Expulsado (anti-spam)",
+    ticket_close: "Ticket cerrado",
+    ticket_transcript: "Transcripción generada",
+    voice_temp_created: "Sala temporal creada",
+    voice_temp_closed: "Sala temporal borrada",
+  };
+
+  function modLogLabel(kind) {
+    return MOD_KIND_LABELS[kind] || kind;
+  }
+
+  function refreshModLog() {
+    return api("/api/admin/discord-bot/modlog?limit=40").then(function (data) {
+      var wrap = $("modLogList");
+      wrap.innerHTML = "";
+      var events = data.events || [];
+      if (!events.length) {
+        wrap.innerHTML = "<div class='empty'>Sin sanciones ni incidentes aún. El registro aparecerá en cuanto la protección actúe.</div>";
+        return;
+      }
+      events.forEach(function (event) {
+        var row = document.createElement("div");
+        row.className = "row-item";
+        var icon = String(event.kind || "").indexOf("antiraid") === 0 ? "#ic-flag"
+          : String(event.kind || "").indexOf("voice") === 0 ? "#ic-users"
+          : String(event.kind || "").indexOf("ticket") === 0 ? "#ic-layers" : "#ic-message";
+        row.innerHTML =
+          "<div class='ico'><svg class='ic'><use href='" + icon + "'/></svg></div>" +
+          "<div class='meta'><b>" + escapeHtml(modLogLabel(event.kind)) + "</b><span>" +
+          escapeHtml(String(event.detail || "").slice(0, 80)) + " · " +
+          escapeHtml(String(event.t || "").replace("T", " ")) + "</span></div>";
+        wrap.appendChild(row);
+      });
+    }).catch(function (err) {
+      $("modLogList").innerHTML = "<div class='empty'>" + escapeHtml(err.message || "Error") + "</div>";
+    });
   }
 
   function scheduleLabel(item) {
@@ -1349,11 +1416,35 @@
     $("btnAddFeed").onclick = addFeed;
     $("btnPostGiveaway").onclick = postGiveaway;
     $("btnSaveLevels").onclick = saveLevelsConfig;
+    $("btnSaveAntiraid").onclick = function () {
+      saveConfig({
+        antiraid_enabled: $("cfgAntiraidOn").checked ? "1" : "0",
+        antiraid_joins: $("cfgAntiraidJoins").value || "5",
+        antiraid_secs: $("cfgAntiraidSecs").value || "60",
+        antiraid_min_age_days: $("cfgAntiraidMinAge").value || "0",
+        antiraid_action: $("cfgAntiraidAction").value || "kick",
+      }, "Anti-raid guardado.");
+    };
+    $("btnSaveAntispam").onclick = function () {
+      saveConfig({
+        antispam_enabled: $("cfgAntispamOn").checked ? "1" : "0",
+        antispam_msgs: $("cfgAntispamMsgs").value || "6",
+        antispam_secs: $("cfgAntispamSecs").value || "8",
+        antispam_mentions: $("cfgAntispamMentions").value || "6",
+      }, "Anti-spam guardado.");
+    };
+    $("btnSaveVoice").onclick = function () {
+      saveConfig({
+        voice_temp_enabled: $("cfgVoiceTempOn").checked ? "1" : "0",
+        voice_lobby_id: $("cfgVoiceLobby").value,
+      }, "Salas de voz guardadas.");
+    };
     $("btnPostTicketPanel").onclick = function () {
       if (!state.guildId) return toast("Selecciona antes un servidor.", "err");
       saveConfig({
         ticket_category_id: $("cfgTicketCategory").value,
         ticket_staff_role_id: $("cfgTicketStaffRole").value,
+        ticket_transcript_enabled: $("cfgTranscriptOn").checked ? "1" : "0",
       }, "Configuración de tickets guardada.").then(postTicketPanel);
     };
     $("schKind").addEventListener("change", function () {

@@ -4360,6 +4360,21 @@ BOT_CONFIG_KEYS = (
     "levelup_channel_id",
     "ticket_category_id",
     "ticket_staff_role_id",
+    "ticket_transcript_enabled",
+    # Anti-raid: oleada de entradas de cuentas nuevas
+    "antiraid_enabled",
+    "antiraid_joins",
+    "antiraid_secs",
+    "antiraid_min_age_days",
+    "antiraid_action",
+    # Anti-spam: flood y menciones masivas
+    "antispam_enabled",
+    "antispam_msgs",
+    "antispam_secs",
+    "antispam_mentions",
+    # Voz temporal (lobby)
+    "voice_temp_enabled",
+    "voice_lobby_id",
 )
 
 
@@ -4909,6 +4924,15 @@ def _admin_bot_stats_payload(db: Session) -> dict[str, Any]:
         "role_assigns": stats.get("role_assigns", 0),
         "poll_votes": stats.get("poll_votes", 0),
         "scheduled_sent": stats.get("scheduled_sent", 0),
+        # Protección / moderación (anti-raid y anti-spam)
+        "antiraid_triggers": stats.get("antiraid_triggers", 0),
+        "antiraid_blocked": stats.get("antiraid_blocked", 0),
+        "antispam_warn": stats.get("antispam_warn", 0),
+        "antispam_timeout": stats.get("antispam_timeout", 0),
+        "antispam_kick": stats.get("antispam_kick", 0),
+        # Extras nuevos
+        "voice_temp_created": stats.get("voice_temp_created", 0),
+        "ticket_transcripts": stats.get("ticket_transcripts", 0),
     }
 
 
@@ -4927,6 +4951,37 @@ def admin_bot_events(
 ) -> dict[str, Any]:
     """Últimos eventos del bot (bienvenidas, verificaciones, errores...)."""
     return {"events": bot_extras.load_events()}
+
+
+BOT_MOD_EVENT_KINDS = (
+    "antiraid_trigger",
+    "antiraid_block",
+    "antispam_warn",
+    "antispam_timeout",
+    "antispam_kick",
+    "ticket_close",
+    "ticket_transcript",
+    "voice_temp_created",
+    "voice_temp_closed",
+)
+
+
+@app.get("/api/admin/discord-bot/modlog")
+def admin_bot_modlog(
+    guild_id: str | None = None,
+    limit: int = 50,
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """Dashboard de moderación: eventos de protección y sanciones."""
+    limit = max(1, min(150, limit))
+    events = bot_extras.load_events()
+    mod_events = [
+        event
+        for event in events
+        if event.get("kind") in BOT_MOD_EVENT_KINDS
+        and (not guild_id or event.get("guild") == str(guild_id))
+    ]
+    return {"events": mod_events[:limit]}
 
 
 def _backup_payload(db: Session) -> dict[str, Any]:

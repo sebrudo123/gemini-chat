@@ -559,6 +559,22 @@
           </div>
 
           <div class="card" style="margin-top:14px">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-shield"/></svg></span>Protección hoy</h2>
+            <div class="stats" style="grid-template-columns:1fr 1fr;margin-top:6px">
+              <div class="stat"><div class="tile"><svg class="ic"><use href="#ic-flag"/></svg></div><div><b id="stRaid">—</b><span class="lbl">Modos raid</span></div></div>
+              <div class="stat"><div class="tile"><svg class="ic"><use href="#ic-users"/></svg></div><div><b id="stRaidBlocked">—</b><span class="lbl">Entradas paradas</span></div></div>
+              <div class="stat"><div class="tile"><svg class="ic"><use href="#ic-message"/></svg></div><div><b id="stWarn">—</b><span class="lbl">Avisos flood</span></div></div>
+              <div class="stat"><div class="tile"><svg class="ic"><use href="#ic-gear"/></svg></div><div><b id="stTimeout">—</b><span class="lbl">Silenciados</span></div></div>
+            </div>
+          </div>
+
+          <div class="card" style="margin-top:14px">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-list"/></svg></span>Registro de moderación</h2>
+            <p class="sub">Sanciones, modo raid, tickets con transcripción y salas de voz temporales.</p>
+            <div class="list" id="modLogList"><div class="skeleton">Cargando…</div></div>
+          </div>
+
+          <div class="card" style="margin-top:14px">
             <h2><span class="tile"><svg class="ic"><use href="#ic-send"/></svg></span>Canal de prueba</h2>
             <p class="sub">Envía un mensaje real con el bot para comprobar los permisos del canal.</p>
             <select id="testChannel"></select>
@@ -699,7 +715,61 @@
             <select id="cfgTicketStaffRole"></select>
             <label class="fl">Canal del panel de tickets</label>
             <select id="ticketChannel"></select>
+            <label class="switch" style="margin-top:10px"><span>Generar transcripción HTML al cerrar (se envía al canal de registros)</span><input type="checkbox" id="cfgTranscriptOn"></label>
             <button class="btn primary wide" id="btnPostTicketPanel" style="margin-top:12px"><svg class="ic"><use href="#ic-layers"/></svg><span>Publicar panel de tickets</span></button>
+          </div>
+
+          <div class="card" style="margin-top:14px">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-shield"/></svg></span>Anti-raid</h2>
+            <p class="sub">Si entran muchas cuentas nuevas seguidas, se activa el modo raid: parada de entradas sospechosas y aviso en el canal de registros.</p>
+            <label class="switch"><span>Activar anti-raid en este servidor</span><input type="checkbox" id="cfgAntiraidOn"></label>
+            <div class="optrow">
+              <div style="flex:1">
+                <label class="fl">Entradas que activan el modo</label>
+                <input id="cfgAntiraidJoins" type="number" min="2" value="5">
+              </div>
+              <div style="flex:1">
+                <label class="fl">En menos de (segundos)</label>
+                <input id="cfgAntiraidSecs" type="number" min="5" value="60">
+              </div>
+            </div>
+            <label class="fl">Días mínimos de la cuenta para no ser parada</label>
+            <input id="cfgAntiraidMinAge" type="number" min="0" value="7">
+            <label class="fl">Acción contra cuentas sospechosas</label>
+            <select id="cfgAntiraidAction">
+              <option value="kick">Expulsar las cuentas nuevas</option>
+              <option value="ban">Banear las cuentas nuevas</option>
+              <option value="timeout">Silenciar 1 hora las cuentas nuevas</option>
+            </select>
+            <button class="btn primary wide" id="btnSaveAntiraid" style="margin-top:12px"><svg class="ic"><use href="#ic-check"/></svg><span>Guardar anti-raid</span></button>
+          </div>
+
+          <div class="card" style="margin-top:14px">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-message"/></svg></span>Anti-spam</h2>
+            <p class="sub">Flood de mensajes y menciones masivas: aviso, luego silencio de 1 hora y expulsión si repite.</p>
+            <label class="switch"><span>Activar anti-spam en este servidor</span><input type="checkbox" id="cfgAntispamOn"></label>
+            <div class="optrow">
+              <div style="flex:1">
+                <label class="fl">Mensajes máximos</label>
+                <input id="cfgAntispamMsgs" type="number" min="2" value="6">
+              </div>
+              <div style="flex:1">
+                <label class="fl">En menos de (segundos)</label>
+                <input id="cfgAntispamSecs" type="number" min="3" value="8">
+              </div>
+            </div>
+            <label class="fl">Menciones que cuentan como ataque</label>
+            <input id="cfgAntispamMentions" type="number" min="2" value="6">
+            <button class="btn primary wide" id="btnSaveAntispam" style="margin-top:12px"><svg class="ic"><use href="#ic-check"/></svg><span>Guardar anti-spam</span></button>
+          </div>
+
+          <div class="card" style="margin-top:14px">
+            <h2><span class="tile"><svg class="ic"><use href="#ic-users"/></svg></span>Salas de voz temporales</h2>
+            <p class="sub">Quien entre al lobby consigue una sala con su nombre; en cuanto quede vacía, se borra sola.</p>
+            <label class="switch"><span>Activar salas temporales</span><input type="checkbox" id="cfgVoiceTempOn"></label>
+            <label class="fl">Canal de voz de entrada (lobby)</label>
+            <select id="cfgVoiceLobby"></select>
+            <button class="btn primary wide" id="btnSaveVoice" style="margin-top:12px"><svg class="ic"><use href="#ic-check"/></svg><span>Guardar salas de voz</span></button>
           </div>
 
           <div class="card" style="margin-top:14px">
