@@ -47,7 +47,7 @@
 
   var TOKEN_KEY = "coreia_bot_token";
   var FALLBACK_TOKEN_KEY = "coreia_token";
-  var PANEL_VERSION = "1.0.19";
+  var PANEL_VERSION = "1.0.22";
 
   /* Storage seguro: si el WebView bloquea localStorage (algo que pasa en
      algunos Android viejos), el panel sigue funcionando con memoria. */
@@ -1260,7 +1260,11 @@
             };
           }
         });
-        if (!latest || latest.code <= current) return false;
+        if (!latest || latest.code <= current) {
+          updateVerBadge(latest && latest.code);
+          return false;
+        }
+        updateVerBadge(latest.code);
         var asset = null;
         (latest.release.assets || []).forEach(function (item) {
           if (!asset && /\.apk$/i.test(String(item && item.name || ""))) asset = item;
@@ -1348,18 +1352,19 @@
   /* ---------------------------------------------------------- */
   /* Bindings                                                    */
   /* ---------------------------------------------------------- */
-  function bind() {
-    /* Insignia de versión: confirma en pantalla qué corre el dispositivo. */
+  function updateVerBadge(code) {
     var verEl = $("panelVer");
     if (verEl) {
-      var apkCode = 0;
-      try {
-        if (window.CoreIAUpdate && window.CoreIAUpdate.getVersionCode) {
-          apkCode = parseInt(window.CoreIAUpdate.getVersionCode(), 10) || 0;
-        }
-      } catch (err) { /* navegador normal */ }
-      verEl.textContent = "Panel " + PANEL_VERSION + (apkCode ? " · APK build " + apkCode : "");
+      verEl.textContent =
+        "Panel " + PANEL_VERSION + " · APK build " + (code || "web");
     }
+  }
+
+  function bind() {
+    /* Insignia de versión: confirma en pantalla qué corre el dispositivo. */
+    try {
+      updateVerBadge(androidVersionCode());
+    } catch (err) { /* sin puente nativo */ }
     $("discordBtn").onclick = function () {
       window.location.href =
         API_BASE + "/api/admin/discord-bot/login?panel_origin=" + encodeURIComponent(window.location.origin);
