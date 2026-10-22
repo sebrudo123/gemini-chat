@@ -146,7 +146,8 @@ jobs:
 
           env_path = os.environ.get("GITHUB_ENV", "")
           with open(env_path, "a") as fh:
-              fh.write("CHANGELOG=" + "\n".join(commits)[:3000] + "\n")
+              # Formato delimitado de GITHUB_ENV (soporta varias líneas).
+              fh.write("CHANGELOG<<EOF\n" + "\n".join(commits)[:3000] + "\nEOF\n")
 
           with open("CHANGELOG_BODY.md", "w") as fh:
               fh.write("\n\n".join(parts) + "\n")
@@ -160,7 +161,7 @@ jobs:
           UPLOAD_TOKEN: ${{ secrets.BACKEND_UPLOAD_TOKEN }}
           VERSION_CODE: ${{ github.run_number }}
           VERSION_NAME: 1.0.${{ github.run_number }}
-          CHANGELOG: ${{ env.UPDATE_CHANGELOG }}
+          CHANGELOG: ${{ env.CHANGELOG }}
         run: |
           python3 - <<'PY'
           import base64, json, os, urllib.request
@@ -170,13 +171,16 @@ jobs:
               print("Sin BACKEND_UPLOAD_TOKEN; la IA queda solo como artifact.")
               raise SystemExit(0)
 
+          changelog = " ".join(
+              os.environ.get("CHANGELOG", "").split()
+          ) or "Mejoras y arreglos de errores."
           with open("coreia.apk", "rb") as fh:
               apk_b64 = base64.b64encode(fh.read()).decode()
 
           body = json.dumps({
               "version_code": int(os.environ["VERSION_CODE"]),
               "version_name": os.environ["VERSION_NAME"],
-              "changelog": os.environ.get("CHANGELOG", "Mejoras y arreglos de errores."),
+              "changelog": changelog,
               "apk_base64": apk_b64,
               "app": "ia",
           }).encode()
