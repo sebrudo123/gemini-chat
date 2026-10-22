@@ -342,10 +342,10 @@
           }
         }
         var html = '<div class="stats" style="grid-template-columns:1fr 1fr">'
-          + tile("Mensajes IA", entry.messages)
-          + tile("Bienvenidas", entry.welcomes)
-          + tile("Tickets cerrados", entry.tickets)
-          + tile("Salidas", entry.goodbyes)
+          + tile("Mensajes IA", entry.messages, "ic-message")
+          + tile("Bienvenidas", entry.welcomes, "ic-userplus")
+          + tile("Tickets cerrados", entry.tickets, "ic-list")
+          + tile("Salidas", entry.goodbyes, "ic-door")
           + "</div>";
         if (!entry.total) {
           html += '<p class="mini" style="margin-top:8px;color:var(--danger)">'
@@ -363,10 +363,11 @@
       });
   }
 
-  function tile(label, value) {
+  function tile(label, value, icon) {
     var v = typeof value === "number" ? value : Number(value || 0);
-    return '<div class="stat"><div class="tile"><svg class="ic" style="width:16px;height:16px;fill:none">'
-      + "</svg></div><div><b>" + (isNaN(v) ? 0 : v) + '</b><span class="lbl">' + label + "</span></div></div>";
+    return '<div class="stat"><div class="tile"><svg class="ic" style="width:16px;height:16px">'
+      + '<use href="#' + (icon || "ic-spark") + '"/></svg></div>'
+      + '<div><b>' + (isNaN(v) ? 0 : v) + '</b><span class="lbl">' + label + "</span></div></div>";
   }
 
   function refreshInventory() {
