@@ -579,6 +579,41 @@
     $("cfgGoodbyeChannel").innerHTML = channelOptions(state.config.goodbye_channel_id);
     $("cfgLogChannel").innerHTML = channelOptions(state.config.log_channel_id);
     $("cfgUpdateChannel").innerHTML = channelOptions(state.config.update_channel_id);
+    var themeMode = $("cfgThemeMode");
+    var accent = $("cfgAccent");
+    if (themeMode) themeMode.value = state.config.theme_mode === "light" ? "light" : "dark";
+    if (accent) accent.value = state.config.accent_color || "";
+    applyTheme(state.config.theme_mode, state.config.accent_color || "");
+  }
+
+  /* Apariencia del panel (item 3): tema claro/oscuro + acento de marca.
+     Se guarda por servidor y se aplica en cuanto llega la configuración. */
+  var ACCENT_SOFT_PAIRS = {
+    "#3b82f6": ["#60a5fa", "rgba(59,130,246,.22)"],
+    "#22c55e": ["#4ade80", "rgba(34,197,94,.22)"],
+    "#ec4899": ["#f472b6", "rgba(236,72,153,.22)"],
+    "#f97316": ["#fb923c", "rgba(249,115,22,.22)"],
+    "#6d5dfc": ["#8f7bff", "rgba(109,93,252,.22)"],
+  };
+
+  function applyTheme(themeMode, accent) {
+    if (!document.body) return;
+    var light = String(themeMode || "dark") === "light";
+    document.body.classList.toggle("theme-light", light);
+    var root = document.documentElement.style;
+    if (!accent || !ACCENT_SOFT_PAIRS[accent]) {
+      root.removeProperty("--brand");
+      root.removeProperty("--brand-2");
+      root.removeProperty("--grad");
+      root.removeProperty("--grad-soft");
+      return;
+    }
+    var pair = ACCENT_SOFT_PAIRS[accent];
+    root.setProperty("--brand", accent);
+    root.setProperty("--brand-2", pair[0]);
+    root.setProperty("--grad", "linear-gradient(135deg," + accent + "," + pair[0] + ")");
+    root.setProperty("--grad-soft",
+      "linear-gradient(135deg," + pair[1] + "," + pair[1] + ")");
   }
 
   function renderTextSelects() {
@@ -1777,6 +1812,13 @@ document.addEventListener("click", function (ev) {
         log_channel_id: $("cfgLogChannel").value,
         update_channel_id: $("cfgUpdateChannel").value,
       }, "Canales guardados.").then(renderStats);
+    };
+
+    $("btnSaveTheme").onclick = function () {
+      saveConfig({
+        theme_mode: $("cfgThemeMode").value,
+        accent_color: $("cfgAccent").value,
+      }, "Apariencia guardada.");
     };
 
     $("btnSaveRoles").onclick = function () {
