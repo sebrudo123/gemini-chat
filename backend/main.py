@@ -5288,10 +5288,20 @@ def admin_bot_guild_stats(
 
 @app.get("/api/admin/discord-bot/events")
 def admin_bot_events(
+    since: str = "",
+    limit: int = 30,
     _: dict[str, Any] = Depends(require_panel_read),
 ) -> dict[str, Any]:
-    """Últimos eventos del bot (bienvenidas, verificaciones, errores...)."""
-    return {"events": bot_extras.load_events()}
+    """Últimos eventos del bot (bienvenidas, mod, raid, errores...).
+
+    ``since`` filtra por fecha (lo usa el poller de notificaciones de la
+    APK: eventos más nuevos que la última vez que avisó).
+    """
+    limit = max(1, min(50, limit))
+    events = bot_extras.load_events()
+    if since:
+        events = [e for e in events if e.get("t", "") > since]
+    return {"events": events[:limit]}
 
 
 BOT_MOD_EVENT_KINDS = (
