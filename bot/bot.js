@@ -753,6 +753,8 @@
       return ["1", "true", "on"].includes(String(state.config[key] || "").toLowerCase());
     };
     $("cfgWelcomeImage").checked = flag("welcome_image_enabled");
+    $("cfgWelcomeAi").checked = flag("welcome_ai_enabled");
+    $("cfgGoodbyeAi").checked = flag("goodbye_ai_enabled");
     $("cfgLevelsOn").checked = flag("levels_enabled");
     $("cfgWelcomeDmOn").checked = flag("welcome_dm_enabled");
     $("cfgAntiraidOn").checked = flag("antiraid_enabled");
@@ -1838,6 +1840,7 @@ document.addEventListener("click", function (ev) {
         welcome_image_enabled: $("cfgWelcomeImage").checked ? "1" : "",
         welcome_dm_message: $("cfgWelcomeDm").value,
         welcome_dm_enabled: $("cfgWelcomeDmOn").checked ? "1" : "",
+        welcome_ai_enabled: $("cfgWelcomeAi").checked ? "1" : "",
       }, "Bienvenida guardada.");
     };
 
@@ -1903,7 +1906,10 @@ document.addEventListener("click", function (ev) {
     });
 
     $("btnSaveGoodbye").onclick = function () {
-      saveConfig({ goodbye_message: $("cfgGoodbyeMsg").value }, "Despedida guardada.");
+      saveConfig({
+        goodbye_message: $("cfgGoodbyeMsg").value,
+        goodbye_ai_enabled: $("cfgGoodbyeAi").checked ? "1" : "",
+      }, "Despedida guardada.");
     };
 
     $("btnReload").onclick = function () {
