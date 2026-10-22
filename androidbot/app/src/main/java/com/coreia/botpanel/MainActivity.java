@@ -64,6 +64,8 @@ public class MainActivity extends AppCompatActivity {
     private View dashHost;
     private boolean dashActive;
     private boolean loggedIn;
+    /** Última pestaña web pedida durante el arranque (se reaplica al entrar). */
+    private String webTabRequested;
     private boolean overlayShown;
     /** Evita bucles: cuando Java marca la pestaña tras un aviso de JS. */
     private boolean suppressNavListener;
@@ -95,7 +97,7 @@ public class MainActivity extends AppCompatActivity {
         public void onView(final String name) {
             runOnUiThread(() -> {
                 if (suppressNavListener) return;
-                showTab(name);
+                showTab(name, true);
             });
         }
 
@@ -104,6 +106,11 @@ public class MainActivity extends AppCompatActivity {
             runOnUiThread(() -> {
                 loggedIn = logged;
                 updateNavVisibility();
+                if (logged && webTabRequested != null) {
+                    final String pending = webTabRequested;
+                    webTabRequested = null;
+                    evaluateJs("window.CoreIAJS && CoreIAJS.switchView('" + pending + "');");
+                }
             });
         }
 
@@ -262,11 +269,21 @@ public class MainActivity extends AppCompatActivity {
      * Centraliza el cambio de vista. "Resumen" se pinta nativa (item 1: app
      * de verdad, sin WebView); el resto de pestañas vive en el panel web y
      * se les pide el cambio por el puente CoreIAJS.switchView.
+     *
+     * `fromJs` = el cambio lo inició el propio WebView ya conmutando su
+     * vista: re-instruir al JS cerraría un ping-pong infinito (showTab →
+     * switchView → onView → showTab…) que vaivenea la pestaña.
      */
     private void showTab(final String tab) {
+        showTab(tab, false);
+    }
+
+    private void showTab(final String tab, final boolean fromJs) {
         if (tab == null || !loggedIn) return;
         selectTabQuietly(tab);
         if ("resumen".equals(tab)) {
+            webTabRequested = null;
+            if (dashActive) return; // ya en el dashboard: no recargar por re-tap
             dashActive = true;
             if (dashHost != null) {
                 dashHost.setVisibility(View.VISIBLE);
@@ -282,8 +299,14 @@ public class MainActivity extends AppCompatActivity {
             }
             if (webView != null) {
                 webView.setVisibility(View.VISIBLE);
+                webView.invalidate();
             }
-            evaluateJs("window.CoreIAJS && CoreIAJS.switchView('" + tab + "');");
+            if (!fromJs) {
+                // Si el panel aún está cargando (arranque frío), se recuerda
+                // la petición y se reaplica cuando el JS esté disponible.
+                webTabRequested = tab;
+                evaluateJs("window.CoreIAJS && CoreIAJS.switchView('" + tab + "');");
+            }
         }
     }
 
