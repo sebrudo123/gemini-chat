@@ -280,9 +280,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
-     * Centraliza el cambio de vista. "Resumen" se pinta nativa (item 1: app
-     * de verdad, sin WebView); el resto de pestañas vive en el panel web y
-     * se les pide el cambio por el puente CoreIAJS.switchView.
+     * Centraliza el cambio de vista. Todas las pestañas (incluido el Resumen)
+     * se pintan con el panel en el WebView: el dashboard nativo daba
+     * demasiados problemas (pantallas en negro) y el usuario pidió volver a
+     * la vista web, que además trae los botones Encender/Apagar del hero.
      *
      * `fromJs` = el cambio lo inició el propio WebView ya conmutando su
      * vista: re-instruir al JS cerraría un ping-pong infinito (showTab →
@@ -295,32 +296,19 @@ public class MainActivity extends AppCompatActivity {
     private void showTab(final String tab, final boolean fromJs) {
         if (tab == null || !loggedIn) return;
         selectTabQuietly(tab);
-        if ("resumen".equals(tab)) {
-            webTabRequested = null;
-            if (dashActive) return; // ya en el dashboard: no recargar por re-tap
-            dashActive = true;
-            if (dashHost != null) {
-                dashHost.setVisibility(View.VISIBLE);
-            }
-            if (webView != null) {
-                webView.setVisibility(View.GONE);
-            }
-            loadResumen();
-        } else {
-            dashActive = false;
-            if (dashHost != null) {
-                dashHost.setVisibility(View.GONE);
-            }
-            if (webView != null) {
-                webView.setVisibility(View.VISIBLE);
-                webView.invalidate();
-            }
-            if (!fromJs) {
-                // Si el panel aún está cargando (arranque frío), se recuerda
-                // la petición y se reaplica cuando el JS esté disponible.
-                webTabRequested = tab;
-                evaluateJs("window.CoreIAJS && CoreIAJS.switchView('" + tab + "');");
-            }
+        dashActive = false;
+        if (dashHost != null) {
+            dashHost.setVisibility(View.GONE);
+        }
+        if (webView != null) {
+            webView.setVisibility(View.VISIBLE);
+            webView.invalidate();
+        }
+        if (!fromJs) {
+            // Si el panel aún está cargando (arranque frío), se recuerda
+            // la petición y se reaplica cuando el JS esté disponible.
+            webTabRequested = tab;
+            evaluateJs("window.CoreIAJS && CoreIAJS.switchView('" + tab + "');");
         }
     }
 
