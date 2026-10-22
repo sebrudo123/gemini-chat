@@ -1242,6 +1242,16 @@ BOT_PANEL_ROOT = STATIC_ROOT / "bot"
 
 
 @app.get("/bot", include_in_schema=False)
+def serve_bot_panel_redirect() -> RedirectResponse:
+    """`/bot` sin barra redirige: el HTML carga su JS relativo (`bot.js`).
+
+    Si el WebView abre la versión sin barra, el script se resuelve como
+    `/bot.js` (404) y el panel queda sin JavaScript: botones muertos. Con la
+    redirección, cualquier cliente siempre aterriza en la barra correcta.
+    """
+    return RedirectResponse("/bot/", status_code=301)
+
+
 @app.get("/bot/", include_in_schema=False)
 def serve_bot_panel() -> FileResponse:
     """Panel de administración del bot (app aparte)."""
@@ -1412,6 +1422,16 @@ async def discord_callback(
 ) -> RedirectResponse:
     """Intercambia el `code`, obtiene el perfil y crea la sesión."""
     if error or not code:
+        try:
+            state_data = _read_state(state)
+        except HTTPException:
+            state_data = {}
+        if state_data.get("panel"):
+            origin = state_data.get("panel_origin") or settings.backend_url.rstrip("/")
+            panel_url = f"{origin.rstrip('/')}/bot/"
+            if state_data.get("ui_app"):
+                panel_url += "?ui=app"
+            return RedirectResponse(f"{panel_url}#denied=1")
         return RedirectResponse(f"{resolve_return_url(state)}?auth=error")
     state_data = _read_state(state)
     client_id = require_config(settings.discord_client_id, "DISCORD_CLIENT_ID")
@@ -1443,6 +1463,8 @@ async def discord_callback(
     if state_data.get("panel"):
         origin = state_data.get("panel_origin") or settings.backend_url.rstrip("/")
         panel_url = f"{origin.rstrip('/')}/bot/"
+        if state_data.get("ui_app"):
+            panel_url += "?ui=app"
         if not is_admin(profile):
             return RedirectResponse(f"{panel_url}#denied=1")
         user = upsert_user(db, profile)
@@ -4387,14 +4409,19 @@ def _panel_origin() -> str:
     return (settings.backend_url or "").strip().rstrip("/")
 
 
-def _panel_oauth_state(origin: str) -> str:
-    """State firmado del OAuth exclusivo del panel del bot."""
+def _panel_oauth_state(origin: str, ui_app: bool = False) -> str:
+    """State firmado del OAuth exclusivo del panel del bot.
+
+    `ui_app` pide volver con `?ui=app` (la APK no muestra nunca el login web:
+    se apoya en la carga nativa y en CoreIAAndroid.onAuthFailed si falla).
+    """
     return serializer.dumps(
         {
             "nonce": secrets.token_urlsafe(16),
             "panel": True,
+            "ui_app": bool(ui_app),
             "panel_origin": origin.rstrip("/"),
-            "return_to": f"{origin.rstrip('/')}/bot/",
+            "return_to": f"{origin.rstrip('/')}/bot/" + ("?ui=app" if ui_app else ""),
         }
     )
 
@@ -4416,13 +4443,15 @@ def _trusted_panel_origin(candidate: str | None) -> str:
 
 
 @app.get("/api/admin/discord-bot/login")
-def admin_discord_bot_login(panel_origin: str | None = None) -> RedirectResponse:
+def admin_discord_bot_login(
+    panel_origin: str | None = None, ui_app: str | None = None
+) -> RedirectResponse:
     """Login con Discord para el panel del bot (solo fundadores).
 
     El `state` firmado incluye `panel_origin` (el host desde el que se pidió,
     validado contra `ALLOWED_ORIGINS`, o el propio backend por defecto), así el
     callback puede volver al panel que lanzó el login aunque ese host no sea
-    el del backend.
+    el del backend. Con `ui_app=1` el retorno lleva `?ui=app` (solo la APK).
     """
     client_id = require_config(settings.discord_client_id, "DISCORD_CLIENT_ID")
     redirect_uri = require_config(settings.discord_redirect_uri, "DISCORD_REDIRECT_URI")
@@ -4432,7 +4461,9 @@ def admin_discord_bot_login(panel_origin: str | None = None) -> RedirectResponse
         "redirect_uri": redirect_uri,
         "response_type": "code",
         "scope": "identify",
-        "state": _panel_oauth_state(origin),
+        "state": _panel_oauth_state(
+            origin, ui_app=(ui_app or "").lower() in ("1", "true", "on")
+        ),
         "prompt": "consent",
     }
     return RedirectResponse(f"{DISCORD_AUTHORIZE_URL}?{urlencode(params)}")

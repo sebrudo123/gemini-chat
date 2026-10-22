@@ -99,6 +99,26 @@ public class MainActivity extends AppCompatActivity {
                 updateNavVisibility();
             });
         }
+
+        /** La sesión del panel caducó: vuelve al login nativo (si fue la app
+         * quien abrió este WebView) o no hace nada en el navegador externo. */
+        @JavascriptInterface
+        public void onAuthFailed() {
+            runOnUiThread(() -> {
+                final Intent launch = getIntent();
+                final boolean fromLogin = launch != null
+                        && (launch.hasExtra(LoginActivity.EXTRA_TOKEN)
+                        || launch.hasExtra(LoginActivity.EXTRA_TARGET));
+                if (fromLogin) {
+                    android.widget.Toast.makeText(
+                            MainActivity.this,
+                            "La sesión ya no es válida. Entra de nuevo.",
+                            android.widget.Toast.LENGTH_LONG
+                    ).show();
+                    finish();
+                }
+            });
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")

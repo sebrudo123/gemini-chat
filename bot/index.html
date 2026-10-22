@@ -11,7 +11,28 @@
   <meta name="apple-mobile-web-app-title" content="Core IA Bot" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <title>Core IA Bot</title>
+  <script>
+    /* Sin flash de login en la APK: marca app-ui ANTES del primer pintado */
+    if (/[?&]ui=app/.test(window.location.search)) {
+      document.documentElement.className += " app-ui";
+    }
+  </script>
   <style>
+    /* Modo app (?ui=app, la APK): nunca se ve el login web; hay una
+       pantalla de carga propia hasta que el token valida. */
+    html.app-ui #loginView { display: none !important; }
+    html.app-ui #appBoot {
+      position: fixed; inset: 0; z-index: 500;
+      flex-direction: column; align-items: center; justify-content: center;
+      background: #12121c; color: #9d8cff; gap: 14px;
+      font-family: inherit;
+    }
+   	html.app-ui #appBoot .boot-dot {
+      width: 34px; height: 34px; border-radius: 50%;
+      border: 3px solid #2b2b40; border-top-color: #6d5dfc;
+      animation: bootstrap .8s linear infinite;
+    }
+    @keyframes bootstrap { to { transform: rotate(360deg); } }
     :root {
       --bg: #15151f;
       --bg-elev: #1b1b27;
@@ -413,6 +434,10 @@
   </style>
 </head>
 <body>
+  <div id="appBoot" style="display:none">
+    <div class="boot-dot"></div>
+    <div style="color:#8f8fa8;font-size:13px">Abriendo tu panel de Core IA…</div>
+  </div>
 
   <!-- Sprite de iconos -->
   <svg xmlns="http://www.w3.org/2000/svg" style="position:absolute;width:0;height:0;overflow:hidden" aria-hidden="true">

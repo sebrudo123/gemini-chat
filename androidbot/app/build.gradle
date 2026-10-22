@@ -17,11 +17,15 @@ android {
         versionName System.getenv("VERSION_NAME") != null ? System.getenv("VERSION_NAME") : "1.0.0"
 
         // URL del panel web del bot. Es donde FastAPI sirve /bot en el backend.
-        buildConfigField(
-            "String",
-            "PANEL_URL",
-            "\"${System.getenv("BOT_PANEL_URL") ?: "https://gemini-chat-backend-vyrz.onrender.com/bot"}\""
-        )
+        // SIEMPRE con barra final: el HTML carga su JS relativo (bot.js), y sin
+        // la barra el WebView pide /bot.js (404) y el panel queda sin JavaScript
+        // (botones de login muertos).
+        def panelUrl = System.getenv("BOT_PANEL_URL")
+            ?: "https://gemini-chat-backend-vyrz.onrender.com/bot"
+        if (!panelUrl.endsWith("/")) {
+            panelUrl = panelUrl + "/"
+        }
+        buildConfigField("String", "PANEL_URL", "\"${panelUrl}\"")
     }
 
     buildFeatures {

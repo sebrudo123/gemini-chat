@@ -44,6 +44,14 @@ def test_serve_bot_js(client):
     assert "coreia_bot_token" in response.text
 
 
+def test_bot_panel_redirects_slashless_to_slash(client):
+    """/bot sin barra debe redirigir a /bot/: el HTML carga bot.js relativo
+    y sin la barra el WebView resuelve /bot.js (404) sin JavaScript."""
+    response = client.get("/bot", follow_redirects=False)
+    assert response.status_code == 301
+    assert response.headers["location"].endswith("/bot/")
+
+
 def test_bot_panel_endpoints_require_auth(client):
     assert client.get("/api/admin/discord-bot/guilds").status_code == 401
     assert client.get("/api/admin/discord-bot/guilds/123/inventory").status_code == 401

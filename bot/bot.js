@@ -97,6 +97,11 @@
     config: {},
   };
 
+  /* Modo app (la APK abre el panel con ?ui=app): nunca se muestra el login
+     web; hay una pantalla de carga y, si la sesión caduca, se le avisa a la
+     app nativa (CoreIAAndroid.onAuthFailed) para volver al login propio. */
+  var appMode = qsParam("ui") === "app";
+
   /* Puente con la APK nativa: cuando corre dentro de la app Android, la barra
      inferior y el splash son nativos y el panel adapta su layout. */
   var nativeBridge = window.CoreIAAndroid || null;
@@ -149,12 +154,18 @@
   }
 
   function showApp(logged) {
-    $("loginView").style.display = logged ? "none" : "flex";
+    $("loginView").style.display = logged || appMode ? "none" : "flex";
     $("appView").style.display = logged ? "block" : "none";
+    if (appMode) appBootOverlay(false);
     try {
       if (nativeBridge && nativeBridge.onLoginState) nativeBridge.onLoginState(!!logged);
     } catch (err) { /* fuera de la APK */ }
     if (logged) refreshAll();
+  }
+
+  function appBootOverlay(show) {
+    var el = $("appBoot");
+    if (el) el.style.display = show ? "flex" : "none";
   }
 
   function handleAuthSuccess(token) {
@@ -1328,6 +1339,10 @@
     history.replaceState(null, "", window.location.pathname + window.location.search);
 
     if (hash.indexOf("#denied=1") !== -1) {
+      if (appMode && nativeBridge && nativeBridge.onAuthFailed) {
+        try { nativeBridge.onAuthFailed(); } catch (err) { /* sin puente */ }
+        return;
+      }
       $("loginMsg").textContent =
         "No tienes permisos para usar este panel. Solo el fundador de Core IA puede entrar.";
       $("loginMsg").className = "msgbox err show";
@@ -1499,6 +1514,7 @@
   /* Puente nativo → web: la barra inferior de la APK cambia de pestaña aquí. */
   window.CoreIAJS = { switchView: switchView };
   if (state.token) {
+    if (appMode) appBootOverlay(true);
     api("/api/admin/discord-bot")
       .then(function (data) {
         state.bot = data.bot;
@@ -1507,6 +1523,11 @@
       .catch(function (err) {
         LS.removeItem(TOKEN_KEY);
         state.token = "";
+        if (appMode && nativeBridge && nativeBridge.onAuthFailed) {
+          appBootOverlay(false);
+          try { nativeBridge.onAuthFailed(); } catch (err2) { /* sin puente */ }
+          return;
+        }
         $("loginMsg").textContent =
           err && /403|fundador|permisos/i.test(err.message)
             ? "No tienes permisos para usar este panel. Solo el fundador de Core IA."
@@ -1514,6 +1535,22 @@
         $("loginMsg").className = "msgbox err show";
         showApp(false);
       });
+  } else if (appMode && qsParam("open") === "discord") {
+    // Login Discord desde la app nativa: arranca el OAuth solo, sin mostrar
+    // el login web. El callback vuelve con ?ui=app#token=... (panel + appMode).
+    appBootOverlay(true);
+    var bootMsg = document.querySelector("#appBoot div:last-child");
+    if (bootMsg) bootMsg.textContent = "Abriendo Discord…";
+    setTimeout(function () {
+      window.location.href = API_BASE + "/api/admin/discord-bot/login?panel_origin="
+        + encodeURIComponent(window.location.origin) + "&ui_app=1";
+    }, 250);
+  } else if (appMode) {
+    // En modo app siempre llega un token (el login nativo lo valida antes);
+    // si por algo no llegó, pedimos reingreso en vez del login web.
+    try {
+      if (nativeBridge && nativeBridge.onAuthFailed) nativeBridge.onAuthFailed();
+    } catch (err) { /* sin puente */ }
   } else {
     showApp(false);
   }
