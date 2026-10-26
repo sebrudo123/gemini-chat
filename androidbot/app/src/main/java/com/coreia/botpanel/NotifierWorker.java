@@ -48,7 +48,7 @@ public class NotifierWorker extends Worker {
         }
 
         final int[] codeRef = { 0 };
-        final String[] newestRef = { null };
+        final Object[] newestRef = { null };
         final CountDownLatch latch = new CountDownLatch(1);
         ApiClient.get(base + "/api/admin/discord-bot/events?limit=20", token,
             (code, body) -> {
@@ -66,7 +66,7 @@ public class NotifierWorker extends Worker {
         if (codeRef[0] != 200) {
             return Result.retry();
         }
-        final String[] newest = newestRef[0];
+        final String[] newest = (String[]) newestRef[0];
         if (newest == null) {
             return Result.success(); // sin eventos todavía
         }
