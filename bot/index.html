@@ -867,6 +867,8 @@
             </div>
             <label class="fl">Días mínimos de la cuenta para no ser parada</label>
             <input id="cfgAntiraidMinAge" type="number" min="0" value="7">
+            <label class="switch"><span>Detección predictiva con IA (intenta parar el raid antes de que entre)</span><input type="checkbox" id="cfgAntiraidAi"></label>
+            <p class="mini">Cada pocas entradas, la IA revisa el patrón reciente y activa el modo raid si sospecha de una oleada.</p>
             <label class="fl">Acción contra cuentas sospechosas</label>
             <select id="cfgAntiraidAction">
               <option value="kick">Expulsar las cuentas nuevas</option>
