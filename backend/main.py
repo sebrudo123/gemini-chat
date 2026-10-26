@@ -207,6 +207,8 @@ async def _housekeeping_loop() -> None:
             await _process_giveaways()
             if tick % 5 == 0:  # feeds cada ~5 minutos
                 await _process_feeds()
+            if now_is_new_hour_mark():  # resúmenes diarios al minuto 0
+                await _process_daily_summaries()
             await asyncio.to_thread(_update_backup_snapshot)
         except asyncio.CancelledError:  # pragma: no cover - al apagar el proceso
             raise
@@ -238,6 +240,112 @@ def _iso_ts(value: str) -> float:
         return datetime.fromisoformat(value).timestamp()
     except ValueError:
         return 0.0
+
+
+def now_is_new_hour_mark() -> bool:
+    """True justo al empezar una hora (el loop corre cada minuto)."""
+    return datetime.now(timezone.utc).minute == 0
+
+
+async def _process_daily_summaries() -> dict[str, int]:
+    """Resumen diario automático en Discord (item 6).
+
+    Cada servidor con `summary_channel_id` recibe a su `summary_hour` un
+    embed con lo que pasó ayer: mensajes IA, bienvenidas, despedidas y
+    acciones de protección. Se marca una vez por día en app_settings.
+    """
+    now = datetime.now(timezone.utc)
+    yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    try:
+        guilds = await discord_bot.fetch_bot_guilds()
+    except Exception:  # noqa: BLE001 - sin conexión a Discord se omite
+        return {"sent": 0}
+    sent = 0
+    for guild in guilds:
+        gid = str(guild["id"])
+        config = discord_bot.load_guild_config(int(gid))
+        channel = _summarize_update_channel(config)
+        if not channel:
+            continue
+        hour_raw = str(config.get("summary_hour") or "9")
+        try:
+            hour = max(0, min(23, int(hour_raw)))
+        except ValueError:
+            hour = 9
+        if now.hour != hour:
+            continue
+        db = SessionLocal()
+        try:
+            marca = f"bot:summary:{now:%Y-%m-%d}:{gid}"
+            if get_setting(db, marca):
+                continue
+            embed = _daily_summary_embed(gid, str(guild.get("name") or ""),
+                                         yesterday)
+            await discord_bot.send_channel_embed(int(channel), embed)
+            set_setting(db, marca, now.isoformat(timespec="seconds"))
+            sent += 1
+        except Exception:  # noqa: BLE001 - un servidor sin permisos no bloquea
+            continue
+        finally:
+            db.close()
+    return {"sent": sent}
+
+
+def _summarize_update_channel(config: dict[str, str]) -> str:
+    return str(config.get("summary_channel_id") or "").strip()
+
+
+def _daily_summary_embed(guild_id: str, guild_name: str, day: str) -> dict[str, Any]:
+    """Arma el embed del resumen con los contadores del día pasado."""
+    db = SessionLocal()
+    try:
+        data = _read_stat_day(db, day)
+        guilds = bot_extras.load_guild_stats(2)
+    finally:
+        db.close()
+    entry = guilds.get(guild_id) or {}
+    lines = (
+        f"• Mensajes con IA: {entry.get('messages', 0) or data.get('messages', 0)}"
+        f"• Bienvenidas: {entry.get('welcomes', 0) or data.get('welcomes', 0)}"
+        f"• Despedidas: {entry.get('goodbyes', 0) or data.get('goodbyes', 0)}"
+        f"• Verificaciones: {data.get('verifications', 0)}"
+        f"• Protección (mod/raid): {_mods_of(data)}"
+    )
+    return {
+        "title": f"📊 Resumen de ayer en {guild_name or 'tu servidor'}",
+        "description": lines.strip(),
+        "color": 0x6D5DFC,
+        "footer": {"text": "Core IA · resumen automático diario"},
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _read_stat_day(db: Session, day: str) -> dict[str, Any]:
+    raw = get_setting(db, bot_extras.stats_key(day), "")
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _mods_of(data: dict[str, Any]) -> int:
+    total = 0
+    for key in (
+        "antiraid_triggers",
+        "antiraid_blocked",
+        "antispam_warn",
+        "antispam_timeout",
+        "antispam_kick",
+        "aimod_actions",
+    ):
+        try:
+            total += int(data.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            continue
+    return total
 
 
 async def _process_schedules() -> None:
