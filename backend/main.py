@@ -4722,6 +4722,8 @@ BOT_CONFIG_KEYS = (
     "antiraid_secs",
     "antiraid_min_age_days",
     "antiraid_action",
+    # Detección predictiva de raid con IA (item 8)
+    "antiraid_ai_enabled",
     # Anti-spam: flood y menciones masivas
     "antispam_enabled",
     "antispam_msgs",
