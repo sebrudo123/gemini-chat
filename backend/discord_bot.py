@@ -377,6 +377,45 @@ def _ask_server_data(guild_id: int) -> str:
     return "\n".join(lineas) if lineas else "Aún no hay datos registrados."
 
 
+def _antiraid_predict(guild_id: int, config: dict[str, str]) -> bool:
+    """Detección predictiva de raid con IA (item 8).
+
+    Consulta a la IA sobre los datos recientes del servidor para decidir si
+    activar el modo raid *antes* de que el burst explote. Devuelve True si la
+    IA considera que hay un patrón sospechoso. Si la IA no está disponible o
+    no responde claramente, devuelve False (no bloquea).
+    """
+    if not _config_bool(config, "antiraid_ai_enabled", False):
+        return False
+    try:
+        eventos = bot_extras.load_events()[:20]
+        recientes = [
+            e for e in eventos
+            if e.get("kind") in ("welcome", "verification")
+        ][:15]
+        if len(recientes) < 3:
+            return False
+        detalle = "\n".join(
+            f"- {e.get('t', '')[:16]} {e.get('kind', '')}: {e.get('detail', '')[:60]}"
+            for e in recientes
+        )
+        pregunta = (
+            "Basándote solo en estos eventos recientes de un servidor de Discord, "
+            "¿parece que está entrando un raid (miles de cuentas nuevas en poco tiempo)? "
+            "Responde solo 'SÍ' o 'NO', nada más.\n\n" + detalle
+        )
+        respuesta = _command_ai_reply(
+            "Eres Core IA, experto en seguridad de Discord. Solo responde SÍ o NO.",
+            pregunta,
+            str(guild_id),
+            "sistema",
+        )
+        return str(respuesta).strip().upper().startswith("SÍ")
+    except Exception:  # noqa: BLE001 - la predicción nunca bloquea
+        LOG.exception("Detección predictiva de raid falló")
+        return False
+
+
 def _command_ai_reply(
     system_prompt: str, user_message: str, guild_name: str, user_name: str
 ) -> str:
@@ -530,12 +569,14 @@ def _account_age_days(member: Any) -> int:
 
 JOIN_BURST: dict[int, deque[float]] = defaultdict(deque)
 RAID_MODE: dict[int, float] = {}
+RAID_PREDICT_COUNT: dict[int, int] = defaultdict(int)
 SPAM_WINDOW: dict[tuple[int, int], deque[float]] = defaultdict(lambda: deque(maxlen=200))
 SPAM_STRIKES: dict[tuple[int, int], deque[float]] = defaultdict(deque)
 TEMP_VOICE_IDS: set[int] = set()
 
 RAID_LOCK_SECONDS = 300.0
 SPAM_STRIKE_SECONDS = 600.0
+RAID_PREDICT_EVERY = 5  # cada N joins se consulta a la IA (detección predictiva)
 
 
 def _config_bool(config: dict[str, str], key: str, default: bool = False) -> bool:
@@ -1106,6 +1147,29 @@ class BotManager:
         if not raid_active and not evaluate_join_burst(
             burst, now, window_secs, threshold
         ):
+            # Detección predictiva con IA cada N joins (item 8).
+            RAID_PREDICT_COUNT[guild.id] += 1
+            if RAID_PREDICT_COUNT[guild.id] >= RAID_PREDICT_EVERY:
+                RAID_PREDICT_COUNT[guild.id] = 0
+                if _antiraid_predict(guild.id, config):
+                    raid_active = True
+                    RAID_MODE[guild.id] = now + RAID_LOCK_SECONDS
+                    bot_extras.record_event(
+                        "antiraid_trigger",
+                        "predicción IA: patrón de entrada sospechoso (modo raid preventivo)",
+                        str(guild.id),
+                    )
+                    bot_extras.bump_stat("antiraid_triggers", guild_id=str(guild.id))
+                    await self._send_log(
+                        guild,
+                        "🔮 Modo raid predictivo (IA)",
+                        "La IA detectó un patrón sospechoso en las entradas recientes. "
+                        "Se activó el modo raid preventivamente. "
+                        f"Acción: **{action}**.",
+                        0xF59E0B,
+                        config=config,
+                    )
+                    return True
             return False
 
         if not raid_active:
