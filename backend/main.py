@@ -5552,6 +5552,47 @@ def admin_bot_events(
     return {"events": events[:limit]}
 
 
+@app.get("/api/admin/discord-bot/activity-heatmap")
+def admin_bot_activity_heatmap(
+    days: int = 14,
+    _: dict[str, Any] = Depends(require_panel_read),
+) -> dict[str, Any]:
+    """Mapa de calor de actividad: conteo de eventos por hora (0-23) y día
+    de la semana (lunes=0 … domingo=6) de los últimos N días.
+
+    Lo usa el panel para pintar un heatmap de «cuándo está activo el
+    servidor» sin depender de datos de mensajes (que el bot no almacena
+    todos). Se basa en los eventos registrados (bienvenidas, mod, raid,
+    errores…).
+    """
+    days = max(1, min(60, days))
+    eventos = bot_extras.load_events()
+    # Matriz 7 (días) × 24 (horas).
+    matriz = [[0] * 24 for _ in range(7)]
+    ahora = datetime.now(timezone.utc)
+    desde = ahora - timedelta(days=days)
+    for ev in eventos:
+        ts = ev.get("t", "")
+        if not ts:
+            continue
+        try:
+            momento = datetime.fromisoformat(ts)
+        except ValueError:
+            continue
+        if momento.tzinfo is None:
+            momento = momento.replace(tzinfo=timezone.utc)
+        if momento < desde:
+            continue
+        matriz[momento.weekday()][momento.hour] += 1
+    total = sum(sum(fila) for fila in matriz)
+    return {
+        "days": days,
+        "total": total,
+        "matrix": matriz,  # [dia_semana][hora]
+        "dias": ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"],
+    }
+
+
 BOT_MOD_EVENT_KINDS = (
     "antiraid_trigger",
     "antiraid_block",
