@@ -331,6 +331,52 @@ def _ai_goodbye_text(member: Any) -> str:
     )
 
 
+def _ask_server_data(guild_id: int) -> str:
+    """Recolecta datos reales del servidor para que /ask responda con contexto."""
+    lineas = []
+
+    # Contadores globales del día de ayer (y el de hoy si existe).
+    hoy = datetime.now(timezone.utc).date()
+    dias = [hoy - timedelta(days=i) for i in range(7)]
+    for dia in dias:
+        clave = bot_extras.stats_key(dia.strftime("%Y-%m-%d"))
+        datos = bot_extras.load_stats(dia.strftime("%Y-%m-%d"))
+        if datos:
+            lineas.append(
+                f"{dia}: mensajes={datos.get('messages', 0)}, "
+                f"bienvenidas={datos.get('welcomes', 0)}, "
+                f"protección={datos.get('antiraid_triggers', 0) + datos.get('antispam_warn', 0)}"
+            )
+
+    # Eventos recientes (últimos 10).
+    eventos = bot_extras.load_events()[:10]
+    if eventos:
+        lineas.append("Eventos recientes:")
+        for ev in eventos:
+            lineas.append(
+                f"  - {ev.get('t', '')[:10]} {ev.get('kind', '')}: {ev.get('detail', '')[:80]}"
+            )
+
+    # Estadísticas por servidor (últimos 14 días).
+    try:
+        stats_servidores = bot_extras.load_guild_stats(14)
+        si = stats_servidores.get(str(guild_id))
+        if si:
+            lineas.append(
+                "Tus 14 días: mensajes=%s, bienvenidas=%s, despedidas=%s, tickets=%s"
+                % (
+                    si.get("messages", 0),
+                    si.get("welcomes", 0),
+                    si.get("goodbyes", 0),
+                    si.get("tickets", 0),
+                )
+            )
+    except Exception:  # noqa: BLE001 - sin stats no bloquea
+        pass
+
+    return "\n".join(lineas) if lineas else "Aún no hay datos registrados."
+
+
 def _command_ai_reply(
     system_prompt: str, user_message: str, guild_name: str, user_name: str
 ) -> str:
@@ -1880,6 +1926,62 @@ class BotManager:
             await interaction.response.send_message(
                 "Historial del canal borrado.", ephemeral=True
             )
+
+        @tree.command(
+            name="ask",
+            description="Pregúntale a Core IA sobre la actividad de este servidor",
+        )
+        @app_commands.describe(pregunta="Tu pregunta sobre el servidor")
+        async def ask_command(
+            interaction: "discord.Interaction", pregunta: str
+        ) -> None:
+            """Mini copiloto: responde con IA sobre los datos reales del servidor."""
+            if interaction.guild is None:
+                await interaction.response.send_message(
+                    "Este comando solo funciona dentro de un servidor.", ephemeral=True
+                )
+                return
+            if not _channel_allowed(interaction.channel_id, allowed_channels):
+                await interaction.response.send_message(
+                    "Core IA no está activada en este canal.", ephemeral=True
+                )
+                return
+
+            await interaction.response.defer(thinking=True)
+
+            # Recoge datos reales del servidor para que la IA responda con contexto.
+            datos = await asyncio.to_thread(_ask_server_data, interaction.guild.id)
+
+            sistema = (
+                "Eres Core IA, asistente de este servidor de Discord. "
+                "Responde SOLO con base en los datos del servidor que se te dan a continuación; "
+                "si la información no está en esos datos, di que no tienes ese registro. "
+                "Responde en español, breve, claro y con formato sencillo. "
+                "No inventes usuarios, fechas ni cifras."
+                "\n\n---\nDATOS DEL SERVIDOR (últimos días):\n" + datos
+            )
+
+            try:
+                answer = await asyncio.to_thread(
+                    _command_ai_reply,
+                    sistema,
+                    pregunta,
+                    str(interaction.guild.name),
+                    str(interaction.user.display_name),
+                )
+            except Exception:  # noqa: BLE001 - el bot nunca debe caerse
+                LOG.exception("Error generando respuesta de /ask")
+                await interaction.followup.send(
+                    "No pude responder ahora mismo. Inténtalo de nuevo en unos segundos.",
+                    ephemeral=True,
+                )
+                return
+
+            answer = (answer or "").strip() or "No obtuve respuesta."
+            chunks = _split_message(answer)
+            await interaction.followup.send(chunks[0])
+            for chunk in chunks[1:]:
+                await interaction.followup.send(chunk)
 
         @tree.command(name="nivel", description="Muestra tu nivel y XP")
         @app_commands.describe(usuario="Miembro para consultar (opcional)")
