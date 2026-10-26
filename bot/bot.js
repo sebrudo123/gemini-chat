@@ -758,6 +758,7 @@
     $("cfgLevelsOn").checked = flag("levels_enabled");
     $("cfgWelcomeDmOn").checked = flag("welcome_dm_enabled");
     $("cfgAntiraidOn").checked = flag("antiraid_enabled");
+    $("cfgAntiraidAi").checked = flag("antiraid_ai_enabled");
     $("cfgAntispamOn").checked = flag("antispam_enabled");
     $("cfgAimodOn").checked = flag("aimod_enabled");
     $("cfgAimodAction").value = state.config.aimod_action || "timeout";
@@ -1860,6 +1861,7 @@ document.addEventListener("click", function (ev) {
     $("btnSaveAntiraid").onclick = function () {
       saveConfig({
         antiraid_enabled: $("cfgAntiraidOn").checked ? "1" : "0",
+        antiraid_ai_enabled: $("cfgAntiraidAi").checked ? "1" : "0",
         antiraid_joins: $("cfgAntiraidJoins").value || "5",
         antiraid_secs: $("cfgAntiraidSecs").value || "60",
         antiraid_min_age_days: $("cfgAntiraidMinAge").value || "0",
