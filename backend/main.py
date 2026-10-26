@@ -1844,22 +1844,44 @@ def _parse_from(value: str) -> tuple[str, str]:
 
 
 def _send_email(to: str, subject: str, html: str) -> bool:
-    """Envía un correo probando los transportes configurados (relevo, Brevo, Resend, SMTP)."""
+    """Envía un correo probando los transportes configurados (relevo, Brevo, Resend, SMTP).
+
+    Registra qué transporte se probó y si falló, para diagnosticar por qué
+    no llegan los correos de verificación (y de actualizaciones grandes).
+    """
+    log = logging.getLogger("coreia.email")
     if not to:
+        log.error("No se puede enviar correo: destinatario vacío.")
         return False
-    if settings.email_relay_url and _send_email_relay(to, subject, html):
-        return True
-    if settings.brevo_api_key and _send_email_brevo(to, subject, html):
-        return True
-    if settings.resend_api_key and _send_email_resend(to, subject, html):
-        return True
-    if (
-        settings.smtp_host
-        and settings.smtp_user
-        and settings.smtp_password
-        and _send_email_smtp(to, subject, html)
-    ):
-        return True
+    tried = []
+    if settings.email_relay_url:
+        tried.append("relay")
+        if _send_email_relay(to, subject, html):
+            log.info("Correo enviado por relevo a %s", to)
+            return True
+        log.warning("Relevo de correo falló para %s", to)
+    if settings.brevo_api_key:
+        tried.append("brevo")
+        if _send_email_brevo(to, subject, html):
+            log.info("Correo enviado por Brevo a %s", to)
+            return True
+        log.warning("Brevo falló para %s", to)
+    if settings.resend_api_key:
+        tried.append("resend")
+        if _send_email_resend(to, subject, html):
+            log.info("Correo enviado por Resend a %s", to)
+            return True
+        log.warning("Resend falló para %s", to)
+    if settings.smtp_host and settings.smtp_user and settings.smtp_password:
+        tried.append("smtp")
+        if _send_email_smtp(to, subject, html):
+            log.info("Correo enviado por SMTP a %s", to)
+            return True
+        log.warning("SMTP falló para %s", to)
+    if not tried:
+        log.error("No hay ningún transporte de correo configurado (email_relay_url, brevo_api_key, resend_api_key o SMTP).")
+    else:
+        log.error("Todos los transportes de correo fallaron para %s: %s", to, ", ".join(tried))
     return False
 
 
@@ -4248,6 +4270,55 @@ def admin_resend_verification(
     return {"ok": True, "sent": sent, "already_verified": False}
 
 
+class EmailAllRequest(BaseModel):
+    subject: str = Field(..., max_length=200)
+    html: str = Field(..., max_length=10000)
+    only_verified: bool = Field(default=True)
+
+
+@app.post("/api/admin/email/send-all")
+def admin_email_send_all(
+    payload: EmailAllRequest,
+    admin: dict[str, Any] = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Envía un correo a todos los usuarios que tienen email.
+
+    Solo puede usarlo un fundador/administrador. Se usa para avisar de
+    actualizaciones grandes de la app o del panel del bot.
+    """
+    q = db.query(User).filter(User.email.is_not(None), User.email != "")
+    if payload.only_verified:
+        q = q.filter(User.email_verified == True)  # noqa: E712
+    users = q.all()
+
+    log = logging.getLogger("coreia.email")
+    sent = 0
+    failed = 0
+    for user in users:
+        ok = _send_email(user.email, payload.subject, payload.html)
+        if ok:
+            sent += 1
+        else:
+            failed += 1
+            log.warning("No se pudo enviar correo masivo a %s", user.email)
+
+    record_audit(
+        db,
+        admin,
+        "email.send_all",
+        "0",
+        f"subject={payload.subject[:60]} sent={sent} failed={failed} total={len(users)}",
+    )
+    return {
+        "ok": True,
+        "total": len(users),
+        "sent": sent,
+        "failed": failed,
+        "only_verified": payload.only_verified,
+    }
+
+
 @app.post("/api/admin/users/{user_id}/logout-all")
 def admin_logout_all(
     user_id: int,
@@ -4732,7 +4803,7 @@ def admin_discord_bot_login(
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
-        "scope": "identify",
+        "scope": "identify email",
         "state": _panel_oauth_state(
             origin, ui_app=(ui_app or "").lower() in ("1", "true", "on")
         ),
@@ -4898,6 +4969,9 @@ class BotUpdateUpload(BaseModel):
     release_url: str = Field(default="", max_length=400)
     # Qué app declara la versión: el panel del bot o la IA (app principal).
     app: str = Field(default="panel", pattern="^(ia|panel)$")
+    # Si es una "actualización grande" (nueva versión importante), se envía
+    # correo a todos los usuarios con email verificado.
+    major: bool = Field(default=False)
 
 
 BOT_UPDATE_MANIFEST_KEY = "bot:update:manifest"
@@ -5067,12 +5141,64 @@ async def bot_update_upload(
         notified = await _notify_bot_update(manifest, app_name)
     except Exception:  # noqa: BLE001 - el aviso nunca bloquea la publicación
         notified = 0
+
+    email_result = {"sent": 0, "failed": 0, "total": 0}
+    if payload.major:
+        try:
+            email_result = await asyncio.to_thread(
+                _email_update_announcement, db, app_name, manifest
+            )
+        except Exception:  # noqa: BLE001 - el correo nunca bloquea la publicación
+            log = logging.getLogger("coreia.email")
+            log.exception("Fallo al enviar correo de actualización masiva")
+
     return {
         "ok": True,
         "app": app_name,
         "published": manifest["published_at"],
         "notified_guilds": notified,
+        "email": email_result,
+        "major": payload.major,
     }
+
+
+async def _email_update_announcement(
+    db: Session, app_name: str, manifest: dict[str, Any]
+) -> dict[str, int]:
+    """Envía correo de anuncio de actualización a todos los usuarios."""
+    from sqlalchemy import true
+
+    q = (
+        db.query(User)
+        .filter(User.email.is_not(None), User.email != "", User.email_verified == true())
+    )
+    users = q.all()
+
+    log = logging.getLogger("coreia.email")
+    meta = UPDATE_APPS.get(app_name, UPDATE_APPS["panel"])
+    version = str(manifest.get("version_name") or "").strip() or "desconocida"
+    subject = f"Nueva versión de Core IA — {meta['titulo'].format(version=version)}"
+    changelog = str(manifest.get("changelog") or "")
+    html = (
+        "<div style='font-family:sans-serif;max-width:560px;margin:auto'>"
+        f"<h2>Nueva versión disponible</h2>"
+        f"<p>Hola, acaba de publicarse la versión <b>{version}</b> de Core IA "
+        f"({meta['titulo'].format(version=version)}).</p>"
+        f"<p>{changelog.replace(chr(10), '<br>') if changelog else 'Sin detalles de cambios.'}</p>"
+        "<p>Actualiza la app desde tu dispositivo o desde el panel de administración.</p>"
+        "<p style='color:#888;font-size:12px'>Si no esperabas este correo, ignóralo.</p>"
+        "</div>"
+    )
+    sent = 0
+    failed = 0
+    for user in users:
+        ok = _send_email(user.email, subject, html)
+        if ok:
+            sent += 1
+        else:
+            failed += 1
+            log.warning("No se pudo enviar correo de actualización a %s", user.email)
+    return {"sent": sent, "failed": failed, "total": len(users)}
 
 
 def _update_check_payload(
