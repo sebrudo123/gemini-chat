@@ -18,4 +18,4 @@ qrcode
 pypdf
 python-multipart
 discord.py>=2.4,<3
-Pillow>=10.1
+Pillow>=13.0.0
