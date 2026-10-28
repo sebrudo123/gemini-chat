@@ -41,7 +41,7 @@ jobs:
           gradle-version: "8.7"
 
       - name: Cache debug keystore
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: android/app/debug.keystore
           key: android-debug-keystore-v2
