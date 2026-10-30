@@ -3250,9 +3250,7 @@ async def verify_vantage_flight(
     return FlightVerifyResponse(
         success=True,
         verification=verification,
-        message=(
-            f"Verificación de vuelo completada con {provider_used}."
-        ),
+        message="Verificación de vuelo completada con Core Model V1.",
     )
 
 
