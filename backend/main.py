@@ -3470,15 +3470,19 @@ async def vantage_query(
                     f"del tiempo detectado en las imágenes ({detected_flight_time}). Diferencia: {diff:.1f} h.",
                 )
 
-    # Validar matrícula declarada vs detectada
+    # Validar matrícula declarada vs detectada (solo informativo, sin rechazo)
     if tail_number and detected_tail and action == "verify_flight":
         if tail_number.strip().upper() != detected_tail.strip().upper():
-            add_error(
-                "tail_number",
-                tail_number,
-                detected_tail,
-                f"La matrícula declarada '{tail_number}' no coincide con la detectada en las imágenes: '{detected_tail}'.",
-            )
+            validation_errors.append(VantageValidationError(
+                field="tail_number",
+                declared=tail_number,
+                detected=detected_tail,
+                message=(
+                    f"La matrícula declarada '{tail_number}' no coincide con "
+                    f"la detectada en las imágenes: '{detected_tail}'. "
+                    f"(Solo informativo, no bloquea el vuelo)"
+                ),
+            ))
 
     # ------------------------------------------------------------------ #
     # 4. RESULTADO FINAL                                                 #
