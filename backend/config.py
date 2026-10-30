@@ -140,6 +140,14 @@ class Settings:
         # Debe definirse en el entorno y compartirse solo con la app oficial.
         self.vantage_api_key = os.environ.get("VANTAGE_API_KEY", "").strip()
 
+        # --- Proveedor gratuito de visión (Hugging Face Inference API) ---
+        # Tier gratuito disponible en https://huggingface.co/settings/tokens
+        # Modelos recomendados de visión: llava-hf/llava-1.5-7b-hf, Salesforce/blip2-opt-2.7b
+        self.huggingface_api_key = os.environ.get("HUGGINGFACE_API_KEY", "").strip()
+        self.huggingface_vision_model = os.environ.get(
+            "HUGGINGFACE_VISION_MODEL", "llava-hf/llava-1.5-7b-hf"
+        ).strip()
+
         # Límite de tamaño para subidas de imagen (en bytes). 10 MB por defecto.
         self.max_upload_size = int(os.environ.get("MAX_UPLOAD_SIZE", str(10 * 1024 * 1024)))
 

@@ -2997,6 +2997,116 @@ async def _read_upload_image(upload: UploadFile) -> tuple[bytes, str]:
     return content, upload.content_type or "image/jpeg"
 
 
+async def _analyze_with_huggingface_vision(
+    prompt: str, images: list[tuple[bytes, str]]
+) -> str:
+    """Analiza imágenes con Hugging Face Inference API (tier gratuito).
+
+    Usa modelos de visión-language como LLaVA. Cada imagen se analiza
+    por separado y los resultados se combinan.
+    """
+    import base64
+
+    log = logging.getLogger("coreia.vantage")
+    combined_results: list[str] = []
+
+    for content, mime in images:
+        b64_image = base64.b64encode(content).decode("ascii")
+        payload = {
+            "inputs": {
+                "text": prompt,
+                "image": b64_image,
+            },
+        }
+
+        try:
+            response = httpx.post(
+                f"https://api-inference.huggingface.co/models/{settings.huggingface_vision_model}",
+                headers={
+                    "Authorization": f"Bearer {settings.huggingface_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=60,
+            )
+            if response.status_code == 503:
+                # Modelo cargándose, reintentar una vez.
+                await asyncio.sleep(5)
+                response = httpx.post(
+                    f"https://api-inference.huggingface.co/models/{settings.huggingface_vision_model}",
+                    headers={
+                        "Authorization": f"Bearer {settings.huggingface_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=60,
+                )
+            response.raise_for_status()
+            data = response.json()
+            if isinstance(data, list) and len(data) > 0:
+                text = data[0].get("generated_text", "")
+            elif isinstance(data, dict):
+                text = data.get("generated_text", str(data))
+            else:
+                text = str(data)
+            combined_results.append(text)
+        except httpx.HTTPError as exc:
+            log.warning("HF error para una imagen: %s", exc)
+            combined_results.append("")
+
+    return "\n".join(r for r in combined_results if r).strip()
+
+
+async def _analyze_with_openrouter_vision(
+    prompt: str, images: list[tuple[bytes, str]]
+) -> str:
+    """Analiza imágenes con OpenRouter (tier gratuito con modelos de visión).
+
+    Usa la API compatible con OpenAI de OpenRouter.
+    """
+    import base64
+
+    log = logging.getLogger("coreia.vantage")
+    combined_results: list[str] = []
+
+    for content, mime in images:
+        b64_image = base64.b64encode(content).decode("ascii")
+        data_uri = f"data:{mime};base64,{b64_image}"
+
+        try:
+            response = httpx.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.openrouter_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.llm_vision_model or "meta-llama/llama-3.2-11b-vision-instruct:free",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {"type": "image_url", "image_url": {"url": data_uri}},
+                            ],
+                        }
+                    ],
+                    "temperature": 0.2,
+                    "max_tokens": 1000,
+                },
+                timeout=60,
+            )
+            response.raise_for_status()
+            data = response.json()
+            text = data["choices"][0]["message"]["content"]
+            combined_results.append(text)
+        except httpx.HTTPError as exc:
+            log.warning("OpenRouter error para una imagen: %s", exc)
+            combined_results.append("")
+
+    return "\n".join(r for r in combined_results if r).strip()
+
+
 @app.post("/api/vantage/verify-flight", response_model=FlightVerifyResponse)
 @limiter.limit("10/minute")
 async def verify_vantage_flight(
@@ -3011,19 +3121,21 @@ async def verify_vantage_flight(
     _: None = Depends(verify_vantage_api_key),
     db: Session = Depends(get_db),
 ) -> FlightVerifyResponse:
-    """Verifica un vuelo de Vantage Airlines analizando imágenes con IA.
+    """Verifica un vuelo de Vantage Airlines analizando imágenes con IA gratuita.
 
     Recibe los datos del vuelo y una o más imágenes (reportes, fotos del avión
-    con la livery de la aerolínea, etc.) y usa Gemini con visión para determinar
-    si el avión corresponde realmente a la aerolínea declarada.
+    con la livery de la aerolínea, etc.) y usa un modelo de visión gratuito
+    (Hugging Face Inference API o OpenRouter) para determinar si el avión
+    corresponde realmente a la aerolínea declarada.
 
     La app de Vantage Airlines debe enviar el header `X-Vantage-API-Key` con la
     clave configurada en `VANTAGE_API_KEY`.
     """
-    if not genai_client:
+    if not settings.huggingface_api_key and not settings.openrouter_api_key:
         raise HTTPException(
             status_code=503,
-            detail="El servicio de IA con visión no está disponible en este momento.",
+            detail="No hay un proveedor de visión gratuito configurado. "
+                   "Defina HUGGINGFACE_API_KEY o OPENROUTER_API_KEY en el backend.",
         )
 
     if not images or len(images) == 0:
@@ -3032,14 +3144,12 @@ async def verify_vantage_flight(
         raise HTTPException(status_code=400, detail="Máximo 5 imágenes por verificación.")
 
     # Leer y validar todas las imágenes.
-    image_parts: list[types.Part] = []
+    image_contents: list[tuple[bytes, str]] = []
     for upload in images:
         content, mime = await _read_upload_image(upload)
-        image_parts.append(
-            types.Part.from_bytes(data=content, mime_type=mime)
-        )
+        image_contents.append((content, mime))
 
-    # Construir el prompt de análisis para Gemini.
+    # Construir el prompt de análisis (español).
     prompt = (
         "Eres un experto en aviación y seguridad aérea. Tu tarea es verificar si "
         "un vuelo es legítimo analizando imágenes del avión y sus reportes.\n\n"
@@ -3069,25 +3179,36 @@ async def verify_vantage_flight(
         "No incluyas texto adicional fuera del JSON."
     )
 
-    contents = [types.Content(role="user", parts=[types.Part(text=prompt)] + image_parts)]
+    # Intentar con proveedor gratuito (Hugging Face primero, luego OpenRouter).
+    raw_text = ""
+    provider_used = ""
 
-    try:
-        response = genai_client.models.generate_content(
-            model=settings.ai_model,
-            contents=contents,
-            config=types.GenerateContentConfig(temperature=0.2),
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=502,
-            detail=f"Error al analizar las imágenes con IA: {exc}",
-        ) from exc
+    if settings.huggingface_api_key:
+        try:
+            raw_text = await _analyze_with_huggingface_vision(
+                prompt, image_contents
+            )
+            provider_used = "huggingface"
+        except Exception as exc:  # noqa: BLE001 - intentar siguiente proveedor
+            logging.getLogger("coreia").warning(
+                "Hugging Face falló, probando OpenRouter: %s", exc
+            )
 
-    raw_text = (response.text or "").strip()
+    if not raw_text and settings.openrouter_api_key:
+        try:
+            raw_text = await _analyze_with_openrouter_vision(
+                prompt, image_contents
+            )
+            provider_used = "openrouter"
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger("coreia").warning(
+                "OpenRouter falló: %s", exc
+            )
+
     if not raw_text:
         raise HTTPException(
             status_code=502,
-            detail="El servicio de IA no devolvió un resultado.",
+            detail="No se pudo analizar las imágenes con ningún proveedor gratuito.",
         )
 
     # Limpiar posibles bloques de markdown.
@@ -3103,13 +3224,16 @@ async def verify_vantage_flight(
         import json as _json
         result = _json.loads(raw_text)
     except (ValueError, TypeError) as exc:
-        # Si Gemini no devolvió JSON válido, intentamos extraer información básica.
+        # Si el proveedor no devolvió JSON válido, intentar extraer información básica.
         result = {
             "verified": False,
             "confidence": 0.0,
             "airline_match": False,
             "livery_match": False,
-            "details": f"No se pudo analizar las imágenes correctamente. Respuesta cruda: {raw_text[:200]}",
+            "details": (
+                f"No se pudo analizar las imágenes correctamente con {provider_used}. "
+                f"Respuesta cruda: {raw_text[:200]}"
+            ),
             "risk_level": "alto",
         }
 
@@ -3119,23 +3243,16 @@ async def verify_vantage_flight(
         airline_match=bool(result.get("airline_match", False)),
         livery_match=bool(result.get("livery_match", False)),
         details=str(result.get("details", "Sin detalles disponibles.")),
-        analyzed_images=len(image_parts),
+        analyzed_images=len(image_contents),
         risk_level=str(result.get("risk_level", "medio")),
     )
-
-    # Registrar uso para auditoría.
-    try:
-        from main import bump_usage, get_usage_row
-        # No hay usuario autenticado en este endpoint (usa API key), así que
-        # solo registramos un evento genérico sin usuario específico.
-        pass
-    except Exception:  # noqa: BLE001 - no bloquear la respuesta por auditoría
-        pass
 
     return FlightVerifyResponse(
         success=True,
         verification=verification,
-        message="Verificación de vuelo completada.",
+        message=(
+            f"Verificación de vuelo completada con {provider_used}."
+        ),
     )
 
 
