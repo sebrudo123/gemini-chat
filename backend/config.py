@@ -135,6 +135,14 @@ class Settings:
         # token (header x-upload-token). Nunca se almacena en el repositorio.
         self.bot_update_upload_token = os.environ.get("BOT_UPDATE_UPLOAD_TOKEN", "").strip()
 
+        # --- Vantage Airlines API ---
+        # Clave API para que la app de Vantage Airlines verifique vuelos con IA.
+        # Debe definirse en el entorno y compartirse solo con la app oficial.
+        self.vantage_api_key = os.environ.get("VANTAGE_API_KEY", "").strip()
+
+        # Límite de tamaño para subidas de imagen (en bytes). 10 MB por defecto.
+        self.max_upload_size = int(os.environ.get("MAX_UPLOAD_SIZE", str(10 * 1024 * 1024)))
+
         # --- Autenticación en dos pasos (TOTP) ---
         self.totp_issuer = os.environ.get("TOTP_ISSUER", "Core IA")
         self.require_2fa = os.environ.get("REQUIRE_2FA", "false").lower() in ("1", "true", "yes")

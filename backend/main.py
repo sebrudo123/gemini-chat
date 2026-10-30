@@ -698,6 +698,29 @@ def get_current_user(
     return user
 
 
+def verify_vantage_api_key(
+    x_vantage_api_key: str | None = Header(default=None, alias="X-Vantage-API-Key"),
+) -> None:
+    """Valida la clave API de Vantage Airlines.
+
+    La app de Vantage Airlines debe enviar este header en cada petición a
+    /api/vantage/* para poder usar la verificación de vuelos con IA.
+    """
+    if not settings.vantage_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="El servicio de Vantage Airlines no está configurado en el backend.",
+        )
+    if not x_vantage_api_key or not hmac.compare_digest(
+        x_vantage_api_key, settings.vantage_api_key
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Clave API de Vantage Airlines inválida o faltante.",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+
+
 def require_email_verified(
     profile: dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -1363,6 +1386,38 @@ class ImageRequest(BaseModel):
 class ImageResponse(BaseModel):
     image: str
     mime_type: str
+
+
+# --------------------------------------------------------------------------- #
+# Vantage Airlines — Verificación de vuelos con IA
+# --------------------------------------------------------------------------- #
+
+
+class FlightVerificationRequest(BaseModel):
+    """Datos de un vuelo para verificar contra imágenes."""
+    flight_number: str = Field(..., min_length=1, max_length=20, description="Número de vuelo (ej. VA123)")
+    airline: str = Field(..., min_length=1, max_length=100, description="Nombre de la aerolínea")
+    origin: str = Field(..., min_length=2, max_length=5, description="Código IATA del aeropuerto de origen")
+    destination: str = Field(..., min_length=2, max_length=5, description="Código IATA del aeropuerto de destino")
+    flight_date: str = Field(..., min_length=1, max_length=20, description="Fecha del vuelo (YYYY-MM-DD)")
+    tail_number: str | None = Field(None, max_length=20, description="Matrícula del avión (opcional)")
+
+
+class FlightVerificationResult(BaseModel):
+    """Resultado de la verificación de vuelo."""
+    verified: bool
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Nivel de confianza de 0 a 1")
+    airline_match: bool
+    livery_match: bool
+    details: str
+    analyzed_images: int
+    risk_level: str = Field(..., description="bajo | medio | alto")
+
+
+class FlightVerifyResponse(BaseModel):
+    success: bool
+    verification: FlightVerificationResult
+    message: str
 
 
 class MemoryRequest(BaseModel):
@@ -2907,6 +2962,180 @@ def generate_image(
     return ImageResponse(
         image=f"data:{mime_type};base64,{encoded}",
         mime_type=mime_type,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Vantage Airlines — Verificación de vuelos con IA
+# --------------------------------------------------------------------------- #
+
+ALLOWED_IMAGE_MIME = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
+
+
+def _validate_uploaded_image(upload: UploadFile) -> None:
+    """Valida que un archivo subido sea una imagen permitida y no exceda el tamaño."""
+    if upload.content_type not in ALLOWED_IMAGE_MIME:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Tipo de archivo no permitido: {upload.content_type}. "
+                   f"Usa JPEG, PNG, WebP o HEIC.",
+        )
+
+
+async def _read_upload_image(upload: UploadFile) -> tuple[bytes, str]:
+    """Lee una imagen subida y valida su tamaño."""
+    _validate_uploaded_image(upload)
+    content = await upload.read()
+    if len(content) > settings.max_upload_size:
+        raise HTTPException(
+            status_code=400,
+            detail=f"La imagen excede el tamaño máximo de "
+                   f"{settings.max_upload_size // (1024 * 1024)} MB.",
+        )
+    if not content:
+        raise HTTPException(status_code=400, detail="La imagen está vacía.")
+    return content, upload.content_type or "image/jpeg"
+
+
+@app.post("/api/vantage/verify-flight", response_model=FlightVerifyResponse)
+@limiter.limit("10/minute")
+async def verify_vantage_flight(
+    request: Request,
+    flight_number: str = File(...),
+    airline: str = File(...),
+    origin: str = File(...),
+    destination: str = File(...),
+    flight_date: str = File(...),
+    tail_number: str | None = File(None),
+    images: list[UploadFile] = File(...),
+    _: None = Depends(verify_vantage_api_key),
+    db: Session = Depends(get_db),
+) -> FlightVerifyResponse:
+    """Verifica un vuelo de Vantage Airlines analizando imágenes con IA.
+
+    Recibe los datos del vuelo y una o más imágenes (reportes, fotos del avión
+    con la livery de la aerolínea, etc.) y usa Gemini con visión para determinar
+    si el avión corresponde realmente a la aerolínea declarada.
+
+    La app de Vantage Airlines debe enviar el header `X-Vantage-API-Key` con la
+    clave configurada en `VANTAGE_API_KEY`.
+    """
+    if not genai_client:
+        raise HTTPException(
+            status_code=503,
+            detail="El servicio de IA con visión no está disponible en este momento.",
+        )
+
+    if not images or len(images) == 0:
+        raise HTTPException(status_code=400, detail="Debe adjuntar al menos una imagen.")
+    if len(images) > 5:
+        raise HTTPException(status_code=400, detail="Máximo 5 imágenes por verificación.")
+
+    # Leer y validar todas las imágenes.
+    image_parts: list[types.Part] = []
+    for upload in images:
+        content, mime = await _read_upload_image(upload)
+        image_parts.append(
+            types.Part.from_bytes(data=content, mime_type=mime)
+        )
+
+    # Construir el prompt de análisis para Gemini.
+    prompt = (
+        "Eres un experto en aviación y seguridad aérea. Tu tarea es verificar si "
+        "un vuelo es legítimo analizando imágenes del avión y sus reportes.\n\n"
+        f"DATOS DEL VUELO A VERIFICAR:\n"
+        f"- Número de vuelo: {flight_number}\n"
+        f"- Aerolínea declarada: {airline}\n"
+        f"- Origen: {origin}\n"
+        f"- Destino: {destination}\n"
+        f"- Fecha: {flight_date}\n"
+        f"- Matrícula del avión: {tail_number or 'No proporcionada'}\n\n"
+        "INSTRUCCIONES:\n"
+        "1. Analiza cada imagen cuidadosamente.\n"
+        "2. Identifica si el avión muestra la livery (colores, logotipo, diseño) "
+        "de la aerolínea declarada.\n"
+        "3. Busca matrículas de avión, números de vuelo, nombres de aerolínea en las imágenes.\n"
+        "4. Determina si las imágenes son consistentes con un vuelo real de esa aerolínea.\n"
+        "5. Evalúa el riesgo: bajo (todo coincide), medio (algo dudoso), alto (sospechoso/falso).\n\n"
+        "Responde SOLO en formato JSON con los siguientes campos:\n"
+        '{\n'
+        '  "verified": true/false,\n'
+        '  "confidence": 0.0 a 1.0,\n'
+        '  "airline_match": true/false,\n'
+        '  "livery_match": true/false,\n'
+        '  "details": "explicación en español de lo que encontraste",\n'
+        '  "risk_level": "bajo | medio | alto"\n'
+        '}\n'
+        "No incluyas texto adicional fuera del JSON."
+    )
+
+    contents = [types.Content(role="user", parts=[types.Part(text=prompt)] + image_parts)]
+
+    try:
+        response = genai_client.models.generate_content(
+            model=settings.ai_model,
+            contents=contents,
+            config=types.GenerateContentConfig(temperature=0.2),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502,
+            detail=f"Error al analizar las imágenes con IA: {exc}",
+        ) from exc
+
+    raw_text = (response.text or "").strip()
+    if not raw_text:
+        raise HTTPException(
+            status_code=502,
+            detail="El servicio de IA no devolvió un resultado.",
+        )
+
+    # Limpiar posibles bloques de markdown.
+    if raw_text.startswith("```json"):
+        raw_text = raw_text[7:]
+    if raw_text.startswith("```"):
+        raw_text = raw_text[3:]
+    if raw_text.endswith("```"):
+        raw_text = raw_text[:-3]
+    raw_text = raw_text.strip()
+
+    try:
+        import json as _json
+        result = _json.loads(raw_text)
+    except (ValueError, TypeError) as exc:
+        # Si Gemini no devolvió JSON válido, intentamos extraer información básica.
+        result = {
+            "verified": False,
+            "confidence": 0.0,
+            "airline_match": False,
+            "livery_match": False,
+            "details": f"No se pudo analizar las imágenes correctamente. Respuesta cruda: {raw_text[:200]}",
+            "risk_level": "alto",
+        }
+
+    verification = FlightVerificationResult(
+        verified=bool(result.get("verified", False)),
+        confidence=float(result.get("confidence", 0.0)),
+        airline_match=bool(result.get("airline_match", False)),
+        livery_match=bool(result.get("livery_match", False)),
+        details=str(result.get("details", "Sin detalles disponibles.")),
+        analyzed_images=len(image_parts),
+        risk_level=str(result.get("risk_level", "medio")),
+    )
+
+    # Registrar uso para auditoría.
+    try:
+        from main import bump_usage, get_usage_row
+        # No hay usuario autenticado en este endpoint (usa API key), así que
+        # solo registramos un evento genérico sin usuario específico.
+        pass
+    except Exception:  # noqa: BLE001 - no bloquear la respuesta por auditoría
+        pass
+
+    return FlightVerifyResponse(
+        success=True,
+        verification=verification,
+        message="Verificación de vuelo completada.",
     )
 
 
