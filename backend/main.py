@@ -1403,6 +1403,17 @@ class VantageQueryRequest(BaseModel):
     destination: str | None = Field(None, max_length=5)
     flight_date: str | None = Field(None, max_length=20)
     tail_number: str | None = Field(None, max_length=20)
+    declared_flight_time: str | None = Field(None, max_length=20, description="Tiempo de vuelo declarado (ej. 5h 30m)")
+    declared_distance: str | None = Field(None, max_length=20, description="Distancia declarada (ej. 8500 km)")
+    declared_aircraft: str | None = Field(None, max_length=50, description="Modelo de avión declarado")
+
+
+class VantageValidationError(BaseModel):
+    """Error de validación automática de Vantage Airlines."""
+    field: str
+    declared: str
+    detected: str | None
+    message: str
 
 
 class VantageQueryResult(BaseModel):
@@ -1414,6 +1425,8 @@ class VantageQueryResult(BaseModel):
     details: str
     risk_level: str = Field(..., description="bajo | medio | alto")
     analyzed_images: int
+    auto_rejected: bool = Field(False, description="Rechazado automáticamente por validación de datos")
+    validation_errors: list[VantageValidationError] = Field(default_factory=list)
 
 
 class VantageQueryResponse(BaseModel):
@@ -3128,10 +3141,14 @@ def _build_vantage_prompt(
     destination: str | None,
     flight_date: str | None,
     tail_number: str | None,
+    declared_flight_time: str | None = None,
+    declared_distance: str | None = None,
+    declared_aircraft: str | None = None,
 ) -> str:
     """Construye el prompt para la IA según el tipo de acción."""
     datos_vuelo = ""
-    if any([flight_number, airline, origin, destination, flight_date, tail_number]):
+    if any([flight_number, airline, origin, destination, flight_date, tail_number,
+            declared_flight_time, declared_distance, declared_aircraft]):
         datos_vuelo = (
             "\nDATOS DEL VUELO PROPORCIONADOS:\n"
             + (f"- Número de vuelo: {flight_number}\n" if flight_number else "")
@@ -3140,6 +3157,9 @@ def _build_vantage_prompt(
             + (f"- Destino: {destination}\n" if destination else "")
             + (f"- Fecha: {flight_date}\n" if flight_date else "")
             + (f"- Matrícula: {tail_number}\n" if tail_number else "")
+            + (f"- Tiempo de vuelo declarado: {declared_flight_time}\n" if declared_flight_time else "")
+            + (f"- Distancia declarada: {declared_distance}\n" if declared_distance else "")
+            + (f"- Aeronave declarada: {declared_aircraft}\n" if declared_aircraft else "")
         )
 
     instrucciones_accion = {
@@ -3203,6 +3223,9 @@ async def vantage_query(
     destination: str | None = File(None),
     flight_date: str | None = File(None),
     tail_number: str | None = File(None),
+    declared_flight_time: str | None = File(None),
+    declared_distance: str | None = File(None),
+    declared_aircraft: str | None = File(None),
     images: list[UploadFile] | None = File(None),
     _: None = Depends(verify_vantage_api_key),
     db: Session = Depends(get_db),
@@ -3210,7 +3233,7 @@ async def vantage_query(
     """API general de Vantage Airlines para consultas sobre vuelos y aerolíneas.
 
     Soporta múltiples acciones:
-    - verify_flight: Verifica si un vuelo es legítimo.
+    - verify_flight: Verifica si un vuelo es legítimo (con validaciones automáticas).
     - identify_airline: Identifica aerolínea por livery/logo.
     - analyze_report: Analiza un reporte de vuelo.
     - verify_document: Verifica autenticidad de documentos.
@@ -3231,6 +3254,76 @@ async def vantage_query(
                    "Defina HUGGINGFACE_API_KEY o OPENROUTER_API_KEY en el backend.",
         )
 
+    # ------------------------------------------------------------------ #
+    # 1. VALIDACIONES AUTOMÁTICAS DE LÓGICA DE NEGOCIO (antes de la IA)  #
+    # ------------------------------------------------------------------ #
+    validation_errors: list[VantageValidationError] = []
+    auto_reject = False
+
+    def add_error(field: str, declared: str, detected: str | None, message: str) -> None:
+        nonlocal auto_reject
+        validation_errors.append(VantageValidationError(
+            field=field,
+            declared=declared,
+            detected=detected,
+            message=message,
+        ))
+        auto_reject = True
+
+    # Validar que origen y destino no sean iguales
+    if origin and destination and origin.strip().upper() == destination.strip().upper():
+        add_error(
+            "origin_destination",
+            f"{origin} → {destination}",
+            None,
+            "El aeropuerto de origen y destino son iguales. Un vuelo no puede tener el mismo origen y destino.",
+        )
+
+    # Validar formato de códigos IATA (2-3 letras mayúsculas)
+    import re as _re
+    iata_re = _re.compile(r"^[A-Z]{2,3}$")
+    if origin and not iata_re.match(origin.strip().upper()):
+        add_error(
+            "origin",
+            origin,
+            None,
+            f"Código IATA de origen inválido: '{origin}'. Debe ser 2 o 3 letras mayúsculas (ej. EZE, MAD).",
+        )
+    if destination and not iata_re.match(destination.strip().upper()):
+        add_error(
+            "destination",
+            destination,
+            None,
+            f"Código IATA de destino inválido: '{destination}'. Debe ser 2 o 3 letras mayúsculas (ej. EZE, MAD).",
+        )
+
+    # Validar tiempo de vuelo declarado (formato y rango razonable)
+    declared_hours = None
+    if declared_flight_time:
+        time_match = _re.match(
+            r"^(\d+)\s*(?:h|hr|hrs|hours?)?\s*(?:(\d+)\s*(?:m|min|mins|minutes?)?)?$",
+            declared_flight_time.strip(),
+            _re.IGNORECASE,
+        )
+        if time_match:
+            declared_hours = int(time_match.group(1)) + int(time_match.group(2) or 0) / 60.0
+            if declared_hours < 0.1 or declared_hours > 24:
+                add_error(
+                    "declared_flight_time",
+                    declared_flight_time,
+                    None,
+                    f"Tiempo de vuelo declarado fuera de rango razonable: {declared_flight_time}. "
+                    f"Debe estar entre 6 minutos y 24 horas.",
+                )
+        else:
+            add_error(
+                "declared_flight_time",
+                declared_flight_time,
+                None,
+                f"Formato de tiempo de vuelo inválido: '{declared_flight_time}'. "
+                f"Use formato como '5h 30m' o '5h'.",
+            )
+
     # Leer y validar imágenes si las hay.
     image_contents: list[tuple[bytes, str]] = []
     if images:
@@ -3240,10 +3333,35 @@ async def vantage_query(
             content, mime = await _read_upload_image(upload)
             image_contents.append((content, mime))
 
+    # Si ya hay errores de validación crítica, rechazar sin consultar a la IA.
+    if auto_reject:
+        return VantageQueryResponse(
+            success=False,
+            result=VantageQueryResult(
+                action=action,
+                success=False,
+                confidence=0.0,
+                answer="Vuelo rechazado automáticamente por inconsistencias en los datos del formulario.",
+                details=(
+                    "Se detectaron errores en los datos proporcionados. "
+                    "Revise los campos marcados antes de continuar."
+                ),
+                risk_level="alto",
+                analyzed_images=len(image_contents),
+                auto_rejected=True,
+                validation_errors=validation_errors,
+            ),
+            message="Rechazado por Core Model V1: datos inconsistentes.",
+        )
+
+    # ------------------------------------------------------------------ #
+    # 2. ANÁLISIS CON IA (Hugging Face o OpenRouter)                     #
+    # ------------------------------------------------------------------ #
     # Construir el prompt según la acción.
     prompt = _build_vantage_prompt(
         action, query, flight_number, airline, origin,
         destination, flight_date, tail_number,
+        declared_flight_time, declared_distance, declared_aircraft,
     )
 
     # Intentar con proveedor gratuito (Hugging Face primero, luego OpenRouter).
@@ -3285,29 +3403,121 @@ async def vantage_query(
 
     try:
         import json as _json
-        result = _json.loads(raw_text)
+        ia_result = _json.loads(raw_text)
     except (ValueError, TypeError):
-        result = {
+        ia_result = {
             "answer": f"No se pudo procesar la respuesta del modelo. Respuesta cruda: {raw_text[:200]}",
             "confidence": 0.0,
             "details": "Error de parseo del resultado de IA.",
             "risk_level": "alto",
         }
 
+    # ------------------------------------------------------------------ #
+    # 3. VALIDACIONES CRUZADAS: DATOS DEL FORMULARIO vs IMÁGENES (IA)   #
+    # ------------------------------------------------------------------ #
+    detected_airline = str(ia_result.get("airline_detected", "") or "")
+    detected_origin = str(ia_result.get("origin_detected", "") or "")
+    detected_destination = str(ia_result.get("destination_detected", "") or "")
+    detected_flight_time = str(ia_result.get("flight_time_detected", "") or "")
+    detected_tail = str(ia_result.get("tail_number_detected", "") or "")
+
+    # Validar aerolínea declarada vs detectada en imágenes
+    if airline and detected_airline and action == "verify_flight":
+        if airline.strip().lower() not in detected_airline.lower() and detected_airline.lower() not in airline.strip().lower():
+            add_error(
+                "airline",
+                airline,
+                detected_airline,
+                f"La aerolínea declarada '{airline}' no coincide con lo detectado en las imágenes: '{detected_airline}'.",
+            )
+
+    # Validar origen declarado vs detectado en imágenes
+    if origin and detected_origin and action == "verify_flight":
+        if origin.strip().upper() not in detected_origin.upper() and detected_origin.upper() not in origin.strip().upper():
+            add_error(
+                "origin",
+                origin,
+                detected_origin,
+                f"El origen declarado '{origin}' no coincide con lo detectado en las imágenes: '{detected_origin}'.",
+            )
+
+    # Validar destino declarado vs detectado en imágenes
+    if destination and detected_destination and action == "verify_flight":
+        if destination.strip().upper() not in detected_destination.upper() and detected_destination.upper() not in destination.strip().upper():
+            add_error(
+                "destination",
+                destination,
+                detected_destination,
+                f"El destino declarado '{destination}' no coincide con lo detectado en las imágenes: '{detected_destination}'.",
+            )
+
+    # Validar tiempo de vuelo declarado vs detectado en imágenes
+    if declared_hours is not None and detected_flight_time and action == "verify_flight":
+        detected_hours_match = _re.match(
+            r"^(\d+)\s*(?:h|hr|hrs|hours?)?\s*(?:(\d+)\s*(?:m|min|mins|minutes?)?)?$",
+            detected_flight_time.strip(),
+            _re.IGNORECASE,
+        )
+        if detected_hours_match:
+            detected_hours = int(detected_hours_match.group(1)) + int(detected_hours_match.group(2) or 0) / 60.0
+            diff = abs(declared_hours - detected_hours)
+            if diff > 1.0:  # más de 1 hora de diferencia
+                add_error(
+                    "declared_flight_time",
+                    declared_flight_time,
+                    detected_flight_time,
+                    f"El tiempo de vuelo declarado ({declared_flight_time}) difiere más de 1 hora "
+                    f"del tiempo detectado en las imágenes ({detected_flight_time}). Diferencia: {diff:.1f} h.",
+                )
+
+    # Validar matrícula declarada vs detectada
+    if tail_number and detected_tail and action == "verify_flight":
+        if tail_number.strip().upper() != detected_tail.strip().upper():
+            add_error(
+                "tail_number",
+                tail_number,
+                detected_tail,
+                f"La matrícula declarada '{tail_number}' no coincide con la detectada en las imágenes: '{detected_tail}'.",
+            )
+
+    # ------------------------------------------------------------------ #
+    # 4. RESULTADO FINAL                                                 #
+    # ------------------------------------------------------------------ #
+    if auto_reject:
+        final_confidence = 0.0
+        final_risk = "alto"
+        final_answer = (
+            "Vuelo rechazado automáticamente. Se detectaron inconsistencias entre "
+            "los datos del formulario y la información verificada en las imágenes."
+        )
+        final_details = (
+            f"Análisis de IA ({provider_used}): {ia_result.get('details', '')}\n\n"
+            "Errores de validación:\n"
+            + "\n".join(f"• {e.message}" for e in validation_errors)
+        )
+    else:
+        final_confidence = float(ia_result.get("confidence", 0.0))
+        final_risk = str(ia_result.get("risk_level", "medio"))
+        final_answer = str(ia_result.get("answer", "Sin respuesta disponible."))
+        final_details = str(ia_result.get("details", ""))
+
     verification_result = VantageQueryResult(
         action=action,
-        success=True,
-        confidence=float(result.get("confidence", 0.0)),
-        answer=str(result.get("answer", "Sin respuesta disponible.")),
-        details=str(result.get("details", "")),
-        risk_level=str(result.get("risk_level", "medio")),
+        success=not auto_reject,
+        confidence=final_confidence,
+        answer=final_answer,
+        details=final_details,
+        risk_level=final_risk,
         analyzed_images=len(image_contents),
+        auto_rejected=auto_reject,
+        validation_errors=validation_errors,
     )
 
     return VantageQueryResponse(
-        success=True,
+        success=not auto_reject,
         result=verification_result,
-        message="Consulta procesada con Core Model V1.",
+        message="Consulta procesada con Core Model V1."
+        + (" — Vuelo rechazado por inconsistencias." if auto_reject else ""),
     )
 
 
