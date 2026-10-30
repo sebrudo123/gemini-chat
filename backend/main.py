@@ -459,6 +459,58 @@ app.add_middleware(
 
 
 # --------------------------------------------------------------------------- #
+# Headers de seguridad (item: endurecimiento de la API)
+# --------------------------------------------------------------------------- #
+
+SECURITY_HEADERS = {
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-XSS-Protection": "1; mode=block",
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self' https://discord.com https://discordapp.com; "
+        "frame-ancestors 'none';"
+    ),
+    "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
+}
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """Añade headers de seguridad a todas las respuestas de la API."""
+    response = await call_next(request)
+    for name, value in SECURITY_HEADERS.items():
+        response.headers[name] = value
+    # Nunca exponer el servidor ni la tecnología en uso.
+    if "server" in response.headers:
+        del response.headers["server"]
+    return response
+
+
+# --------------------------------------------------------------------------- #
+# Handler global de errores: nunca expone stack traces ni detalles internos
+# --------------------------------------------------------------------------- #
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Convierte cualquier excepción no capturada en un error 500 genérico.
+
+    En producción no se revela el tipo de excepción ni el traceback para
+    evitar filtrar información del sistema a posibles atacantes.
+    """
+    LOG.exception("Excepción no capturada en %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Error interno del servidor. Inténtalo de nuevo más tarde."},
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Métricas Prometheus (opcionales)
 # --------------------------------------------------------------------------- #
 
@@ -1596,16 +1648,26 @@ async def _exchange_code(token_url: str, data: dict[str, Any]) -> str:
         )
     if response.status_code != 200:
         reason = ""
+        provider_detail = ""
+        try:
+            provider_detail = str(response.json())
+        except (ValueError, TypeError):
+            provider_detail = response.text[:300]
         try:
             reason = str(response.json().get("error") or "")
         except (ValueError, TypeError):
             pass
         logging.getLogger("coreia").error(
-            "Exchange OAuth falló (%s): %s", response.status_code, response.text[:200]
+            "Exchange OAuth falló (%s): %s", response.status_code, provider_detail
         )
         humano = {
-            "invalid_client": "credenciales de la app rechazadas por Discord",
-            "invalid_grant": "el código expiró o ya se usó; acepta de nuevo en Discord",
+            "invalid_client": (
+                "credenciales de la app rechazadas por Discord. "
+                "Revisa DISCORD_CLIENT_ID y DISCORD_CLIENT_SECRET en Render; "
+                "si el secreto se rotó, resétalo en "
+                "https://discord.com/developers/applications y actualízalo aquí."
+            ),
+            "invalid_grant": "el código expiró o ya se usó; acepta de nuevo en Discord.",
             "invalid_request": "solicitud incompleta",
         }.get(reason, reason or f"HTTP {response.status_code}")
         raise HTTPException(
