@@ -1389,34 +1389,36 @@ class ImageResponse(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
-# Vantage Airlines — Verificación de vuelos con IA
+# Vantage Airlines — API general de consulta con IA
 # --------------------------------------------------------------------------- #
 
 
-class FlightVerificationRequest(BaseModel):
-    """Datos de un vuelo para verificar contra imágenes."""
-    flight_number: str = Field(..., min_length=1, max_length=20, description="Número de vuelo (ej. VA123)")
-    airline: str = Field(..., min_length=1, max_length=100, description="Nombre de la aerolínea")
-    origin: str = Field(..., min_length=2, max_length=5, description="Código IATA del aeropuerto de origen")
-    destination: str = Field(..., min_length=2, max_length=5, description="Código IATA del aeropuerto de destino")
-    flight_date: str = Field(..., min_length=1, max_length=20, description="Fecha del vuelo (YYYY-MM-DD)")
-    tail_number: str | None = Field(None, max_length=20, description="Matrícula del avión (opcional)")
+class VantageQueryRequest(BaseModel):
+    """Solicitud general a la API de Vantage Airlines."""
+    action: str = Field(..., description="Tipo de consulta: verify_flight, identify_airline, analyze_report, verify_document, general_query")
+    query: str = Field(..., min_length=1, max_length=3000, description="Texto de la consulta")
+    flight_number: str | None = Field(None, max_length=20)
+    airline: str | None = Field(None, max_length=100)
+    origin: str | None = Field(None, max_length=5)
+    destination: str | None = Field(None, max_length=5)
+    flight_date: str | None = Field(None, max_length=20)
+    tail_number: str | None = Field(None, max_length=20)
 
 
-class FlightVerificationResult(BaseModel):
-    """Resultado de la verificación de vuelo."""
-    verified: bool
-    confidence: float = Field(..., ge=0.0, le=1.0, description="Nivel de confianza de 0 a 1")
-    airline_match: bool
-    livery_match: bool
-    details: str
-    analyzed_images: int
-    risk_level: str = Field(..., description="bajo | medio | alto")
-
-
-class FlightVerifyResponse(BaseModel):
+class VantageQueryResult(BaseModel):
+    """Resultado de una consulta de Vantage Airlines."""
+    action: str
     success: bool
-    verification: FlightVerificationResult
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    answer: str
+    details: str
+    risk_level: str = Field(..., description="bajo | medio | alto")
+    analyzed_images: int
+
+
+class VantageQueryResponse(BaseModel):
+    success: bool
+    result: VantageQueryResult
     message: str
 
 
@@ -2966,10 +2968,20 @@ def generate_image(
 
 
 # --------------------------------------------------------------------------- #
-# Vantage Airlines — Verificación de vuelos con IA
+# Vantage Airlines — API general de consulta con IA
 # --------------------------------------------------------------------------- #
 
 ALLOWED_IMAGE_MIME = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
+
+
+# Acciones soportadas por la API de Vantage Airlines.
+VANTAGE_ACTIONS = {
+    "verify_flight": "Verifica si un vuelo es legítimo analizando imágenes y datos.",
+    "identify_airline": "Identifica qué aerolínea pertenece a una livery o logo en una imagen.",
+    "analyze_report": "Analiza un reporte de vuelo o documento aeronáutico.",
+    "verify_document": "Verifica la autenticidad de un documento de vuelo o tarjeta de embarque.",
+    "general_query": "Cualquier consulta sobre vuelos, aerolíneas o aviación.",
+}
 
 
 def _validate_uploaded_image(upload: UploadFile) -> None:
@@ -3107,30 +3119,111 @@ async def _analyze_with_openrouter_vision(
     return "\n".join(r for r in combined_results if r).strip()
 
 
-@app.post("/api/vantage/verify-flight", response_model=FlightVerifyResponse)
+def _build_vantage_prompt(
+    action: str,
+    query: str,
+    flight_number: str | None,
+    airline: str | None,
+    origin: str | None,
+    destination: str | None,
+    flight_date: str | None,
+    tail_number: str | None,
+) -> str:
+    """Construye el prompt para la IA según el tipo de acción."""
+    datos_vuelo = ""
+    if any([flight_number, airline, origin, destination, flight_date, tail_number]):
+        datos_vuelo = (
+            "\nDATOS DEL VUELO PROPORCIONADOS:\n"
+            + (f"- Número de vuelo: {flight_number}\n" if flight_number else "")
+            + (f"- Aerolínea: {airline}\n" if airline else "")
+            + (f"- Origen: {origin}\n" if origin else "")
+            + (f"- Destino: {destination}\n" if destination else "")
+            + (f"- Fecha: {flight_date}\n" if flight_date else "")
+            + (f"- Matrícula: {tail_number}\n" if tail_number else "")
+        )
+
+    instrucciones_accion = {
+        "verify_flight": (
+            "VERIFICACIÓN DE VUELO: Determina si el vuelo descrito es legítimo. "
+            "Analiza las imágenes y los datos del vuelo para detectar inconsistencias, "
+            "falsificaciones o señales de fraude. Evalúa el riesgo: bajo, medio o alto."
+        ),
+        "identify_airline": (
+            "IDENTIFICACIÓN DE AEROLÍNEA: Analiza las imágenes (livery, logo, colores del avión) "
+            "y determina a qué aerolínea pertenece. Si no se puede identificar con certeza, dilo."
+        ),
+        "analyze_report": (
+            "ANÁLISIS DE REPORTE: Analiza el reporte de vuelo o documento aeronáutico proporcionado. "
+            "Extrae información relevante, identifica anomalías y resume los hallazgos."
+        ),
+        "verify_document": (
+            "VERIFICACIÓN DE DOCUMENTO: Examina el documento (tarjeta de embarque, factura, "
+            "certificado, etc.) y determina si parece auténtico o si hay señales de falsificación."
+        ),
+    }
+    instruccion = instrucciones_accion.get(
+        action,
+        "CONSULTA GENERAL: Responde la pregunta sobre vuelos, aerolíneas o aviación "
+        "usando la información disponible en las imágenes y el texto proporcionado.",
+    )
+
+    return (
+        "Eres Core Model V1, un experto en aviación y seguridad aérea de Vantage Airlines. "
+        "Tu tarea es ayudar a verificar vuelos, aerolíneas, reportes y documentos aeronáuticos.\n\n"
+        f"CONSULTA DEL USUARIO:\n{query}"
+        f"{datos_vuelo}\n\n"
+        f"TAREA:\n{instruccion}\n\n"
+        "INSTRUCCIONES GENERALES:\n"
+        "1. Analiza cada imagen cuidadosamente.\n"
+        "2. Busca matrículas, números de vuelo, nombres de aerolínea, fechas y códigos IATA.\n"
+        "3. Identifica liveries (colores, logotipos, diseño) de aerolíneas en las imágenes.\n"
+        "4. Responde en español, claro y directo.\n"
+        "5. No inventes datos; si algo no está claro, indica que no se puede determinar.\n"
+        "6. Evalúa el nivel de riesgo: bajo (todo claro), medio (alguna duda), alto (sospechoso).\n\n"
+        "Responde SOLO en formato JSON con estos campos:\n"
+        '{\n'
+        '  "answer": "respuesta principal en español",\n'
+        '  "confidence": 0.0 a 1.0,\n'
+        '  "details": "detalles adicionales o explicación",\n'
+        '  "risk_level": "bajo | medio | alto"\n'
+        '}\n'
+        "No incluyas texto adicional fuera del JSON."
+    )
+
+
+@app.post("/api/vantage/query", response_model=VantageQueryResponse)
 @limiter.limit("10/minute")
-async def verify_vantage_flight(
+async def vantage_query(
     request: Request,
-    flight_number: str = File(...),
-    airline: str = File(...),
-    origin: str = File(...),
-    destination: str = File(...),
-    flight_date: str = File(...),
+    action: str = File(...),
+    query: str = File(...),
+    flight_number: str | None = File(None),
+    airline: str | None = File(None),
+    origin: str | None = File(None),
+    destination: str | None = File(None),
+    flight_date: str | None = File(None),
     tail_number: str | None = File(None),
-    images: list[UploadFile] = File(...),
+    images: list[UploadFile] | None = File(None),
     _: None = Depends(verify_vantage_api_key),
     db: Session = Depends(get_db),
-) -> FlightVerifyResponse:
-    """Verifica un vuelo de Vantage Airlines analizando imágenes con IA gratuita.
+) -> VantageQueryResponse:
+    """API general de Vantage Airlines para consultas sobre vuelos y aerolíneas.
 
-    Recibe los datos del vuelo y una o más imágenes (reportes, fotos del avión
-    con la livery de la aerolínea, etc.) y usa un modelo de visión gratuito
-    (Hugging Face Inference API o OpenRouter) para determinar si el avión
-    corresponde realmente a la aerolínea declarada.
+    Soporta múltiples acciones:
+    - verify_flight: Verifica si un vuelo es legítimo.
+    - identify_airline: Identifica aerolínea por livery/logo.
+    - analyze_report: Analiza un reporte de vuelo.
+    - verify_document: Verifica autenticidad de documentos.
+    - general_query: Cualquier consulta sobre aviación.
 
-    La app de Vantage Airlines debe enviar el header `X-Vantage-API-Key` con la
-    clave configurada en `VANTAGE_API_KEY`.
+    La app de Vantage Airlines debe enviar el header `X-Vantage-API-Key`.
     """
+    if action not in VANTAGE_ACTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Acción no válida. Acciones permitidas: {', '.join(VANTAGE_ACTIONS)}.",
+        )
+
     if not settings.huggingface_api_key and not settings.openrouter_api_key:
         raise HTTPException(
             status_code=503,
@@ -3138,45 +3231,19 @@ async def verify_vantage_flight(
                    "Defina HUGGINGFACE_API_KEY o OPENROUTER_API_KEY en el backend.",
         )
 
-    if not images or len(images) == 0:
-        raise HTTPException(status_code=400, detail="Debe adjuntar al menos una imagen.")
-    if len(images) > 5:
-        raise HTTPException(status_code=400, detail="Máximo 5 imágenes por verificación.")
-
-    # Leer y validar todas las imágenes.
+    # Leer y validar imágenes si las hay.
     image_contents: list[tuple[bytes, str]] = []
-    for upload in images:
-        content, mime = await _read_upload_image(upload)
-        image_contents.append((content, mime))
+    if images:
+        if len(images) > 5:
+            raise HTTPException(status_code=400, detail="Máximo 5 imágenes por consulta.")
+        for upload in images:
+            content, mime = await _read_upload_image(upload)
+            image_contents.append((content, mime))
 
-    # Construir el prompt de análisis (español).
-    prompt = (
-        "Eres un experto en aviación y seguridad aérea. Tu tarea es verificar si "
-        "un vuelo es legítimo analizando imágenes del avión y sus reportes.\n\n"
-        f"DATOS DEL VUELO A VERIFICAR:\n"
-        f"- Número de vuelo: {flight_number}\n"
-        f"- Aerolínea declarada: {airline}\n"
-        f"- Origen: {origin}\n"
-        f"- Destino: {destination}\n"
-        f"- Fecha: {flight_date}\n"
-        f"- Matrícula del avión: {tail_number or 'No proporcionada'}\n\n"
-        "INSTRUCCIONES:\n"
-        "1. Analiza cada imagen cuidadosamente.\n"
-        "2. Identifica si el avión muestra la livery (colores, logotipo, diseño) "
-        "de la aerolínea declarada.\n"
-        "3. Busca matrículas de avión, números de vuelo, nombres de aerolínea en las imágenes.\n"
-        "4. Determina si las imágenes son consistentes con un vuelo real de esa aerolínea.\n"
-        "5. Evalúa el riesgo: bajo (todo coincide), medio (algo dudoso), alto (sospechoso/falso).\n\n"
-        "Responde SOLO en formato JSON con los siguientes campos:\n"
-        '{\n'
-        '  "verified": true/false,\n'
-        '  "confidence": 0.0 a 1.0,\n'
-        '  "airline_match": true/false,\n'
-        '  "livery_match": true/false,\n'
-        '  "details": "explicación en español de lo que encontraste",\n'
-        '  "risk_level": "bajo | medio | alto"\n'
-        '}\n'
-        "No incluyas texto adicional fuera del JSON."
+    # Construir el prompt según la acción.
+    prompt = _build_vantage_prompt(
+        action, query, flight_number, airline, origin,
+        destination, flight_date, tail_number,
     )
 
     # Intentar con proveedor gratuito (Hugging Face primero, luego OpenRouter).
@@ -3185,30 +3252,26 @@ async def verify_vantage_flight(
 
     if settings.huggingface_api_key:
         try:
-            raw_text = await _analyze_with_huggingface_vision(
-                prompt, image_contents
-            )
+            raw_text = await _analyze_with_huggingface_vision(prompt, image_contents)
             provider_used = "huggingface"
         except Exception as exc:  # noqa: BLE001 - intentar siguiente proveedor
-            logging.getLogger("coreia").warning(
+            logging.getLogger("coreia.vantage").warning(
                 "Hugging Face falló, probando OpenRouter: %s", exc
             )
 
     if not raw_text and settings.openrouter_api_key:
         try:
-            raw_text = await _analyze_with_openrouter_vision(
-                prompt, image_contents
-            )
+            raw_text = await _analyze_with_openrouter_vision(prompt, image_contents)
             provider_used = "openrouter"
         except Exception as exc:  # noqa: BLE001
-            logging.getLogger("coreia").warning(
+            logging.getLogger("coreia.vantage").warning(
                 "OpenRouter falló: %s", exc
             )
 
     if not raw_text:
         raise HTTPException(
             status_code=502,
-            detail="No se pudo analizar las imágenes con ningún proveedor gratuito.",
+            detail="No se pudo procesar la consulta con ningún proveedor gratuito.",
         )
 
     # Limpiar posibles bloques de markdown.
@@ -3223,34 +3286,28 @@ async def verify_vantage_flight(
     try:
         import json as _json
         result = _json.loads(raw_text)
-    except (ValueError, TypeError) as exc:
-        # Si el proveedor no devolvió JSON válido, intentar extraer información básica.
+    except (ValueError, TypeError):
         result = {
-            "verified": False,
+            "answer": f"No se pudo procesar la respuesta del modelo. Respuesta cruda: {raw_text[:200]}",
             "confidence": 0.0,
-            "airline_match": False,
-            "livery_match": False,
-            "details": (
-                f"No se pudo analizar las imágenes correctamente con {provider_used}. "
-                f"Respuesta cruda: {raw_text[:200]}"
-            ),
+            "details": "Error de parseo del resultado de IA.",
             "risk_level": "alto",
         }
 
-    verification = FlightVerificationResult(
-        verified=bool(result.get("verified", False)),
+    verification_result = VantageQueryResult(
+        action=action,
+        success=True,
         confidence=float(result.get("confidence", 0.0)),
-        airline_match=bool(result.get("airline_match", False)),
-        livery_match=bool(result.get("livery_match", False)),
-        details=str(result.get("details", "Sin detalles disponibles.")),
-        analyzed_images=len(image_contents),
+        answer=str(result.get("answer", "Sin respuesta disponible.")),
+        details=str(result.get("details", "")),
         risk_level=str(result.get("risk_level", "medio")),
+        analyzed_images=len(image_contents),
     )
 
-    return FlightVerifyResponse(
+    return VantageQueryResponse(
         success=True,
-        verification=verification,
-        message="Verificación de vuelo completada con Core Model V1.",
+        result=verification_result,
+        message="Consulta procesada con Core Model V1.",
     )
 
 
