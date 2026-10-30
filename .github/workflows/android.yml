@@ -162,9 +162,10 @@ jobs:
           VERSION_CODE: ${{ github.run_number }}
           VERSION_NAME: 1.0.${{ github.run_number }}
           CHANGELOG: ${{ env.CHANGELOG }}
+        continue-on-error: true
         run: |
           python3 - <<'PY'
-          import base64, json, os, urllib.request
+          import base64, json, os, time, urllib.request, urllib.error
 
           token = os.environ.get("UPLOAD_TOKEN", "").strip()
           if not token:
@@ -184,9 +185,42 @@ jobs:
               "apk_base64": apk_b64,
               "app": "ia",
           }).encode()
-          req = urllib.request.Request(
-              "https://gemini-chat-backend-vyrz.onrender.com/api/bot/update/upload",
-              data=body, method="POST",
+
+          last_err = None
+          for attempt in range(4):
+              try:
+                  req = urllib.request.Request(
+                      "https://coreiabackend.onrender.com/api/bot/update/upload",
+                      data=body, method="POST",
+                      headers={
+                          "Content-Type": "application/json",
+                          "x-upload-token": token,
+                          "User-Agent": "coreia-actions/1.0",
+                      },
+                  )
+                  result = json.load(urllib.request.urlopen(req, timeout=300))
+                  print("Publicado:", result)
+                  raise SystemExit(0)
+              except urllib.error.HTTPError as e:
+                  last_err = e
+                  detalle = e.read().decode("utf-8", "replace")[:200]
+                  if e.code in (502, 503, 504) and attempt < 3:
+                      print(f"Backend respondió {e.code}, reintentando en 10s... ({detalle})")
+                      time.sleep(10)
+                      continue
+                  print(f"Backend respondió {e.code}: {detalle}")
+                  raise SystemExit(1)
+              except Exception as e:
+                  last_err = e
+                  if attempt < 3:
+                      print(f"Error de conexión, reintentando en 10s: {e}")
+                      time.sleep(10)
+                      continue
+                  print(f"Error final: {e}")
+                  raise SystemExit(1)
+          if last_err:
+              raise SystemExit(1)
+          PY
               headers={"Content-Type": "application/json",
                        "x-upload-token": token,
                        "User-Agent": "coreia-actions/1.0"})
