@@ -8,6 +8,9 @@
     "build": "echo 'Static build ready'"
   },
   "devDependencies": {
-    "@netlify/functions": "^6.1.1"
+    "@netlify/functions": "^6.1.1",
+    "@netlify/plugin-emails": "^2.0.1",
+    "netlify-plugin-flutter": "^1.1.0",
+    "strapi-plugin-netlify-deployments": "^2.0.1"
   }
 }
