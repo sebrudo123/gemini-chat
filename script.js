@@ -4,7 +4,10 @@
  * planes, panel de administración y chat.
  */
 
-const BACKEND_URL = "https://gemini-chat-backend-vyrz.onrender.com";
+const BACKEND_URL =
+  window.location.hostname === "localhost" && window.location.port === "5500"
+    ? "https://gemini-chat-backend-vyrz.onrender.com"
+    : "";
 
 const TOKEN_KEY = "coreia_token";
 const THEME_KEY = "coreia_theme";
@@ -4798,6 +4801,17 @@ authFormEl.addEventListener("submit", submitEmailAuth);
 authSwitchBtn.addEventListener("click", () => {
   setAuthMode(authMode === "login" ? "register" : "login");
 });
+
+const authGuestBtn = document.getElementById("auth-guest-btn");
+if (authGuestBtn) {
+  authGuestBtn.addEventListener("click", () => {
+    token = "guest";
+    currentUser = { username: "Invitado", display_name: "Invitado", plan: "free" };
+    localStorage.setItem(TOKEN_KEY, token);
+    renderProfile();
+    hideAuthGate();
+  });
+}
 
 /* ------------------------------------------------------------------ */
 /* Arranque                                                            */

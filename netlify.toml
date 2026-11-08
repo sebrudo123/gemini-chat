@@ -4,6 +4,17 @@
   # Directorio para Netlify Functions (V2 Serverless / CoreAIModule)
   functions = "netlify/functions"
 
+# Redirecciones transparentes de API hacia las funciones serverless de Core AI
+[[redirects]]
+  from = "/api/chat/stream"
+  to = "/.netlify/functions/chat"
+  status = 200
+
+[[redirects]]
+  from = "/api/chat"
+  to = "/.netlify/functions/chat"
+  status = 200
+
 # Reglas de encabezados HTTP y seguridad
 [[headers]]
   for = "/script.js"
