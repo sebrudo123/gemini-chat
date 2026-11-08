@@ -13,7 +13,7 @@ function getCORSHeaders() {
   };
 }
 
-export default async (req) => {
+export default async (req, context) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, {
       status: 204,
