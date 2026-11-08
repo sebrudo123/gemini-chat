@@ -1,10 +1,16 @@
-# Configuración de Despliegue en Netlify para Core IA
+# Configuración Oficial de Despliegue en Netlify para Core AI Studio V2
 [build]
   publish = "."
-  # Directorio para Netlify Functions (V2 Serverless / CoreAIModule)
   functions = "netlify/functions"
+  command = "echo 'Static build ready'"
 
-# Redirecciones transparentes de API hacia las funciones serverless de Core AI
+[build.environment]
+  NODE_VERSION = "20"
+
+[functions]
+  node_bundler = "esbuild"
+
+# Redirecciones transparentes hacia Netlify Functions
 [[redirects]]
   from = "/api/chat/stream"
   to = "/.netlify/functions/chat"
@@ -15,7 +21,7 @@
   to = "/.netlify/functions/chat"
   status = 200
 
-# Reglas de encabezados HTTP y seguridad
+# Encabezados de Seguridad y Caché
 [[headers]]
   for = "/script.js"
   [headers.values]

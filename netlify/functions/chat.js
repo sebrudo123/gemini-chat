@@ -3,7 +3,7 @@
  * Soporta Streaming, Gestión de Sesiones Supabase, Métricas Admin y Groq Engine
  */
 
-import { CoreAIFactory } from '../../lib/core-ai.js';
+import { CoreAIFactory } from './core-ai.js';
 
 function getCORSHeaders() {
   return {
