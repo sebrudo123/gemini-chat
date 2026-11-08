@@ -1,0 +1,116 @@
+name: Deploy to cPanel via SSH
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: cpanel-production-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: SSH Deploy to Production (cPanel)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Execute Remote SSH Commands on cPanel Server
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST || '67.223.118.177' }}
+          username: ${{ secrets.SSH_USERNAME || 'corebyns' }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 21098 }}
+          timeout: 120s
+          script_stop: true
+          script: |
+            set -e
+            echo "=========================================================="
+            echo "🚀 [CI/CD] Iniciando despliegue automatizado en cPanel..."
+            echo "=========================================================="
+
+            # 1. Definir directorio raíz de la aplicación
+            APP_DIR="${{ secrets.CPANEL_APP_DIR || '/home/corebyns/public_html' }}"
+            echo "📁 Directorio objetivo: $APP_DIR"
+
+            # Crear directorio si no existe y navegar
+            mkdir -p "$APP_DIR"
+            cd "$APP_DIR"
+
+            # 2. Sincronización Git de archivos delta
+            if [ -d ".git" ]; then
+              echo "🔄 Sincronizando repositorio con origin/main..."
+              git fetch origin main
+              git reset --hard origin/main
+              git clean -fd -e .env -e venv -e .venv -e "*.db" -e "backend/.env"
+            else
+              echo "📦 Clonando repositorio inicial..."
+              git clone https://github.com/${{ github.repository }}.git .
+            fi
+
+            # 3. Verificación de variables de entorno seguras (.env aislado)
+            if [ -d "backend" ]; then
+              if [ ! -f "backend/.env" ]; then
+                echo "⚠️ Archivo backend/.env no encontrado. Verifique la configuración segura en cPanel."
+                if [ -f "backend/.env.example" ]; then
+                  echo "ℹ️ Generando backend/.env inicial a partir de .env.example..."
+                  cp backend/.env.example backend/.env
+                fi
+              else
+                echo "🔒 Archivo backend/.env detectado y preservado."
+              fi
+            fi
+
+            # 4. Instalación de dependencias de Backend (Python Virtualenv)
+            if [ -d "backend" ] && [ -f "backend/requirements.txt" ]; then
+              echo "🐍 Actualizando dependencias de Python (FastAPI/Backend)..."
+              cd backend
+
+              # Seleccionar o crear entorno virtual aislado
+              if [ ! -d "venv" ]; then
+                echo "⚙️ Creando entorno virtual venv..."
+                python3 -m venv venv || python3.12 -m venv venv || python3.11 -m venv venv
+              fi
+
+              source venv/bin/activate
+              pip install --upgrade pip --quiet
+              pip install --no-cache-dir -r requirements.txt --quiet
+              cd ..
+            fi
+
+            # 5. Instalación de dependencias Node.js (en caso de existir frontend build / módulo TS)
+            if [ -f "package.json" ]; then
+              echo "📦 Instalando dependencias de Node.js..."
+              npm ci --production || npm install --production
+              if npm run | grep -q "build"; then
+                echo "🏗️ Ejecutando build de assets..."
+                npm run build
+              fi
+            fi
+
+            # 6. Reinicio controlado de la aplicación web en cPanel (Passenger / PM2)
+            echo "🔄 Disparando reinicio controlado de la aplicación..."
+            
+            # Reinicio de Phusion Passenger estándar en cPanel (Python/Node)
+            mkdir -p tmp
+            touch tmp/restart.txt
+
+            if [ -d "backend" ]; then
+              mkdir -p backend/tmp
+              touch backend/tmp/restart.txt
+            fi
+
+            # Si el entorno utiliza PM2
+            if command -v pm2 >/dev/null 2>&1; then
+              echo "⚡ Reiniciando procesos PM2..."
+              pm2 reload all 2>/dev/null || true
+            fi
+
+            echo "=========================================================="
+            echo "✅ [CI/CD] Despliegue en cPanel finalizado exitosamente."
+            echo "=========================================================="

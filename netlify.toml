@@ -1,0 +1,23 @@
+# Configuración de Despliegue en Netlify para Core IA
+[build]
+  publish = "."
+  # Directorio para Netlify Functions (V2 Serverless / CoreAIModule)
+  functions = "netlify/functions"
+
+# Reglas de encabezados HTTP y seguridad
+[[headers]]
+  for = "/script.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
