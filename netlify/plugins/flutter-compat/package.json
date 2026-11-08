@@ -1,0 +1,9 @@
+{
+  "name": "core-ai-flutter-build-compat",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Skip an unused site-level Flutter plugin for this static JavaScript app",
+  "type": "commonjs",
+  "main": "index.cjs",
+  "files": ["index.cjs", "manifest.yml", "README.md"]
+}

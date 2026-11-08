@@ -1,0 +1,12 @@
+{
+  "name": "core-ai-strapi-deployments-compat",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Netlify Build adapter for an unused site-level Strapi plugin registration",
+  "type": "commonjs",
+  "main": "index.cjs",
+  "files": ["index.cjs", "manifest.yml", "README.md"],
+  "dependencies": {
+    "strapi-netlify-deployments-upstream": "npm:strapi-plugin-netlify-deployments@2.0.1"
+  }
+}

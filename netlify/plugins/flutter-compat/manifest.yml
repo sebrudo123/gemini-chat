@@ -1,0 +1,5 @@
+name: core-ai-flutter-build-compat
+inputs:
+  - name: channel
+    description: Accepted for compatibility with the unused site-level Flutter registration.
+    default: stable

@@ -6,5 +6,9 @@
   "private": true,
   "scripts": {
     "build": "echo 'Static build ready'"
+  },
+  "dependencies": {
+    "netlify-plugin-flutter": "file:netlify/plugins/flutter-compat",
+    "strapi-plugin-netlify-deployments": "file:netlify/plugins/strapi-deployments-compat"
   }
 }
