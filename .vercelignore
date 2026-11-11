@@ -1,3 +1,9 @@
 backend/
 render.yaml
 README.md
+android/
+androidbot/
+bot/
+*.bak
+*.apk
+test_coreia.db
