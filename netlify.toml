@@ -1,8 +1,8 @@
 # Configuración Oficial de Despliegue en Netlify para Core AI Studio V2
 [build]
-  publish = "."
+  publish = "dist"
   functions = "netlify/functions"
-  command = "echo 'Static build ready'"
+  command = "node build.js"
 
 [build.environment]
   NODE_VERSION = "22"
