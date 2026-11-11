@@ -6,7 +6,7 @@
 (function () {
   'use strict';
 
-  const API_ENDPOINT = '/.netlify/functions/chat';
+  const API_ENDPOINT = '/api/chat';
 
   // Elementos DOM Principales
   const sidebar = document.getElementById('sidebar');
