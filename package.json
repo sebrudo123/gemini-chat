@@ -3,11 +3,5 @@
   "version": "2.0.0",
   "description": "Core AI Studio V2",
   "type": "module",
-  "private": true,
-  "scripts": {
-    "build": "echo 'Static build ready'"
-  },
-  "devDependencies": {
-    "@netlify/functions": "^6.1.1"
-  }
+  "private": true
 }
