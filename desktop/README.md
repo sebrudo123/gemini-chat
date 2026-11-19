@@ -48,10 +48,12 @@ instaladores como **artifacts** del run.
 
 ## Configuración
 
-En **Ajustes** de la app:
+El backend corre en tu equipo (`./scripts/start-backend.sh`). En **Ajustes** de
+la app:
 
-- **Backend:** `https://gemini-chat-backend-vyrz.onrender.com`
-- **Clave del agente:** el valor de `AGENT_API_KEY` del backend.
+- **Backend:** `http://127.0.0.1:8000`
+- **Clave del agente:** la que imprime el script al arrancar (`AGENT_API_KEY`
+  de `.env.local`).
 - **Espacio de trabajo:** carpeta donde el agente puede leer y escribir.
   Por defecto, tu carpeta personal (`HOME` / `USERPROFILE`).
 - **Tema:** oscuro o claro.

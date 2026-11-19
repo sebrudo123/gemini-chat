@@ -162,6 +162,7 @@ jobs:
           VERSION_CODE: ${{ github.run_number }}
           VERSION_NAME: 1.0.${{ github.run_number }}
           CHANGELOG: ${{ env.CHANGELOG }}
+          COREIA_BACKEND_URL: ${{ vars.COREIA_BACKEND_URL }}
         continue-on-error: true
         run: |
           python3 - <<'PY'
@@ -170,6 +171,11 @@ jobs:
           token = os.environ.get("UPLOAD_TOKEN", "").strip()
           if not token:
               print("Sin BACKEND_UPLOAD_TOKEN; la IA queda solo como artifact.")
+              raise SystemExit(0)
+
+          base = os.environ.get("COREIA_BACKEND_URL", "").strip().rstrip("/")
+          if not base:
+              print("Sin COREIA_BACKEND_URL; la IA queda solo como artifact.")
               raise SystemExit(0)
 
           changelog = " ".join(

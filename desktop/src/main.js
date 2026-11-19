@@ -665,7 +665,7 @@ function openSettings(reason = "") {
       <label>Backend</label>
       <input id="cfg-backend" type="url" value="${escapeHtml(
         config.backend
-      )}" placeholder="https://gemini-chat-backend-vyrz.onrender.com" />
+      )}" placeholder="http://127.0.0.1:8000" />
       <span class="note">URL del backend de Core IA (sin barra final).</span>
     </div>
 

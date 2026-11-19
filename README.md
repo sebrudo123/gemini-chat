@@ -531,8 +531,35 @@ CLI / App Tauri ──► POST /api/agent/chat[/stream] ──► Gemini Flash (
 ```
 
 El backend solo valida `X-Agent-API-Key`, añade el prompt del agente y completa
-el turno. Las herramientas se ejecutan **en el equipo del usuario**, nunca en
-Render. La app solo conoce el nombre comercial **Core Model V1**.
+el turno. Las herramientas se ejecutan **en el equipo del usuario**, nunca en el
+servidor. La app solo conoce el nombre comercial **Core Model V1**.
+
+### Backend local (recomendado)
+
+El backend corre en tu equipo con SQLite: sin hosting, sin base de datos
+externa y sin caducidad. Un solo comando:
+
+```bash
+# Linux / macOS
+./scripts/start-backend.sh
+
+# Windows
+scripts\start-backend.bat
+```
+
+La primera vez crea `.env.local` con `SESSION_SECRET` y `AGENT_API_KEY`, instala
+las dependencias en `backend/.venv` e imprime la clave que debes pegar en el CLI
+o en Ajustes de la app. Para usar Gemini, añade tu clave gratuita de
+<a href="https://aistudio.google.com/apikey">Google AI Studio</a> en
+`AI_API_KEY=` dentro de `.env.local`; si la dejas vacía, el agente usa el motor
+abierto con límite de velocidad.
+
+El servidor queda en `http://127.0.0.1:8000` y la base en
+`backend/coreia.db`. Para respaldarla, copia ese archivo.
+
+> También se puede desplegar en cualquier host con Python 3.11+ cambiando
+> `DATABASE_URL` a un Postgres (Neon, Supabase…) y definiendo `AI_API_KEY` y
+> `AGENT_API_KEY` como variables de entorno.
 
 ### Backend
 

@@ -22,11 +22,21 @@ coreia --help
 
 ## Configuración
 
-La clave es la variable `AGENT_API_KEY` del backend (no la clave del proveedor
-de IA). Se guarda en `~/.coreia/config.json` con permisos `600`.
+La clave es la variable `AGENT_API_KEY` que genera `scripts/start-backend.sh`
+(no la clave del proveedor de IA). Se guarda en `~/.coreia/config.json` con
+permisos `600`.
+
+Antes de usar el CLI, arranca el backend en tu equipo:
 
 ```bash
-coreia config --backend https://gemini-chat-backend-vyrz.onrender.com --key TU_CLAVE
+./scripts/start-backend.sh     # Linux/macOS
+scripts\start-backend.bat      # Windows
+```
+
+Copia la clave que imprime y configúrala:
+
+```bash
+coreia config --backend http://127.0.0.1:8000 --key TU_CLAVE
 coreia config --show
 coreia doctor
 ```
@@ -34,7 +44,7 @@ coreia doctor
 También puedes usar variables de entorno:
 
 ```bash
-export COREIA_BACKEND="https://gemini-chat-backend-vyrz.onrender.com"
+export COREIA_BACKEND="http://127.0.0.1:8000"
 export COREIA_API_KEY="TU_CLAVE"
 export COREIA_HOME="$HOME/.coreia"   # opcional
 ```
