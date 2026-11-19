@@ -51,7 +51,7 @@ instaladores como **artifacts** del run.
 El backend corre en tu equipo (`./scripts/start-backend.sh`). En **Ajustes** de
 la app:
 
-- **Backend:** `http://127.0.0.1:8000`
+- **Backend:** `https://gemini-chat-backend-six.vercel.app`
 - **Clave del agente:** la que imprime el script al arrancar (`AGENT_API_KEY`
   de `.env.local`).
 - **Espacio de trabajo:** carpeta donde el agente puede leer y escribir.

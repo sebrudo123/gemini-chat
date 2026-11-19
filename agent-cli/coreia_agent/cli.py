@@ -12,7 +12,6 @@ Uso:
 from __future__ import annotations
 
 import argparse
-import getpass
 import sys
 from typing import Any
 
@@ -36,25 +35,13 @@ def _mask(key: str) -> str:
 
 
 def _ensure_key(cfg: dict[str, Any]) -> str:
-    key = config.api_key(cfg)
-    if key:
-        return key
-    if not sys.stdin.isatty():
-        ui.error(
-            "Falta la clave del agente. Usa `coreia config --key ...` "
-            "o define COREIA_API_KEY."
-        )
-        raise SystemExit(2)
-    print()
-    ui.warn("Primera vez: pega la clave del agente (AGENT_API_KEY del backend).")
-    key = getpass.getpass("Clave: ").strip()
-    if not key:
-        ui.error("No se guardó ninguna clave.")
-        raise SystemExit(2)
-    cfg["api_key"] = key
-    config.save(cfg)
-    ui.ok(f"Clave guardada en {config.config_path()}")
-    return key
+    """Devuelve la clave del agente.
+
+    Es opcional: los despliegues públicos (Vercel) permiten usarlos sin clave
+    y aplican un límite por IP. Si el backend define AGENT_API_KEY, el cliente
+    debe configurarla para que responda.
+    """
+    return config.api_key(cfg)
 
 
 def _client(cfg: dict[str, Any]) -> AgentClient:

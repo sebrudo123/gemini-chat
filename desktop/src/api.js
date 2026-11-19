@@ -6,7 +6,7 @@
  */
 
 export const MODEL_LABEL = "Core Model V1";
-export const DEFAULT_BACKEND = "http://127.0.0.1:8000";
+export const DEFAULT_BACKEND = "https://gemini-chat-backend-six.vercel.app";
 
 const CONFIG_KEY = "coreia.config.v1";
 
@@ -47,11 +47,13 @@ export function saveConfig(patch) {
 }
 
 function headers(apiKey, accept) {
-  return {
+  const base = {
     Accept: accept,
     "Content-Type": "application/json",
-    "X-Agent-API-Key": apiKey,
   };
+  // En despliegues públicos la clave es opcional.
+  if (apiKey) base["X-Agent-API-Key"] = apiKey;
+  return base;
 }
 
 async function readError(response) {
@@ -67,9 +69,6 @@ export async function checkHealth(overrides = {}) {
   const config = loadConfig();
   const backend = String(overrides.backend ?? config.backend).replace(/\/+$/, "");
   const apiKey = String(overrides.apiKey ?? config.apiKey);
-  if (!apiKey) {
-    throw new Error("Falta la clave del agente. Configúrala en Ajustes.");
-  }
   const response = await fetch(`${backend}/api/agent/health`, {
     headers: headers(apiKey, "application/json"),
   });
@@ -83,26 +82,29 @@ export async function checkHealth(overrides = {}) {
 /**
  * Envía el historial y consume los eventos SSE del backend.
  *
+ * Si el servidor no soporta streaming (por ejemplo en serverless), cae a la
+ * respuesta completa y la entrega como un único fragmento.
+ *
  * @param {{messages: Array, signal?: AbortSignal, onDelta: (text: string) => void}} options
  */
 export async function streamChat({ messages, signal, onDelta }) {
   const config = loadConfig();
-  if (!config.apiKey) {
-    throw new Error("Falta la clave del agente. Configúrala en Ajustes.");
+
+  let response;
+  try {
+    response = await fetch(`${config.backend}/api/agent/chat/stream`, {
+      method: "POST",
+      headers: headers(config.apiKey, "text/event-stream"),
+      body: JSON.stringify({ messages, mode: "agent", stream: true }),
+      signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
+    return completeChat({ messages, signal, onDelta });
   }
 
-  const response = await fetch(`${config.backend}/api/agent/chat/stream`, {
-    method: "POST",
-    headers: headers(config.apiKey, "text/event-stream"),
-    body: JSON.stringify({ messages, mode: "agent", stream: true }),
-    signal,
-  });
-
-  if (!response.ok) {
-    throw new Error(await readError(response));
-  }
-  if (!response.body) {
-    throw new Error("El backend no devolvió un flujo de datos.");
+  if (!response.ok || !response.body) {
+    return completeChat({ messages, signal, onDelta });
   }
 
   const reader = response.body.getReader();
@@ -144,6 +146,22 @@ export async function streamChat({ messages, signal, onDelta }) {
     }
     throw error;
   }
+}
+
+export async function completeChat({ messages, signal, onDelta }) {
+  const config = loadConfig();
+  const response = await fetch(`${config.backend}/api/agent/chat`, {
+    method: "POST",
+    headers: headers(config.apiKey, "application/json"),
+    body: JSON.stringify({ messages, mode: "agent", stream: false }),
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  const data = await response.json();
+  const text = String(data.message || "");
+  if (text) onDelta(text);
 }
 
 export async function invokeTool(call) {

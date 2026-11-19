@@ -148,6 +148,13 @@ class Settings:
         self.agent_provider = os.environ.get("AGENT_PROVIDER", "auto").strip().lower()
         self.agent_model = os.environ.get("AGENT_MODEL", "").strip()
         self.agent_rate_limit = os.environ.get("AGENT_RATE_LIMIT", "40/minute")
+        self.agent_allow_anonymous = (
+            os.environ.get("AGENT_ALLOW_ANONYMOUS", "").strip().lower()
+            in {"1", "true", "yes", "on"}
+            # En Vercel el endpoint es público por defecto; si se define
+            # AGENT_API_KEY, la clave vuelve a ser obligatoria.
+            or bool(os.environ.get("VERCEL"))
+        )
         self.agent_max_history_chars = int(
             os.environ.get("AGENT_MAX_HISTORY_CHARS", "120000")
         )

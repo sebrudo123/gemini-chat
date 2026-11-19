@@ -268,7 +268,7 @@ function renderChat() {
   const config = loadConfig();
   els.hint.textContent = config.apiKey
     ? "El agente puede leer y escribir archivos en tu espacio de trabajo. Te pedirá permiso antes de cambiar algo."
-    : "Configura tu clave de agente en Ajustes para empezar. Todo se procesa con Core Model V1.";
+    : "Todo se procesa con Core Model V1. Si el backend pide clave, configúrala en Ajustes.";
 
   if (!session.messages.length) {
     els.messages.innerHTML = renderEmpty();
@@ -530,12 +530,6 @@ async function sendMessage(rawText) {
   if (!text || sending) return;
 
   const config = loadConfig();
-  if (!config.apiKey) {
-    toast("Configura tu clave de agente en Ajustes.");
-    openSettings("Falta la clave del agente.");
-    return;
-  }
-
   const session = activeSession();
   if (session.title === "Nueva sesión") {
     session.title = titleFrom(text);
@@ -665,7 +659,7 @@ function openSettings(reason = "") {
       <label>Backend</label>
       <input id="cfg-backend" type="url" value="${escapeHtml(
         config.backend
-      )}" placeholder="http://127.0.0.1:8000" />
+      )}" placeholder="https://gemini-chat-backend-six.vercel.app" />
       <span class="note">URL del backend de Core IA (sin barra final).</span>
     </div>
 
@@ -674,7 +668,7 @@ function openSettings(reason = "") {
       <input id="cfg-key" type="password" value="${escapeHtml(
         config.apiKey
       )}" placeholder="AGENT_API_KEY" autocomplete="off" />
-      <span class="note">Es la variable AGENT_API_KEY del backend. Nunca se envía a terceros.</span>
+      <span class="note">Solo si tu backend define AGENT_API_KEY. En el despliegue público puede quedar vacía.</span>
     </div>
 
     <div class="field">
@@ -760,16 +754,16 @@ function openSettings(reason = "") {
 /* ------------------------------------------------------------------ */
 async function verifyConnection() {
   const config = loadConfig();
-  if (!config.apiKey) {
-    setStatus("bad", "Sin clave");
-    return;
-  }
   setStatus("", "Verificando…");
   try {
     await checkHealth();
     setStatus("ok", "Conectado");
   } catch (error) {
-    setStatus("bad", error.message.includes("clave") ? "Clave inválida" : "Sin conexión");
+    const message = String(error.message || "");
+    setStatus(
+      "bad",
+      message.includes("clave") ? "Clave inválida" : "Sin conexión"
+    );
   }
 }
 
@@ -858,12 +852,6 @@ async function init() {
   renderAll();
   resizeInput();
   await verifyConnection();
-
-  if (!loadConfig().apiKey) {
-    setTimeout(() => {
-      toast("Pega tu clave de agente en Ajustes para empezar.", 4200);
-    }, 800);
-  }
 }
 
 init();

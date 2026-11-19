@@ -1,9 +1,15 @@
-backend/
 render.yaml
 README.md
 android/
 androidbot/
 bot/
+desktop/
+agent-cli/
+scripts/
+deploy/
 *.bak
 *.apk
-test_coreia.db
+*.db
+backend/tests/
+backend/__pycache__/
+backend/.venv/

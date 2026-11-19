@@ -270,3 +270,16 @@ def test_gemini_contents_extracts_system_and_merges_roles():
     assert system == "Eres un agente."
     assert [content.role for content in contents] == ["user", "model"]
     assert [part.text for part in contents[0].parts] == ["uno", "dos"]
+
+
+def test_agent_adminite_anonimo_cuando_se_configura(client, monkeypatch):
+    """En despliegues públicos (Vercel) la clave es opcional."""
+    monkeypatch.setattr(main.settings, "agent_api_key", "")
+    monkeypatch.setattr(main.settings, "vantage_api_key", "")
+    monkeypatch.setattr(main.settings, "agent_allow_anonymous", True)
+    monkeypatch.setattr(main.settings, "agent_provider", "llm")
+
+    response = client.get("/api/agent/health")
+
+    assert response.status_code == 200
+    assert response.json()["model"] == "Core Model V1"

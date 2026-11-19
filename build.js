@@ -1,7 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 
-// 1. Generate dist/
+// Genera dist/ con los archivos estáticos del frontend.
+// Vercel publica dist/ y despliega por separado las funciones de api/.
+
 const dist = path.resolve('dist');
 if (fs.existsSync(dist)) {
   fs.rmSync(dist, { recursive: true, force: true });
@@ -14,29 +16,10 @@ for (const f of files) {
     fs.copyFileSync(f, path.join(dist, f));
   }
 }
-if (fs.existsSync('public')) {
-  fs.cpSync('public', dist, { recursive: true });
-}
-
-// 2. Generate .vercel/output/static and config.json
-const vercelOutput = path.resolve('.vercel/output');
-const vercelStatic = path.join(vercelOutput, 'static');
-fs.mkdirSync(vercelStatic, { recursive: true });
-
-for (const f of files) {
-  if (fs.existsSync(f)) {
-    fs.copyFileSync(f, path.join(vercelStatic, f));
+for (const dir of ['public', 'assets']) {
+  if (fs.existsSync(dir)) {
+    fs.cpSync(dir, dist, { recursive: true });
   }
 }
 
-const config = {
-  version: 3,
-  routes: [
-    { src: '/api/chat', dest: '/api/chat' },
-    { handle: 'filesystem' },
-    { src: '/(.*)', dest: '/index.html' }
-  ]
-};
-fs.writeFileSync(path.join(vercelOutput, 'config.json'), JSON.stringify(config, null, 2));
-
-console.log('Build completed: dist/ and .vercel/output ready with all assets.');
+console.log('Build completed: dist/ ready.');

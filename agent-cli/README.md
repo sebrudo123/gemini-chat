@@ -36,7 +36,7 @@ scripts\start-backend.bat      # Windows
 Copia la clave que imprime y configúrala:
 
 ```bash
-coreia config --backend http://127.0.0.1:8000 --key TU_CLAVE
+coreia config --backend https://gemini-chat-backend-six.vercel.app --key TU_CLAVE
 coreia config --show
 coreia doctor
 ```
@@ -44,7 +44,7 @@ coreia doctor
 También puedes usar variables de entorno:
 
 ```bash
-export COREIA_BACKEND="http://127.0.0.1:8000"
+export COREIA_BACKEND="https://gemini-chat-backend-six.vercel.app"
 export COREIA_API_KEY="TU_CLAVE"
 export COREIA_HOME="$HOME/.coreia"   # opcional
 ```

@@ -28,12 +28,15 @@ class AgentClient:
     # Utilidades
     # ------------------------------------------------------------------ #
     def _headers(self, accept: str = "application/json") -> dict[str, str]:
-        return {
+        headers = {
             "Accept": accept,
             "Content-Type": "application/json",
             "User-Agent": USER_AGENT,
-            "X-Agent-API-Key": self.api_key,
         }
+        # La clave es opcional en despliegues públicos.
+        if self.api_key:
+            headers["X-Agent-API-Key"] = self.api_key
+        return headers
 
     def _request(self, path: str, payload: dict | None, accept: str):
         url = f"{self.backend}{path}"
@@ -85,11 +88,21 @@ class AgentClient:
         return str(data.get("message", ""))
 
     def stream(self, messages: list[dict], mode: str = "agent") -> Iterator[str]:
-        """Genera los fragmentos de texto del turno (SSE)."""
+        """Genera los fragmentos de texto del turno (SSE).
+
+        Si el backend no soporta streaming (por ejemplo en serverless), cae a
+        la respuesta completa para no romper la conversación.
+        """
         payload = {"messages": messages, "mode": mode, "stream": True}
-        response = self._request(
-            "/api/agent/chat/stream", payload, "text/event-stream"
-        )
+        try:
+            response = self._request(
+                "/api/agent/chat/stream", payload, "text/event-stream"
+            )
+        except AgentError:
+            text = self.complete(messages, mode)
+            if text:
+                yield text
+            return
         try:
             for raw in response:
                 line = raw.decode("utf-8", "replace").strip()

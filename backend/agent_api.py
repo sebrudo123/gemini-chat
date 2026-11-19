@@ -240,6 +240,9 @@ def verify_agent_api_key(
     """Valida la clave del agente en tiempo constante."""
     expected = _expected_key()
     if not expected:
+        if settings.agent_allow_anonymous:
+            # Despliegue público sin clave: el limitador por IP protege el uso.
+            return
         raise HTTPException(
             status_code=503,
             detail="El servidor no tiene configurada la variable AGENT_API_KEY.",

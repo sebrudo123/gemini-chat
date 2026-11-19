@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-DEFAULT_BACKEND = "http://127.0.0.1:8000"
+DEFAULT_BACKEND = "https://gemini-chat-backend-six.vercel.app"
 
 
 def home() -> Path:
