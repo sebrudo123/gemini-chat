@@ -138,7 +138,7 @@ jobs:
           for attempt in range(4):
               try:
                   req = urllib.request.Request(
-                      "https://coreiabackend.onrender.com/api/bot/update/upload",
+                      "https://gemini-chat-backend-vyrz.onrender.com/api/bot/update/upload",
                       data=body,
                       headers={
                           "Content-Type": "application/json",

@@ -6,7 +6,7 @@
  */
 
 export const MODEL_LABEL = "Core Model V1";
-export const DEFAULT_BACKEND = "https://coreiabackend.onrender.com";
+export const DEFAULT_BACKEND = "https://gemini-chat-backend-vyrz.onrender.com";
 
 const CONFIG_KEY = "coreia.config.v1";
 

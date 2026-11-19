@@ -26,7 +26,7 @@ La clave es la variable `AGENT_API_KEY` del backend (no la clave del proveedor
 de IA). Se guarda en `~/.coreia/config.json` con permisos `600`.
 
 ```bash
-coreia config --backend https://coreiabackend.onrender.com --key TU_CLAVE
+coreia config --backend https://gemini-chat-backend-vyrz.onrender.com --key TU_CLAVE
 coreia config --show
 coreia doctor
 ```
@@ -34,7 +34,7 @@ coreia doctor
 También puedes usar variables de entorno:
 
 ```bash
-export COREIA_BACKEND="https://coreiabackend.onrender.com"
+export COREIA_BACKEND="https://gemini-chat-backend-vyrz.onrender.com"
 export COREIA_API_KEY="TU_CLAVE"
 export COREIA_HOME="$HOME/.coreia"   # opcional
 ```

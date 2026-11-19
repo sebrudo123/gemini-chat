@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-DEFAULT_BACKEND = "https://coreiabackend.onrender.com"
+DEFAULT_BACKEND = "https://gemini-chat-backend-vyrz.onrender.com"
 
 
 def home() -> Path:

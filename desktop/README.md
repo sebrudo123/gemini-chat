@@ -50,7 +50,7 @@ instaladores como **artifacts** del run.
 
 En **Ajustes** de la app:
 
-- **Backend:** `https://coreiabackend.onrender.com`
+- **Backend:** `https://gemini-chat-backend-vyrz.onrender.com`
 - **Clave del agente:** el valor de `AGENT_API_KEY` del backend.
 - **Espacio de trabajo:** carpeta donde el agente puede leer y escribir.
   Por defecto, tu carpeta personal (`HOME` / `USERPROFILE`).
