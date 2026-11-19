@@ -534,10 +534,30 @@ El backend solo valida `X-Agent-API-Key`, añade el prompt del agente y completa
 el turno. Las herramientas se ejecutan **en el equipo del usuario**, nunca en el
 servidor. La app solo conoce el nombre comercial **Core Model V1**.
 
-### Backend local (recomendado)
+### Backend público en Vercel
 
-El backend corre en tu equipo con SQLite: sin hosting, sin base de datos
-externa y sin caducidad. Un solo comando:
+El agente vive en `https://gemini-chat-backend-six.vercel.app` como funciones
+serverless (sin base de datos, sin Postgres y sin caducidad). El sitio se
+redespliega solo al hacer push a `main`.
+
+- `GET /api/agent/health`
+- `POST /api/agent/chat`
+- `POST /api/agent/chat/stream` (SSE; si el proveedor no soporta streaming, el
+  cliente cae a la respuesta completa)
+
+Para usar Gemini, añade `AI_API_KEY` en **Vercel → Settings → Environment
+Variables** con una clave gratuita de
+<a href="https://aistudio.google.com/apikey">Google AI Studio</a>. Sin ella el
+agente usa el motor abierto (más lento y con límite de velocidad).
+
+El endpoint es público con un límite de 40 peticiones por minuto y IP. Si
+defines `AGENT_API_KEY` en Vercel, la clave pasa a ser obligatoria y hay que
+pegarla en el CLI y en Ajustes de la app.
+
+### Backend local (alternativa)
+
+También puedes ejecutarlo en tu equipo con SQLite, sin depender de internet
+para el servidor:
 
 ```bash
 # Linux / macOS
@@ -547,19 +567,8 @@ externa y sin caducidad. Un solo comando:
 scripts\start-backend.bat
 ```
 
-La primera vez crea `.env.local` con `SESSION_SECRET` y `AGENT_API_KEY`, instala
-las dependencias en `backend/.venv` e imprime la clave que debes pegar en el CLI
-o en Ajustes de la app. Para usar Gemini, añade tu clave gratuita de
-<a href="https://aistudio.google.com/apikey">Google AI Studio</a> en
-`AI_API_KEY=` dentro de `.env.local`; si la dejas vacía, el agente usa el motor
-abierto con límite de velocidad.
-
-El servidor queda en `http://127.0.0.1:8000` y la base en
-`backend/coreia.db`. Para respaldarla, copia ese archivo.
-
-> También se puede desplegar en cualquier host con Python 3.11+ cambiando
-> `DATABASE_URL` a un Postgres (Neon, Supabase…) y definiendo `AI_API_KEY` y
-> `AGENT_API_KEY` como variables de entorno.
+Crea `.env.local` con las claves, instala las dependencias en `backend/.venv` y
+arranca en `http://127.0.0.1:8000`. La base queda en `backend/coreia.db`.
 
 ### Backend
 
