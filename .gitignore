@@ -1,8 +1,20 @@
+# Entornos y secretos locales
 .env
 .env.local
+.venv/
+venv/
+
+# Python
 __pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Dependencias y artefactos
+node_modules/
+desktop/node_modules/
+desktop/dist/
+desktop/src-tauri/target/
+.netlify/
 *.bak
 .DS_Store
-node_modules/
-.netlify/

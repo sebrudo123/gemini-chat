@@ -26,6 +26,8 @@ CoreIA/
 │   ├── Procfile            # Comando de arranque (Render/Railway)
 │   ├── .env.example        # Plantilla de variables
 │   └── .gitignore
+├── agent-cli/              # CLI de agentes "coreia" (sesiones + herramientas)
+├── desktop/                # App de escritorio Tauri (Core IA Studio)
 ├── .github/workflows/ci.yml# CI: lint + tests
 ├── index.html              # Frontend Core IA (modo oscuro, sidebar)
 ├── script.js               # Lógica de sesión y chat
@@ -510,4 +512,74 @@ Detalles técnicos:
   problemas (Application ID ausente, SDK no disponible, etc.).
 - El APK solo empaqueta ABIs ARM para reducir tamaño; en otras arquitecturas la
   librería no se carga y la función queda deshabilitada.
+
+---
+
+## Agente: CLI `coreia` y app de escritorio Core IA Studio
+
+Dos clientes del mismo agente, con sesiones, streaming y herramientas locales
+con confirmación. No incluyen editor de código: la interfaz es el chat, las
+sesiones y las tarjetas de permisos.
+
+### Arquitectura
+
+```
+CLI / App Tauri ──► POST /api/agent/chat[/stream] ──► Gemini Flash (gratis)
+      │                                              └► motor abierto (respaldo)
+      ├── sesiones locales (JSON / localStorage)
+      └── herramientas locales (Rust / Python) con permiso del usuario
+```
+
+El backend solo valida `X-Agent-API-Key`, añade el prompt del agente y completa
+el turno. Las herramientas se ejecutan **en el equipo del usuario**, nunca en
+Render. La app solo conoce el nombre comercial **Core Model V1**.
+
+### Backend
+
+Variables nuevas (opcionales):
+
+| Variable | Por defecto | Descripción |
+|----------|-------------|-------------|
+| `AGENT_API_KEY` | — | Clave que usan el CLI y la app. Si falta, se usa `VANTAGE_API_KEY`. |
+| `AGENT_PROVIDER` | `auto` | `auto` usa Gemini si hay `AI_API_KEY`; `gemini` lo fuerza; `llm` usa el motor abierto. |
+| `AGENT_MODEL` | `AI_MODEL` | Modelo principal del agente. |
+| `AGENT_RATE_LIMIT` | `40/minute` | Límite por IP para `/api/agent/*`. |
+
+Endpoints:
+
+- `GET /api/agent/health` — valida la clave y lista las herramientas.
+- `POST /api/agent/chat` — respuesta completa.
+- `POST /api/agent/chat/stream` — eventos SSE con `delta` y `done`.
+
+### CLI
+
+```bash
+pipx install ./agent-cli
+coreia config --key TU_AGENT_API_KEY
+coreia
+```
+
+Ver [`agent-cli/README.md`](agent-cli/README.md) para todos los comandos.
+
+### App de escritorio
+
+```bash
+cd desktop
+npm install
+npm run tauri dev      # desarrollo
+npm run tauri build    # instaladores Linux/Windows
+```
+
+El workflow `.github/workflows/desktop.yml` compila Linux y Windows y deja los
+instaladores como artifacts (sin crear Releases). Ver
+[`desktop/README.md`](desktop/README.md).
+
+### Formato de herramientas
+
+El modelo responde con bloques que el cliente ejecuta tras confirmarlos:
+
+```text
+<tool>{"tool":"write_file","args":{"path":"hola.txt","content":"hola"},"reason":"crear"}</tool>
+<question>{"header":"Tecnología","prompt":"¿Qué uso?","options":[{"label":"Godot","description":"Juegos"},{"label":"FastAPI","description":"Backend"}]}</question>
+```
 

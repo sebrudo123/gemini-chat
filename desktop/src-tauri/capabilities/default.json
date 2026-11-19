@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "Permisos base de la ventana principal de Core IA Studio",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

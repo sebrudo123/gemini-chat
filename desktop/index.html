@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="es" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Core IA Studio</title>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar" id="sidebar">
+        <div class="brand">
+          <div class="logo">C</div>
+          <div class="brand-text">
+            <h1>Core IA</h1>
+            <span>Studio</span>
+          </div>
+        </div>
+
+        <button id="new-chat" class="new-chat" type="button">
+          <span class="plus">+</span> Nuevo chat
+        </button>
+
+        <div class="search">
+          <input id="search" type="search" placeholder="Buscar sesiones…" autocomplete="off" />
+        </div>
+
+        <div class="sessions" id="sessions"></div>
+
+        <div class="sidebar-footer">
+          <button id="settings-btn" class="ghost" type="button">⚙ Ajustes</button>
+          <div class="status" id="conn-status"><span class="dot"></span> Sin verificar</div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <button id="toggle-sidebar" class="icon-btn mobile-only" type="button" title="Menú">☰</button>
+          <div class="session-head">
+            <h2 id="session-title">Nueva sesión</h2>
+            <div class="meta">
+              <span class="badge">Core Model V1</span>
+              <span class="workspace" id="workspace-label">espacio de trabajo…</span>
+            </div>
+          </div>
+          <div class="top-actions">
+            <button id="rename-btn" class="icon-btn" type="button" title="Renombrar sesión">✎</button>
+            <button id="delete-btn" class="icon-btn" type="button" title="Eliminar sesión">🗑</button>
+            <button id="theme-btn" class="icon-btn" type="button" title="Cambiar tema">◐</button>
+          </div>
+        </header>
+
+        <section class="messages" id="messages" aria-live="polite"></section>
+
+        <div class="composer-wrap">
+          <div class="composer">
+            <textarea
+              id="input"
+              rows="1"
+              placeholder="Pídele algo al agente…  (Enter envía, Shift+Enter salta de línea)"
+            ></textarea>
+            <button id="send" class="send" type="button" title="Enviar">➤</button>
+            <button id="stop" class="send stop hidden" type="button" title="Detener">■</button>
+          </div>
+          <div class="hint" id="hint">
+            El agente puede leer y escribir archivos en tu espacio de trabajo. Te pedirá permiso antes de cambiar algo.
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <div id="modal-root"></div>
+    <div id="toast" class="toast hidden"></div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

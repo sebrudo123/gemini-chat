@@ -140,6 +140,19 @@ class Settings:
         # Debe definirse en el entorno y compartirse solo con la app oficial.
         self.vantage_api_key = os.environ.get("VANTAGE_API_KEY", "").strip()
 
+        # --- Agente de Core IA (CLI y app de escritorio) ---
+        # Clave que usan el CLI y la app Tauri para hablar con /api/agent/*.
+        # Si no se define, se reutiliza VANTAGE_API_KEY para no romper el
+        # despliegue existente.
+        self.agent_api_key = os.environ.get("AGENT_API_KEY", "").strip()
+        self.agent_provider = os.environ.get("AGENT_PROVIDER", "auto").strip().lower()
+        self.agent_model = os.environ.get("AGENT_MODEL", "").strip()
+        self.agent_rate_limit = os.environ.get("AGENT_RATE_LIMIT", "40/minute")
+        self.agent_max_history_chars = int(
+            os.environ.get("AGENT_MAX_HISTORY_CHARS", "120000")
+        )
+        self.agent_max_iterations = int(os.environ.get("AGENT_MAX_ITERATIONS", "8"))
+
         # --- Proveedor gratuito de visión (Hugging Face Inference API) ---
         # Tier gratuito disponible en https://huggingface.co/settings/tokens
         # Modelos recomendados de visión: llava-hf/llava-1.5-7b-hf, Salesforce/blip2-opt-2.7b

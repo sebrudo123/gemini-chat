@@ -267,6 +267,61 @@ def stream_text(
                 yield text
 
 
+def stream_messages(
+    messages: list[dict[str, Any]],
+    temperature: float | None = None,
+) -> Iterator[str]:
+    """Genera texto en streaming a partir de un historial completo.
+
+    Se usa desde la API del agente (CLI y app de escritorio), donde el
+    cliente mantiene la conversación y el backend solo completa el turno.
+    """
+    cfg = resolve()
+    if cfg is None:
+        raise RuntimeError("No hay motor de chat configurado.")
+
+    payload = _payload(cfg, messages, temperature, stream=True)
+    with httpx.stream(
+        "POST",
+        f"{cfg['base_url']}/chat/completions",
+        headers=_headers(cfg),
+        json=payload,
+        timeout=_timeout(cfg),
+    ) as response:
+        if response.status_code >= 400:
+            detail = response.read().decode("utf-8", "ignore")[:300]
+            raise RuntimeError(f"{response.status_code}: {detail}")
+        for line in response.iter_lines():
+            text = _stream_line_text(line)
+            if text:
+                yield text
+
+
+def complete_messages(
+    messages: list[dict[str, Any]],
+    temperature: float | None = None,
+) -> str:
+    """Completa un turno (sin streaming) a partir de un historial completo."""
+    cfg = resolve()
+    if cfg is None:
+        raise RuntimeError("No hay motor de chat configurado.")
+
+    payload = _payload(cfg, messages, temperature, stream=False)
+    response = httpx.post(
+        f"{cfg['base_url']}/chat/completions",
+        headers=_headers(cfg),
+        json=payload,
+        timeout=_timeout(cfg),
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"{response.status_code}: {response.text[:300]}")
+    data = response.json()
+    choices = data.get("choices") or []
+    if not choices:
+        return ""
+    return (choices[0].get("message", {}).get("content") or "").strip()
+
+
 def complete_text(
     message: str,
     system_instruction: str | None = None,

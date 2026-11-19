@@ -1,0 +1,67 @@
+name: Core IA Studio — Desktop
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            label: linux
+          - platform: windows-latest
+            label: windows
+    runs-on: ${{ matrix.platform }}
+    defaults:
+      run:
+        working-directory: desktop
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Dependencias de Linux
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Instalar dependencias del frontend
+        run: npm ci
+
+      - name: Compilar el frontend
+        run: npm run build
+
+      - name: Compilar la app (Linux/Windows)
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: desktop
+
+      - name: Publicar instaladores como artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coreia-studio-${{ matrix.label }}
+          if-no-files-found: warn
+          path: |
+            desktop/src-tauri/target/release/bundle/**

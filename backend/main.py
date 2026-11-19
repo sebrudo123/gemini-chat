@@ -64,6 +64,7 @@ import asyncio
 import plans
 import rag
 import llm
+import agent_api
 import websearch
 import bot_extras
 import discord_bot
@@ -450,12 +451,27 @@ app.add_middleware(
     CORSMiddleware,
     # Origen fijo del despliegue (Render) + regex para el panel en Vercel:
     # el panel estático vive en *.vercel.app y consume esta API con token Bearer.
-    allow_origins=settings.allowed_origins,
-    allow_origin_regex=r"https://[a-z0-9-]+\.vercel\.app$",
+    allow_origins=settings.allowed_origins
+    + [
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "http://localhost:1420",
+    ],
+    allow_origin_regex=r"^(https://[a-z0-9-]+\.vercel\.app|https?://tauri\.localhost)$",
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "x-upload-token"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "x-upload-token",
+        "X-Agent-API-Key",
+        "X-Vantage-API-Key",
+    ],
 )
+
+# API del agente (CLI + app de escritorio Core IA Studio).
+app.include_router(agent_api.build_router(limiter))
 
 
 # --------------------------------------------------------------------------- #
